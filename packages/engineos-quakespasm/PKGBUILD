@@ -1,0 +1,31 @@
+pkgname=engineos-quakespasm
+pkgver=0.97.0
+pkgrel=1
+pkgdesc="QuakeSpasm engine binary built through the EngineOS local package flow"
+arch=('x86_64')
+url="https://github.com/sezero/quakespasm"
+license=('custom:EngineOS-TBD')
+depends=('sdl2' 'openal' 'libvorbis' 'mpg123' 'mesa')
+makedepends=('git' 'make' 'gcc' 'pkgconf')
+source=()
+sha256sums=()
+
+build() {
+  local _engineos_root
+  _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
+
+  ENGINEOS_ROOT="$_engineos_root" "$_engineos_root/engines/quakespasm/engineos/build.sh" --fetch
+}
+
+package() {
+  local _engineos_root
+  local _upstream
+  local _build_dir
+  _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
+  _upstream="${QUAKESPASM_UPSTREAM_DIR:-$_engineos_root/engines/quakespasm/upstream}"
+  _build_dir="$_upstream/Quake"
+
+  install -Dm755 "$_build_dir/quakespasm" "$pkgdir/usr/bin/quakespasm"
+  install -Dm644 "$_build_dir/quakespasm.pak" "$pkgdir/usr/share/engineos/quake/quakespasm.pak"
+  install -Dm644 "$_engineos_root/LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

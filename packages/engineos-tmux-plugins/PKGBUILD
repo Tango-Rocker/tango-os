@@ -1,0 +1,34 @@
+pkgname=engineos-tmux-plugins
+pkgver=20260613
+pkgrel=1
+pkgdesc="Pinned tmux plugin set for EngineOS live users"
+arch=('any')
+url="https://github.com/tmux-plugins"
+license=('custom:EngineOS-TBD')
+depends=('tmux')
+makedepends=('git')
+source=(
+  'tpm::git+https://github.com/tmux-plugins/tpm.git#commit=e261deb1b47614eed3400089ce7197dc68acc4eb'
+  'tmux-sensible::git+https://github.com/tmux-plugins/tmux-sensible.git#commit=25cb91f42d020f675bb0a2ce3fbd3a5d96119efa'
+  'tmux-yank::git+https://github.com/tmux-plugins/tmux-yank.git#commit=acfd36e4fcba99f8310a7dfb432111c242fe7392'
+  'tmux-resurrect::git+https://github.com/tmux-plugins/tmux-resurrect.git#commit=cff343cf9e81983d3da0c8562b01616f12e8d548'
+  'tmux-continuum::git+https://github.com/tmux-plugins/tmux-continuum.git#commit=0698e8f4b17d6454c71bf5212895ec055c578da0'
+  'tmux-pain-control::git+https://github.com/tmux-plugins/tmux-pain-control.git#commit=32b760f6652f2305dfef0acd444afc311cf5c077'
+)
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+
+package() {
+  local _engineos_root
+  local _plugin
+  _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
+
+  for _plugin in tpm tmux-sensible tmux-yank tmux-resurrect tmux-continuum tmux-pain-control; do
+    install -d -m 0755 "$pkgdir/usr/share/tmux/plugins/$_plugin"
+    cp -a "$srcdir/$_plugin/." "$pkgdir/usr/share/tmux/plugins/$_plugin/"
+    rm -rf \
+      "$pkgdir/usr/share/tmux/plugins/$_plugin/.git" \
+      "$pkgdir/usr/share/tmux/plugins/$_plugin/.github"
+  done
+
+  install -Dm644 "$_engineos_root/LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

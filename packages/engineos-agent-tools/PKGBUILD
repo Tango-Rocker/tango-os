@@ -1,0 +1,25 @@
+pkgname=engineos-agent-tools
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Agent workflow files for EngineOS"
+arch=('any')
+url="https://example.invalid/engineos"
+license=('custom:EngineOS-TBD')
+depends=('engineos-cli' 'git' 'ripgrep' 'jq')
+source=()
+sha256sums=()
+
+package() {
+  local _engineos_root
+  _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
+
+  install -Dm644 "$_engineos_root/AGENTS.md" "$pkgdir/usr/share/engineos/AGENTS.md"
+  install -Dm644 "$_engineos_root/BACKLOG.md" "$pkgdir/usr/share/engineos/BACKLOG.md"
+  install -Dm644 "$_engineos_root/CURRENT_STATUS.md" "$pkgdir/usr/share/engineos/CURRENT_STATUS.md"
+  install -Dm644 "$_engineos_root/ROADMAP.md" "$pkgdir/usr/share/engineos/ROADMAP.md"
+  install -Dm644 "$_engineos_root/docs/agent-harness.md" "$pkgdir/usr/share/engineos/docs/agent-harness.md"
+  install -Dm644 "$_engineos_root/docs/agent-lsp.md" "$pkgdir/usr/share/engineos/docs/agent-lsp.md"
+  install -Dm644 "$_engineos_root/docs/agent-workflow.md" "$pkgdir/usr/share/engineos/docs/agent-workflow.md"
+  install -Dm644 "$_engineos_root/.agents/skills/code-navigation/SKILL.md" "$pkgdir/usr/share/engineos/skills/code-navigation/SKILL.md"
+  install -Dm644 "$_engineos_root/LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

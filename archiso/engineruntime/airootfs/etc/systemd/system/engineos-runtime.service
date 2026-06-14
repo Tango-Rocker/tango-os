@@ -1,0 +1,27 @@
+[Unit]
+Description=EngineOS runtime shell autostart
+After=engineos-live-setup.service engineos-engine-runner.service NetworkManager.service
+Wants=engineos-live-setup.service engineos-engine-runner.service
+Conflicts=getty@tty1.service
+StartLimitBurst=3
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+User=engineos
+SupplementaryGroups=input audio video render
+PAMName=login
+WorkingDirectory=/home/engineos
+Environment=ENGINEOS_LOG_DIR=/var/log/engineos
+Environment=XDG_SESSION_TYPE=wayland
+Environment=ENGINEOS_TERMINAL_REQUIRE_WAYLAND=true
+ExecStart=/usr/local/bin/engineos-runtime-start
+Restart=on-failure
+RestartSec=3
+TTYPath=/dev/tty1
+StandardInput=tty
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

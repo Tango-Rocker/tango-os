@@ -1,0 +1,52 @@
+pkgname=engineos-cli
+pkgver=0.1.0
+pkgrel=7
+pkgdesc="EngineOS command-line control surface"
+arch=('any')
+url="https://example.invalid/engineos"
+license=('custom:EngineOS-TBD')
+depends=('bash' 'coreutils' 'python')
+source=()
+sha256sums=()
+
+package() {
+  local _engineos_root
+  _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
+
+  install -Dm755 "$_engineos_root/tools/engineos/engineos" "$pkgdir/usr/bin/engineos"
+  install -Dm755 "$_engineos_root/tools/scripts/builder_handoff.sh" "$pkgdir/usr/lib/engineos/scripts/builder_handoff.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/builder_doctor_proof.sh" "$pkgdir/usr/lib/engineos/scripts/builder_doctor_proof.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/post_first_deploy.sh" "$pkgdir/usr/lib/engineos/scripts/post_first_deploy.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/bootstrap_builder.sh" "$pkgdir/usr/lib/engineos/scripts/bootstrap_builder.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/build_engine.sh" "$pkgdir/usr/lib/engineos/scripts/build_engine.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/build_iso.sh" "$pkgdir/usr/lib/engineos/scripts/build_iso.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/build_repo.sh" "$pkgdir/usr/lib/engineos/scripts/build_repo.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/build_shell.sh" "$pkgdir/usr/lib/engineos/scripts/build_shell.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/common.sh" "$pkgdir/usr/lib/engineos/scripts/common.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/preflight.sh" "$pkgdir/usr/lib/engineos/scripts/preflight.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/assets.sh" "$pkgdir/usr/lib/engineos/scripts/assets.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/artifacts.sh" "$pkgdir/usr/lib/engineos/scripts/artifacts.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/release.sh" "$pkgdir/usr/lib/engineos/scripts/release.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/terminal_launcher.sh" "$pkgdir/usr/lib/engineos/scripts/terminal_launcher.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/capture_frame.sh" "$pkgdir/usr/lib/engineos/scripts/capture_frame.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/doctor.sh" "$pkgdir/usr/lib/engineos/scripts/doctor.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/input_trace.sh" "$pkgdir/usr/lib/engineos/scripts/input_trace.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/logs.sh" "$pkgdir/usr/lib/engineos/scripts/logs.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/package_lint.sh" "$pkgdir/usr/lib/engineos/scripts/package_lint.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/outputs.sh" "$pkgdir/usr/lib/engineos/scripts/outputs.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/shell_runner.sh" "$pkgdir/usr/lib/engineos/scripts/shell_runner.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/proof.sh" "$pkgdir/usr/lib/engineos/scripts/proof.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/vm.sh" "$pkgdir/usr/lib/engineos/scripts/vm.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/usb.sh" "$pkgdir/usr/lib/engineos/scripts/usb.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/test_runner.sh" "$pkgdir/usr/lib/engineos/scripts/test_runner.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/validate_builder.sh" "$pkgdir/usr/lib/engineos/scripts/validate_builder.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/validate_repo.sh" "$pkgdir/usr/lib/engineos/scripts/validate_repo.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/validate_engine.sh" "$pkgdir/usr/lib/engineos/scripts/validate_engine.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/validate_shell.sh" "$pkgdir/usr/lib/engineos/scripts/validate_shell.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/validate_boot.sh" "$pkgdir/usr/lib/engineos/scripts/validate_boot.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/crash_bundle.sh" "$pkgdir/usr/lib/engineos/scripts/crash_bundle.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/smoke_test.sh" "$pkgdir/usr/lib/engineos/scripts/smoke_test.sh"
+  install -d -m0755 "$pkgdir/usr/share/engineos"
+  cp -a "$_engineos_root/tools/post-install-payload" "$pkgdir/usr/share/engineos/post-install-payload"
+  install -Dm644 "$_engineos_root/LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

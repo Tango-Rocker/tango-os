@@ -1,0 +1,22 @@
+[Unit]
+Description=EngineOS engine runner daemon
+After=engineos-live-setup.service
+Wants=engineos-live-setup.service
+
+[Service]
+Type=simple
+Environment=ENGINEOS_ROOT=/
+Environment=ENGINEOS_STATE_DIR=/run/engineos
+Environment=ENGINEOS_LOG_DIR=/var/log/engineos
+Environment=ENGINEOS_ENGINE_SOCKET=/run/engineos/engine-runner.sock
+RuntimeDirectory=engineos
+RuntimeDirectoryMode=0755
+ExecStartPre=/usr/bin/install -d -m 0775 -o root -g wheel /var/log/engineos /var/lib/engineos
+ExecStart=/usr/bin/python3 /usr/lib/engineos/scripts/engine_runner_daemon.py --daemon --socket /run/engineos/engine-runner.sock
+Restart=on-failure
+RestartSec=2
+StandardOutput=append:/var/log/engineos/engine-runner.log
+StandardError=append:/var/log/engineos/engine-runner.log
+
+[Install]
+WantedBy=multi-user.target

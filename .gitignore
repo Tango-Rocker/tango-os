@@ -1,0 +1,29 @@
+# Build output
+/out/
+/work/
+/repo/
+/tmp/
+*.iso
+*.img
+*.pkg.tar.*
+*.pkg.tar.*.sig
+/packages/*/pkg/
+/packages/*/src/
+/packages/*/*.log
+/packages/*/*.buildinfo
+/packages/*/*.mtree
+
+# Diagnostics
+/artifacts/
+/*engineos-release-*/
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Local caches and fetched upstream checkouts
+__pycache__/
+*.py[cod]
+/engines/quakespasm/upstream/

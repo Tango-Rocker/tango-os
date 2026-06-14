@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+install -d -m 0775 -o root -g wheel /var/log/engineos
+install -d -m 0775 -o root -g wheel /var/lib/engineos
+chown root:wheel /var/log/engineos /var/lib/engineos
+chmod 0775 /var/log/engineos /var/lib/engineos
+
+for group in wheel input audio video render; do
+  groupadd -f "$group"
+done
+
+if id engineos >/dev/null 2>&1; then
+  usermod -aG wheel,input,audio,video,render engineos || true
+  usermod -s /usr/bin/zsh engineos || true
+fi
+
+if command -v udevadm >/dev/null 2>&1; then
+  udevadm control --reload-rules || true
+  udevadm trigger --subsystem-match=input || true
+  udevadm trigger --subsystem-match=drm || true
+  udevadm trigger --subsystem-match=sound || true
+fi
+
+{
+  printf 'EngineOS live setup\n'
+  printf 'created_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf 'profile=engineruntime\n'
+  if [[ -r /etc/engineos/version ]]; then
+    cat /etc/engineos/version
+  fi
+  id engineos || true
+  ls -l /dev/input/event* /dev/input/mouse* 2>/dev/null || true
+  uname -a
+} >/var/log/engineos/live-setup.log
+
+if command -v engineos >/dev/null 2>&1; then
+  engineos doctor >/var/log/engineos/doctor-firstboot.log 2>&1 || true
+fi

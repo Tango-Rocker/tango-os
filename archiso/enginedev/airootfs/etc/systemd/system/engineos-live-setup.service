@@ -1,0 +1,11 @@
+[Unit]
+Description=EngineOS live image setup
+Before=engineos-engine-runner.service engineos-runtime.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/engineos-live-setup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

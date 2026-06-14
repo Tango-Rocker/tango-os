@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+LOG_DIR="${ENGINEOS_LOG_DIR:-/var/log/engineos}"
+LOG_FILE="$LOG_DIR/dev-shell-start.log"
+ENGINEOS_CMD="${ENGINEOS_CMD:-engineos}"
+CMDLINE_FILE="${ENGINEOS_PROC_CMDLINE:-/proc/cmdline}"
+
+mkdir -p "$LOG_DIR"
+
+log() {
+  printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" | tee -a "$LOG_FILE"
+}
+
+if grep -qw 'engineos.nodevshell' "$CMDLINE_FILE" 2>/dev/null; then
+  log "dev shell autostart disabled by kernel command line"
+  exit 0
+fi
+
+log "starting EngineDev shell mode=--tty bootstrap=${ENGINEOS_SHELL_BOOTSTRAP:-terminal}"
+
+if "$ENGINEOS_CMD" run shell --tty >>"$LOG_FILE" 2>&1; then
+  log "EngineDev shell exited cleanly"
+else
+  rc="$?"
+  log "EngineDev shell failed rc=$rc; SSH and recovery login should remain available"
+  log "recovery logs: engineos logs shell --last 200; engineos logs runtime --last 200"
+  exit "$rc"
+fi

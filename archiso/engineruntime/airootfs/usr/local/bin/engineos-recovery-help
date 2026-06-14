@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cat <<'HELP'
+EngineRuntime recovery
+
+Useful commands:
+  engineos logs runtime --last 200
+  engineos logs shell --last 200
+  engineos logs engine --last 200
+  engineos doctor --bare-metal
+  engineos crash-bundle
+
+Disable runtime autostart for the next boot with the kernel flag:
+  engineos.noautostart
+
+Recovery TTY:
+  tty2 is intentionally left available for manual repair.
+HELP

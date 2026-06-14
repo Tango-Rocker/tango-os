@@ -1,0 +1,25 @@
+pkgname=engineos-oh-my-zsh
+pkgver=20260613
+pkgrel=1
+pkgdesc="Pinned Oh My Zsh framework for EngineOS live users"
+arch=('any')
+url="https://github.com/ohmyzsh/ohmyzsh"
+license=('custom:EngineOS-TBD')
+depends=('zsh')
+makedepends=('git')
+source=('git+https://github.com/ohmyzsh/ohmyzsh.git#commit=5181447da820331ba48ca976d1885501aa8a573b')
+sha256sums=('SKIP')
+
+package() {
+  local _engineos_root
+  _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
+
+  install -d -m 0755 "$pkgdir/usr/share/oh-my-zsh"
+  cp -a "$srcdir/ohmyzsh/." "$pkgdir/usr/share/oh-my-zsh/"
+  rm -rf \
+    "$pkgdir/usr/share/oh-my-zsh/.git" \
+    "$pkgdir/usr/share/oh-my-zsh/.github"
+
+  install -Dm644 "$srcdir/ohmyzsh/LICENSE.txt" "$pkgdir/usr/share/licenses/$pkgname/OH-MY-ZSH-LICENSE"
+  install -Dm644 "$_engineos_root/LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

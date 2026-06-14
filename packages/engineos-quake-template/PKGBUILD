@@ -1,0 +1,22 @@
+pkgname=engineos-quake-template
+pkgver=0.1.0
+pkgrel=2
+pkgdesc="EngineOS Quake asset and launch template"
+arch=('any')
+url="https://example.invalid/engineos"
+license=('custom:EngineOS-TBD')
+depends=('bash' 'sdl2')
+source=()
+sha256sums=()
+
+package() {
+  local _engineos_root
+  _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
+
+  install -Dm644 "$startdir/assets.toml" "$pkgdir/usr/share/engineos/quake/assets.toml"
+  install -Dm755 "$_engineos_root/engines/quakespasm/engineos/build.sh" "$pkgdir/usr/share/engineos/quake/build.sh"
+  install -Dm755 "$_engineos_root/engines/quakespasm/engineos/fetch.sh" "$pkgdir/usr/share/engineos/quake/fetch.sh"
+  install -Dm755 "$_engineos_root/engines/quakespasm/engineos/run.sh" "$pkgdir/usr/share/engineos/quake/run.sh"
+  install -Dm755 "$_engineos_root/engines/quakespasm/engineos/smoke-test.sh" "$pkgdir/usr/share/engineos/quake/smoke-test.sh"
+  install -Dm644 "$_engineos_root/LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

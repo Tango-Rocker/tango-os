@@ -1,0 +1,21 @@
+pkgname=engineos-engine-runner
+pkgver=0.1.0
+pkgrel=2
+pkgdesc="EngineOS engine runner placeholder"
+arch=('x86_64')
+url="https://example.invalid/engineos"
+license=('custom:EngineOS-TBD')
+depends=('bash' 'python' 'systemd')
+source=()
+sha256sums=()
+
+package() {
+  local _engineos_root
+  _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
+
+  install -Dm755 "$_engineos_root/tools/scripts/engine_runner.sh" "$pkgdir/usr/lib/engineos/scripts/engine_runner.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/engine_runner_daemon.py" "$pkgdir/usr/lib/engineos/scripts/engine_runner_daemon.py"
+  install -Dm644 "$_engineos_root/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" "$pkgdir/usr/lib/systemd/system/engineos-engine-runner.service"
+  install -Dm644 "$_engineos_root/engine-runner/README.md" "$pkgdir/usr/share/engineos-engine-runner/README.md"
+  install -Dm644 "$_engineos_root/LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

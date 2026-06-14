@@ -1,0 +1,43 @@
+# EngineOS managed zsh defaults for the live dev instance.
+export ZSH="${ZSH:-/usr/share/oh-my-zsh}"
+export ZSH_DISABLE_COMPFIX=true
+export PATH="$HOME/.local/bin:$PATH"
+
+HISTFILE="${HISTFILE:-$HOME/.zsh_history}"
+HISTSIZE=50000
+SAVEHIST=50000
+setopt append_history
+setopt share_history
+setopt hist_ignore_all_dups
+setopt hist_reduce_blanks
+setopt auto_cd
+setopt prompt_subst
+
+if [[ -d /usr/share/zsh/site-functions ]]; then
+  fpath=(/usr/share/zsh/site-functions $fpath)
+fi
+
+ZSH_THEME="${ZSH_THEME:-robbyrussell}"
+plugins=(git sudo docker tmux)
+
+if [[ -r "$ZSH/oh-my-zsh.sh" ]]; then
+  source "$ZSH/oh-my-zsh.sh"
+else
+  autoload -Uz compinit && compinit
+  PROMPT='%n@%m:%~%# '
+fi
+
+for plugin_file in \
+  /usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh \
+  /usr/share/zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh; do
+  [[ -r "$plugin_file" ]] && source "$plugin_file"
+done
+
+if [[ -r /usr/share/zsh/plugins/zsh-history-substring-search/zsh-history-substring-search.zsh ]]; then
+  source /usr/share/zsh/plugins/zsh-history-substring-search/zsh-history-substring-search.zsh
+  bindkey '^[[A' history-substring-search-up
+  bindkey '^[[B' history-substring-search-down
+fi
+
+alias ll='ls -alF'
+alias engineos-tmux='tmux new -A -s engineos'

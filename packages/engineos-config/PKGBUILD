@@ -1,0 +1,20 @@
+pkgname=engineos-config
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Baseline EngineOS system configuration"
+arch=('any')
+url="https://example.invalid/engineos"
+license=('custom:EngineOS-TBD')
+depends=('systemd' 'sudo' 'networkmanager' 'openssh')
+source=()
+sha256sums=()
+
+package() {
+  local _engineos_root
+  _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
+
+  install -Dm644 "$startdir/files/etc/engineos/profile.conf" "$pkgdir/etc/engineos/profile.conf"
+  install -Dm644 "$startdir/files/etc/engineos/runtime.conf" "$pkgdir/etc/engineos/runtime.conf"
+  install -Dm644 "$startdir/files/etc/engineos/quake.conf" "$pkgdir/etc/engineos/quake.conf"
+  install -Dm644 "$_engineos_root/LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
