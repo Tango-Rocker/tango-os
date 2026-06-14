@@ -32,7 +32,7 @@ engineos_cmd_string() {
 
 ENGINEOS_CMD_STRING="$(engineos_cmd_string)"
 DEFAULT_TERMINAL="${ENGINEOS_TERMINAL_CMD:-$ENGINEOS_CMD_STRING terminal}"
-DEFAULT_ENGINE="${ENGINEOS_ENGINE_CMD:-$ENGINEOS_CMD_STRING engine launch quake --smoke}"
+DEFAULT_ENGINE="${ENGINEOS_ENGINE_CMD:-$ENGINEOS_CMD_STRING app launch quake --smoke}"
 
 usage() {
   cat <<'HELP'

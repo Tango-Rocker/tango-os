@@ -1314,6 +1314,12 @@ static bool setup_server(struct engineos_shell_server *server) {
 		wlr_log(WLR_ERROR, "failed to create renderer");
 		return false;
 	}
+	wlr_log(WLR_INFO,
+		"renderer diagnostics backend=%s wlr_renderer=%s wlr_allow_software=%s libgl_always_software=%s",
+		getenv("WLR_BACKENDS") ? getenv("WLR_BACKENDS") : "auto",
+		getenv("WLR_RENDERER") ? getenv("WLR_RENDERER") : "auto",
+		getenv("WLR_RENDERER_ALLOW_SOFTWARE") ? getenv("WLR_RENDERER_ALLOW_SOFTWARE") : "unset",
+		getenv("LIBGL_ALWAYS_SOFTWARE") ? getenv("LIBGL_ALWAYS_SOFTWARE") : "unset");
 
 	if (!wlr_renderer_init_wl_display(server->renderer, server->display)) {
 		wlr_log(WLR_ERROR, "failed to initialize renderer globals");
@@ -1551,7 +1557,8 @@ int main(int argc, char **argv) {
 		server.startup_cmd != NULL ? server.startup_cmd : "(none)");
 	wlr_log(WLR_INFO, "bootstrap mode=%s",
 		bootstrap_mode_name(server.bootstrap_mode));
-	wlr_log(WLR_INFO, "client launch environment wayland_display=%s xdg_session_type=wayland display=unset",
+	wlr_log(WLR_INFO,
+		"client launch environment wayland_display=%s xdg_session_type=wayland display=unset sdl=wayland gdk=wayland qt=wayland",
 		socket);
 	spawn_command("startup", server.startup_cmd);
 	if (server.bootstrap_mode == ENGINEOS_BOOTSTRAP_TERMINAL ||

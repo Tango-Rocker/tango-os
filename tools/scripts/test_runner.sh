@@ -15,6 +15,7 @@ Usage: test_runner.sh [smoke|all]
        test_runner.sh compositor --headless
        test_runner.sh shell-actions
        test_runner.sh engine-runner-env
+       test_runner.sh app
        test_runner.sh assets
        test_runner.sh reliability
        test_runner.sh logs
@@ -57,6 +58,7 @@ run_all() {
   run_all_step compositor --headless
   run_all_step shell-actions
   run_all_step engine-runner-env
+  run_all_step app
   run_all_step assets
   run_all_step reliability
   run_all_step logs
@@ -153,14 +155,14 @@ FAKE
     ENGINEOS_FAKE_SHELL_ARGS="$args_file" \
     ENGINEOS_LOG_DIR="$tmp_dir/logs" \
     ENGINEOS_TERMINAL_CMD="foot --server" \
-    ENGINEOS_ENGINE_CMD="engineos engine launch quake --smoke" \
+    ENGINEOS_ENGINE_CMD="engineos app launch quake --smoke" \
     "$SCRIPT_DIR/shell_runner.sh" --nested >/dev/null
 
   grep -Fx -- "--nested" "$args_file" >/dev/null || die "shell actions test missing --nested"
   grep -Fx -- "--terminal" "$args_file" >/dev/null || die "shell actions test missing --terminal"
   grep -Fx -- "foot --server" "$args_file" >/dev/null || die "shell actions test missing terminal command"
   grep -Fx -- "--engine" "$args_file" >/dev/null || die "shell actions test missing --engine"
-  grep -Fx -- "engineos engine launch quake --smoke" "$args_file" >/dev/null || die "shell actions test missing engine command"
+  grep -Fx -- "engineos app launch quake --smoke" "$args_file" >/dev/null || die "shell actions test missing app command"
 
   ENGINEOS_SHELL_BIN="$fake_shell" \
     ENGINEOS_FAKE_SHELL_ARGS="$args_file" \
@@ -171,7 +173,7 @@ FAKE
   grep -Fx -- "--terminal" "$args_file" >/dev/null || die "shell actions tty missing --terminal"
   grep -E -- '(^|/)engineos terminal$' "$args_file" >/dev/null || die "shell actions tty missing default terminal command"
   grep -Fx -- "--engine" "$args_file" >/dev/null || die "shell actions tty missing --engine"
-  grep -E -- '(^|/)engineos engine launch quake --smoke$' "$args_file" >/dev/null || die "shell actions tty missing default engine command"
+  grep -E -- '(^|/)engineos app launch quake --smoke$' "$args_file" >/dev/null || die "shell actions tty missing default app command"
   grep -Fx -- "--bootstrap" "$args_file" >/dev/null || die "shell actions tty missing --bootstrap"
   grep -Fx -- "all" "$args_file" >/dev/null || die "shell actions tty missing bootstrap all"
 
@@ -238,6 +240,53 @@ run_engine_runner_env() {
   fi
 
   printf 'engine runner lifecycle smoke test passed\n'
+}
+
+run_app() {
+  local tmp_dir="${TMPDIR:-/tmp}/engineos-app-test-$$"
+  local fake_bin="$tmp_dir/bin"
+  local log_dir="$tmp_dir/logs"
+  local out="$tmp_dir/out.txt"
+  local launched="$tmp_dir/launched.txt"
+
+  cleanup_app() {
+    rm -rf "$tmp_dir"
+  }
+  trap cleanup_app RETURN
+
+  mkdir -p "$fake_bin" "$log_dir"
+  cat >"$fake_bin/engineos" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >"$ENGINEOS_FAKE_APP_LAUNCHED"
+FAKE
+  chmod +x "$fake_bin/engineos"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_CMD="$fake_bin/engineos" \
+    ENGINEOS_FAKE_APP_LAUNCHED="$launched" \
+    WAYLAND_DISPLAY="engineos-test-wayland" \
+    "$SCRIPT_DIR/app.sh" launch quake --smoke >"$out"
+  grep -F 'engine launch quake --smoke' "$launched" >/dev/null ||
+    die "app launcher did not dispatch quake through engine runner"
+  grep -F 'app launch app=quake owner=engineos-shell display=engineos-test-wayland sdl=wayland args=--smoke' "$log_dir/app.log" >/dev/null ||
+    die "app launcher did not log shell-owned quake launch"
+
+  if env -u WAYLAND_DISPLAY -u DISPLAY \
+      ENGINEOS_LOG_DIR="$log_dir" \
+      "$SCRIPT_DIR/app.sh" launch quake --smoke >/dev/null 2>&1; then
+    die "app launcher should require WAYLAND_DISPLAY by default"
+  fi
+  grep -F 'reason=missing-wayland-display app=quake' "$log_dir/app.log" >/dev/null ||
+    die "app launcher did not log missing Wayland display"
+
+  ENGINEOS_LOG_DIR="$log_dir" "$SCRIPT_DIR/app.sh" --dry-run launch terminal --class EngineOS >"$out"
+  grep -F 'EngineOS app launch dry-run' "$out" >/dev/null ||
+    die "app launcher dry-run missing header"
+  grep -F 'app:      terminal' "$out" >/dev/null ||
+    die "app launcher dry-run missing app id"
+
+  printf 'app launcher smoke test passed\n'
 }
 
 run_assets() {
@@ -871,6 +920,13 @@ run_proof() {
     die "booted bare-metal proof did not include explicit output validation"
   grep -F 'engineos crash-bundle --bare-metal' "$tmp_dir/booted-bare-metal.txt" >/dev/null ||
     die "booted bare-metal proof did not include bare-metal crash bundle mode"
+  ENGINEOS_LOG_DIR="$tmp_dir/logs" "$SCRIPT_DIR/proof.sh" shell-launch --runtime --dry-run >"$tmp_dir/shell-launch.txt"
+  grep -F 'Shell-launch proof dry-run completed' "$tmp_dir/shell-launch.txt" >/dev/null ||
+    die "shell-launch proof dry-run did not complete"
+  grep -F 'grep -E' "$tmp_dir/shell-launch.txt" | grep -F 'renderer diagnostics' >/dev/null ||
+    die "shell-launch proof did not check renderer diagnostics"
+  grep -F 'owner=engineos-shell' "$tmp_dir/shell-launch.txt" >/dev/null ||
+    die "shell-launch proof did not check shell-owned launch markers"
 
   if ! find "$tmp_dir/logs" -maxdepth 1 -type f -name 'proof-booted-iso-*.log' -size +0c -print -quit | grep -q .; then
     die "proof dry-run did not create non-empty proof logs"
@@ -1395,6 +1451,9 @@ case "$SCOPE" in
     ;;
   engine-runner-env)
     run_engine_runner_env
+    ;;
+  app)
+    run_app
     ;;
   assets)
     run_assets

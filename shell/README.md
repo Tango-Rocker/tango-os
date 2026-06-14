@@ -16,6 +16,7 @@ engineos run shell --nested
 engineos validate shell
 engineos test compositor --headless
 engineos logs shell --last 200
+engineos proof shell-launch --dry-run
 ```
 
 Current state:
@@ -26,10 +27,11 @@ Current state:
 - Input state is logged as `shell`, `terminal`, or `game` mode with a `game` or `none` capture flag. Shell mode clears keyboard focus and swallows non-shell keys; terminal and game modes forward keyboard input to the focused matching surface.
 - Pointer state is currently source-level only: pointer devices update seat capabilities, the wlroots cursor is constrained to the output layout, output scales load an XCursor theme, client cursor image requests are honored only for the pointer-focused client, scene hit-testing updates pointer focus, button presses can click-focus terminal/engine toplevels, and pointer events are logged with input mode/capture/focus/cursor context. Cursor policy and click-to-focus still need compile and nested/TTY runtime proof before being trusted as MVP behavior; gamepad routing remains later work.
 - `engineos run shell --headless` prefers an installed `engineos-shell --headless` binary and falls back to an explicit headless smoke log.
-- `engineos run shell --nested` prefers an installed `engineos-shell --nested --startup 'engineos terminal' --terminal 'engineos terminal' --engine 'engineos engine launch quake --smoke'` binary path and falls back to an explicit nested smoke log.
+- `engineos run shell --nested` prefers an installed `engineos-shell --nested --startup 'engineos terminal' --terminal 'engineos terminal' --engine 'engineos app launch quake --smoke'` binary path and falls back to an explicit nested smoke log.
 - `engineos run shell --tty` is the Runtime graphical entry point; with the real binary it passes `--bootstrap all` by default so the shell starts both the terminal and engine commands after the Wayland socket is ready.
 - `engineos terminal` launches a Wayland-native terminal (`foot`, then other Wayland-capable fallbacks) and requires `WAYLAND_DISPLAY` by default, so graphical clients stay owned by the EngineOS shell instead of falling back to X11 or a raw TTY path. Runtime sets `ENGINEOS_TERMINAL_SESSION_CMD='tmux new -A -s engineos'`, so the bootstrapped terminal opens directly into the persistent tmux session under zsh.
 - `engineos-shell` exports Wayland session hints for spawned terminal/engine clients and unsets `DISPLAY` when its Wayland socket is active. This enforces shell ownership of app surfaces; it does not by itself prove hardware GL acceleration in VMs that expose only llvmpipe/pixman.
+- `engineos proof shell-launch` validates the running shell process, renderer diagnostics, terminal/tmux ownership logs, and app launch ownership markers after a rebuilt ISO boots.
 - `engineos run shell --tty` fails unless `ENGINEOS_ALLOW_TTY_STUB=true` because real TTY/KMS work belongs to the hardware phase.
 - `engineos validate shell` checks shell source inputs, build dry-run, fallback logs, TTY fail-closed behavior, explicit TTY stub mode, and fake installed-shell argument pass-through.
 - `engineos outputs list` records DRM connector status and preferred modes before hardware shell attempts; `engineos outputs validate --single` and `--dual-static` provide quick connector-count checks.
@@ -38,12 +40,14 @@ Current state:
 - `ENGINEOS_SHELL_BOOTSTRAP=all engineos run shell --tty` selects startup launch mode: `none`, `terminal`, `engine`, or `all`.
 - `ENGINEOS_TERMINAL_CMD='foot'` overrides the terminal launch command.
 - `ENGINEOS_TERMINAL_SESSION_CMD='tmux new -A -s engineos'` runs a shell command inside the selected terminal.
-- `ENGINEOS_ENGINE_CMD='engineos engine launch quake --smoke'` overrides the engine launch command.
+- `engineos app launch terminal|quake` is the app launch contract used by the shell. It enforces the shell-owned Wayland display, sets common Wayland client hints, and dispatches to the terminal launcher or engine runner.
+- `ENGINEOS_ENGINE_CMD='engineos app launch quake --smoke'` overrides the engine launch command.
 
 Build on the Arch builder VM:
 
 ```bash
 ./tools/engineos/engineos package engineos-shell
 ./tools/engineos/engineos build shell
+./tools/engineos/engineos test app
 ./tools/engineos/engineos test compositor --headless
 ```

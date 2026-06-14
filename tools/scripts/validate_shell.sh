@@ -147,7 +147,7 @@ FAKE
   grep -F -- "terminal" "$args_file" >/dev/null || fail "nested pass-through missing default terminal launcher"
   grep -Fx -- "--terminal" "$args_file" >/dev/null || fail "nested pass-through missing --terminal"
   grep -Fx -- "--engine" "$args_file" >/dev/null || fail "nested pass-through missing --engine"
-  grep -F -- "engine launch quake --smoke" "$args_file" >/dev/null || fail "nested pass-through missing default engine command"
+  grep -F -- "app launch quake --smoke" "$args_file" >/dev/null || fail "nested pass-through missing default app command"
   if grep -Fx -- "--bootstrap" "$args_file" >/dev/null; then
     fail "nested pass-through should not bootstrap all by default"
   fi

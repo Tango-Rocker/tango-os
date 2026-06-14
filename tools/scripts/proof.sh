@@ -15,6 +15,7 @@ Usage: proof.sh build-lab [--dry-run] [--profile enginedev]
        proof.sh release-candidate [--dry-run] [--out-dir <dir>] [--export-dir <dir>]
        proof.sh hardware-ready [--dry-run] [--profile enginedev|engineruntime] [--out-dir <dir>] [--device <block-device>]
        proof.sh booted-iso [--vm|--runtime|--bare-metal] [--dry-run]
+       proof.sh shell-launch [--vm|--runtime|--bare-metal] [--dry-run]
 
 Run focused proof sequences for EngineOS milestones.
 
@@ -30,6 +31,8 @@ testing: confirm local structure, list USB candidates, print or run the USB
 write dry-run, then name the in-guest bare-metal proof.
 
 The booted-iso proof runs inside a generated ISO after it boots.
+The shell-launch proof verifies that engineos-shell is the graphical launch
+point for terminal/tmux and OpenGL app clients.
 HELP
 }
 
@@ -402,6 +405,110 @@ proof_booted_iso() {
   fi
 }
 
+proof_shell_launch() {
+  local dry_run=false
+  local mode="vm"
+  local log_dir="${ENGINEOS_LOG_DIR:-$(default_log_dir)}"
+  local log_file
+  local engineos_cmd
+  local shell_log
+  local terminal_log
+  local app_log
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run)
+        dry_run=true
+        ;;
+      --vm)
+        mode="vm"
+        ;;
+      --runtime)
+        mode="runtime"
+        ;;
+      --bare-metal)
+        mode="bare-metal"
+        ;;
+      help|--help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        die "unknown shell-launch proof option: $1"
+        ;;
+    esac
+    shift
+  done
+
+  if ! mkdir -p "$log_dir" 2>/dev/null || ! touch "$log_dir/.engineos-write-test" 2>/dev/null; then
+    log_dir="${TMPDIR:-/tmp}/engineos-logs"
+    mkdir -p "$log_dir"
+  else
+    rm -f "$log_dir/.engineos-write-test"
+  fi
+  log_file="$log_dir/proof-shell-launch-$mode-$(timestamp_utc).log"
+  exec > >(tee -a "$log_file") 2>&1
+
+  printf 'EngineOS shell-launch proof\n'
+  printf '  root:    %s\n' "$ROOT"
+  printf '  mode:    %s\n' "$mode"
+  printf '  dry_run: %s\n' "$dry_run"
+  printf '  log:     %s\n' "$log_file"
+
+  engineos_cmd="$(engineos_command)"
+  shell_log="$log_dir/shell.log"
+  terminal_log="$log_dir/terminal.log"
+  app_log="$log_dir/app.log"
+
+  if [[ "$dry_run" == true ]]; then
+    run_step "shell binary dry-run" printf '%s\n' "command -v engineos-shell"
+    run_step "shell process dry-run" printf '%s\n' "pgrep -a engineos-shell"
+    run_step "shell log ownership dry-run" printf '%s\n' "grep -E 'engineos-shell mode=|client launch environment|renderer diagnostics' $shell_log"
+    run_step "terminal/tmux ownership dry-run" printf '%s\n' "grep -E 'owner=engineos-shell|session command=tmux new -A -s engineos' $terminal_log"
+    run_step "app launch ownership dry-run" printf '%s\n' "grep -E 'app launch app=quake owner=engineos-shell' $app_log"
+    run_step "renderer doctor dry-run" printf '%s\n' "engineos doctor --vm"
+    if [[ "$mode" == "bare-metal" ]]; then
+      run_step "bare-metal renderer rejection dry-run" printf '%s\n' "engineos validate boot --bare-metal"
+    fi
+    printf '\nShell-launch proof dry-run completed.\n'
+    return
+  fi
+
+  run_step "shell binary" command -v engineos-shell
+  run_step "shell process" pgrep -a engineos-shell
+  run_step "app launcher status" "$engineos_cmd" app status
+  run_step "shell logs" "$engineos_cmd" logs shell --last 200
+
+  [[ -r "$shell_log" ]] || die "shell log missing: $shell_log"
+  grep -E 'engineos-shell mode=' "$shell_log" >/dev/null ||
+    die "shell log does not show engineos-shell startup"
+  grep -E 'client launch environment' "$shell_log" >/dev/null ||
+    die "shell log does not show shell-owned client environment"
+  grep -E 'renderer diagnostics' "$shell_log" >/dev/null ||
+    die "shell log does not show renderer diagnostics"
+
+  [[ -r "$terminal_log" ]] || die "terminal log missing: $terminal_log"
+  grep -F 'owner=engineos-shell' "$terminal_log" >/dev/null ||
+    die "terminal log does not show shell ownership"
+  grep -F 'session command=tmux new -A -s engineos' "$terminal_log" >/dev/null ||
+    die "terminal log does not show tmux session startup"
+
+  if [[ -r "$app_log" ]]; then
+    grep -F 'owner=engineos-shell' "$app_log" >/dev/null ||
+      die "app log exists but does not show shell ownership"
+  else
+    printf 'WARN app log missing: %s\n' "$app_log"
+  fi
+
+  run_step "doctor renderer evidence" "$engineos_cmd" doctor --vm
+  if [[ "$mode" == "bare-metal" ]]; then
+    run_step "bare-metal renderer validation" "$engineos_cmd" validate boot --bare-metal
+  fi
+
+  printf '\nShell-launch proof runner completed.\n'
+  printf 'Proof log: %s\n' "$log_file"
+}
+
 case "$ACTION" in
   build-lab)
     proof_build_lab "$@"
@@ -414,6 +521,9 @@ case "$ACTION" in
     ;;
   booted-iso)
     proof_booted_iso "$@"
+    ;;
+  shell-launch)
+    proof_shell_launch "$@"
     ;;
   help|--help|-h)
     usage

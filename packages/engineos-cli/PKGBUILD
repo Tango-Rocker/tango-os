@@ -1,6 +1,6 @@
 pkgname=engineos-cli
 pkgver=0.1.0
-pkgrel=7
+pkgrel=8
 pkgdesc="EngineOS command-line control surface"
 arch=('any')
 url="https://example.invalid/engineos"
@@ -24,6 +24,7 @@ package() {
   install -Dm755 "$_engineos_root/tools/scripts/build_shell.sh" "$pkgdir/usr/lib/engineos/scripts/build_shell.sh"
   install -Dm755 "$_engineos_root/tools/scripts/common.sh" "$pkgdir/usr/lib/engineos/scripts/common.sh"
   install -Dm755 "$_engineos_root/tools/scripts/preflight.sh" "$pkgdir/usr/lib/engineos/scripts/preflight.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/app.sh" "$pkgdir/usr/lib/engineos/scripts/app.sh"
   install -Dm755 "$_engineos_root/tools/scripts/assets.sh" "$pkgdir/usr/lib/engineos/scripts/assets.sh"
   install -Dm755 "$_engineos_root/tools/scripts/artifacts.sh" "$pkgdir/usr/lib/engineos/scripts/artifacts.sh"
   install -Dm755 "$_engineos_root/tools/scripts/release.sh" "$pkgdir/usr/lib/engineos/scripts/release.sh"

@@ -241,6 +241,10 @@ lint_pkgbuild() {
         fail "$pkg: artifact helper is not installed"
         return
       fi
+      if ! grep -q 'app.sh' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: app launcher helper is not installed"
+        return
+      fi
       if ! grep -q 'release.sh' "$pkg_dir/PKGBUILD"; then
         fail "$pkg: release helper is not installed"
         return
