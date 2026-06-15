@@ -454,7 +454,8 @@ run_installer() {
   if [[ -n "$branch" ]]; then
     run_step "checkout Tang-OS branch" arch-chroot "$target" git -C /srv/engineos checkout "$branch"
   fi
-  run_step "build installed local package repo" arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos build repo
+  run_step "assign Tang-OS workspace to dev user" arch-chroot "$target" chown -R "$user:$user" /srv/engineos
+  run_step "build installed local package repo" arch-chroot "$target" runuser -u "$user" -- env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos build repo
 
   post_install_args=(--payload /srv/engineos/tools/post-install-payload --user "$user" --force-config)
   if [[ "$skip_codex" == true ]]; then
@@ -567,7 +568,8 @@ print_dev_plan() {
   if [[ -n "$branch" ]]; then
     quote_line arch-chroot "$target" git -C /srv/engineos checkout "$branch"
   fi
-  quote_line arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos build repo
+  quote_line arch-chroot "$target" chown -R "$user:$user" /srv/engineos
+  quote_line arch-chroot "$target" runuser -u "$user" -- env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos build repo
   quote_line arch-chroot "$target" /srv/engineos/tools/post-install-payload/scripts/setup_dev_environment.sh --payload /srv/engineos/tools/post-install-payload --user "$user"
   quote_line arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos validate builder --mock
   quote_line arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos validate repo
