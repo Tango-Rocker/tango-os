@@ -17,6 +17,10 @@
 /artifacts/
 /*engineos-release-*/
 
+# Local secrets
+/pat_token*
+/*.token
+
 # Editor and OS files
 .DS_Store
 Thumbs.db

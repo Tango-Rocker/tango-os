@@ -23,8 +23,8 @@ the guest and sign in with the intended account.
 Use the `Tango-Rocker` account for the EngineOS follow-on repositories:
 
 - `Tango-Rocker/tango-os` for this EngineOS checkout
-- `Tango-Rocker/quake-generator` for Quake generation work
-- `Tango-Rocker/post-scripts-install-config-setup` for reusable post-install configuration scripts
+- `Tango-Rocker/quake-os-integration` for Quake/EngineOS integration work
+- `Tango-Rocker/engine-os` for EngineOS-focused runtime and appliance work
 
 EngineDev autoinstall defaults to cloning:
 
