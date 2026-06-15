@@ -9,8 +9,8 @@ PoC 0 build-lab acceptance is complete for EngineDev. The Arch builder can repea
 - Arch builder VM: `dev@172.22.52.109`
 - Builder repo path: `/srv/engineos`
 - Local package repo: `/srv/engineos/repo/x86_64`
-- EngineDev ISO: `out/EngineDevOS-2026.06.14-x86_64.iso` on the builder; copied to Windows as `out/EngineDevOS-2026.06.14-cowspace-x86_64.iso`
-- EngineDev checksum: `out/EngineDevOS-2026.06.14-x86_64.iso.sha256`
+- EngineDev ISO: `out/EngineDevOS-2026.06.15-x86_64.iso` on the builder
+- EngineDev checksum: `out/EngineDevOS-2026.06.15-x86_64.iso.sha256`
 - EngineRuntime ISO: `out/EngineRuntimeOS-2026.06.15-x86_64.iso`
 - EngineRuntime checksum: `out/EngineRuntimeOS-2026.06.15-x86_64.iso.sha256`
 
@@ -18,13 +18,13 @@ The latest EngineDev ISO checksum passed on the builder with:
 
 ```bash
 cd out
-sha256sum -c EngineDevOS-2026.06.14-x86_64.iso.sha256
+sha256sum -c EngineDevOS-2026.06.15-x86_64.iso.sha256
 ```
 
-Current EngineDev checksum after the cowspace rebuild:
+Current EngineDev checksum after the cached-package autoinstall rebuild:
 
 ```text
-2cb8450fe6a4f520b1255ea6493d25250e7b5c0c27f9113de69e987ef57345fa  EngineDevOS-2026.06.14-x86_64.iso
+EngineDevOS-2026.06.15-x86_64.iso: OK
 ```
 
 Current EngineRuntime checksum after the launchpad MVP proof rebuild:
@@ -62,6 +62,9 @@ e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeO
 - `engineos install dev --device <block-device> --yes-i-understand-this-wipes-device` now has a guarded executor for the VM/bare-metal path. It wipes and partitions the target, installs Arch/EngineDev packages, configures systemd-boot, creates the `dev` user, enables NetworkManager/sshd/Docker, clones Tang-OS into `/srv/engineos`, builds the local package repo, runs the post-install payload, and writes `/srv/ENGINEOS_INSTALL_HANDOFF.txt`.
 - EngineDev ISO builds now default to staging an installer package cache into generated EngineDev profiles at `/opt/engineos/install-cache/pkg`; `engineos install dev` validates that requested install package artifacts are present, uses the cache through a generated pacman config and `pacstrap -c -C ...`, falls back to normal pacman cache/mirrors when the cache is absent, and rejects incomplete caches with an explicit rebuild/`--no-package-cache` handoff.
 - EngineDev autoinstall now defaults the source checkout to `https://github.com/Tango-Rocker/tango-os.git`, runs Git clones non-interactively, and supports private repo access through `--repo-token-file` / `ENGINEOS_REPO_TOKEN_FILE`. The token is copied only into the target runtime under root-only transient storage, used through a temporary `GIT_ASKPASS` helper, redacted from installer output, and removed immediately after clone.
+- A clean EngineDev autoinstall VM proof passed on June 15, 2026 using the rebuilt ISO `out/EngineDevOS-2026.06.15-x86_64.iso`, target disk `/dev/vda`, and the private `Tango-Rocker/tango-os` repo on branch `main`. The live ISO package cache contained 1002 package artifacts (`1.2G` under `/opt/engineos/install-cache/pkg`), `pacstrap` installed the cached 501-package transaction, `/srv/engineos` cloned to commit `cae3214`, and the installed target built 13 local package artifacts.
+- The clean VM autoinstall used the read-only GitHub token from `/run/engineos-secrets/tango-os-readonly.token` without printing it or embedding it permanently. Post-run checks confirmed `/mnt/engineos/root/.engineos/repo-token` and `/mnt/engineos/usr/local/bin/engineos-git-askpass` were absent from the installed target.
+- The installed EngineDev target passed builder mock validation and repo validation with 0 failures and 0 warnings after the package repo rebuild and post-install payload. The proof used `--skip-codex`; Codex CLI install remains part of the separate first-deploy path when network install is desired.
 - The first real Hyper-V install attempt reached `pacstrap` against the VM's `/dev/sda` and downloaded the full 501-package transaction, proving the wipe, partition, format, mount, and mirrorlist repair steps. It then failed at keyring commit with `Public keyring not found` / `keyring is not writable`; the installer has been updated to stop using `pacstrap -K` and instead let pacstrap seed the target from the live ISO host keyring, matching pacstrap's default behavior.
 - For the current Hyper-V EngineDev session, classic base Quake assets were manually staged from `E:\SteamLibrary\steamapps\common\Quake\id1\PAK0.PAK` and `PAK1.PAK` directly into `/home/dev/.local/share/engineos/quake/id1`; no bind mount is needed with the larger cowspace ISO.
 - A timed real Quake launch passed over SSH on the Hyper-V EngineDev VM: `engineos run quake` found the registered assets, initialized an 800x600 OpenGL mode through Mesa llvmpipe, initialized PulseAudio (`pulseaudio - Dummy Output` after starting user PipeWire/Pulse services), loaded `demo1.dem`, executed `autoexec.cfg`, and was stopped by a 12-second timeout with no lingering Quake process and active VT restored to `tty1`.
@@ -102,7 +105,6 @@ e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeO
 
 - Interactive Quake keyboard/mouse/audio in a live Runtime console session with user assets.
 - Persistent Quake asset mounting is not implemented yet; the current Hyper-V VM still loses manually copied assets on reboot because it is a live ISO, even though the writable overlay is now large enough for session-local copies.
-- Real EngineDev install-to-disk is implemented but not yet fully proven end-to-end. The current VM proof reached the target repo clone and exposed the need for the real GitHub repo/auth path; rerun after creating `Tango-Rocker/tango-os`, pushing this checkout, creating a fine-grained read-only token for that repo, and rebuilding the ISO with the updated installer.
 - Real audible output is not proven in the current Hyper-V/basic QEMU path. Hyper-V is not presenting a sound device to Linux, and the QEMU HDA proof uses an audio discard backend; prove audible output on hardware or an audio-forwarding VM/RDP path.
 - Visible hardware/frame-capture proof of the Runtime shell is still missing; the current Runtime proof is headless QEMU evidence from logs, state JSON, and app renderer/frame logs.
 - Runtime launchpad with user-provided Quake assets is not proven yet, so the engine slot has not mapped as a live Quake surface in Runtime.
@@ -153,15 +155,15 @@ EngineDev autoinstall planner proof:
 ./tools/engineos/engineos preflight repo --package engineos-cli
 ```
 
-Next EngineDev autoinstall VM proof:
+Re-run the completed EngineDev autoinstall VM proof if needed:
 
 ```bash
 cd /srv/engineos
 ./tools/engineos/engineos build repo
 ./tools/engineos/engineos build iso enginedev --fast --clean --archive-existing
-# boot the rebuilt ISO in the Hyper-V/QEMU test VM, then from the live guest:
+# boot the rebuilt ISO in the QEMU test VM with a disposable qcow2 target disk, then from the live guest:
 find /opt/engineos/install-cache/pkg -maxdepth 1 -name '*.pkg.tar*' | wc -l
-sudo engineos install dev --device /dev/sda --repo-url https://github.com/Tango-Rocker/tango-os.git --branch main --repo-token-file /run/engineos-secrets/tango-os-readonly.token --yes-i-understand-this-wipes-device
+sudo engineos install dev --device /dev/vda --repo-url https://github.com/Tango-Rocker/tango-os.git --branch main --repo-token-file /run/engineos-secrets/tango-os-readonly.token --skip-codex --yes-i-understand-this-wipes-device
 ```
 
 Runtime interactive retest:
