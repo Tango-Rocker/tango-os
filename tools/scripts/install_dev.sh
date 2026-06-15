@@ -303,9 +303,9 @@ clone_repo_into_target() {
   local target="$1"
   local repo_url="$2"
   local repo_token_file="$3"
-  local askpass="/tmp/engineos-git-askpass"
+  local askpass="/usr/local/bin/engineos-git-askpass"
   local target_askpass="$target$askpass"
-  local target_token="$target/run/engineos/repo-token"
+  local target_token="$target/root/.engineos/repo-token"
   local rc=0
 
   if [[ -z "$repo_token_file" ]]; then
@@ -317,14 +317,14 @@ clone_repo_into_target() {
   [[ "$repo_token_file" == /* ]] || die "--repo-token-file must be absolute"
   [[ -r "$repo_token_file" ]] || die "--repo-token-file is not readable: $repo_token_file"
 
-  sudo install -d -m 0700 "$target/run/engineos"
-  sudo install -d -m 1777 "$target/tmp"
+  sudo install -d -m 0700 "$target/root/.engineos"
+  sudo install -d -m 0755 "$target/usr/local/bin"
   sudo install -m 0600 "$repo_token_file" "$target_token"
   cat <<'EOF' | sudo tee "$target_askpass" >/dev/null
-#!/usr/bin/env sh
+#!/bin/sh
 case "$1" in
   *sername*) printf '%s\n' x-access-token ;;
-  *assword*) cat /run/engineos/repo-token ;;
+  *assword*) cat /root/.engineos/repo-token ;;
   *) printf '\n' ;;
 esac
 EOF
@@ -558,9 +558,9 @@ print_dev_plan() {
     quote_line cp -a "$repo_seed/." "$target/tmp/tang-os-seed/"
     quote_line arch-chroot "$target" env GIT_TERMINAL_PROMPT=0 git clone file:///tmp/tang-os-seed /srv/engineos
   elif [[ -n "$repo_token_file" ]]; then
-    quote_line install -m 0600 "<repo token file>" "$target/run/engineos/repo-token"
-    quote_line arch-chroot "$target" env GIT_ASKPASS=/tmp/engineos-git-askpass GIT_TERMINAL_PROMPT=0 git clone "$repo_url" /srv/engineos
-    quote_line rm -f "$target/tmp/engineos-git-askpass" "$target/run/engineos/repo-token"
+    quote_line install -m 0600 "<repo token file>" "$target/root/.engineos/repo-token"
+    quote_line arch-chroot "$target" env GIT_ASKPASS=/usr/local/bin/engineos-git-askpass GIT_TERMINAL_PROMPT=0 git clone "$repo_url" /srv/engineos
+    quote_line rm -f "$target/usr/local/bin/engineos-git-askpass" "$target/root/.engineos/repo-token"
   else
     quote_line arch-chroot "$target" env GIT_TERMINAL_PROMPT=0 git clone "$repo_url" /srv/engineos
   fi

@@ -1029,7 +1029,7 @@ EOF_PACMAN
     --branch main >"$out"
   grep -F 'repo auth: token file supplied (redacted)' "$out" >/dev/null ||
     die "install dry-run did not redact repo token file"
-  grep -F 'GIT_ASKPASS=/tmp/engineos-git-askpass GIT_TERMINAL_PROMPT=0 git clone https://example.invalid/tang-os.git /srv/engineos' "$out" >/dev/null ||
+  grep -F 'GIT_ASKPASS=/usr/local/bin/engineos-git-askpass GIT_TERMINAL_PROMPT=0 git clone https://example.invalid/tang-os.git /srv/engineos' "$out" >/dev/null ||
     die "install dry-run missing private repo askpass clone"
   if grep -F 'fake-token' "$out" >/dev/null || grep -F "$token_file" "$out" >/dev/null; then
     die "install dry-run leaked repo token file details"
@@ -1171,14 +1171,14 @@ FAKE
 
   grep -F 'repo auth: token file supplied (redacted)' "$tmp_dir/install-private-repo.txt" >/dev/null ||
     die "install executor did not report redacted repo token auth"
-  grep -F 'arch-chroot '"$target"' env GIT_ASKPASS=/tmp/engineos-git-askpass GIT_TERMINAL_PROMPT=0 git clone https://example.invalid/tang-os.git /srv/engineos' "$log" >/dev/null ||
+  grep -F 'arch-chroot '"$target"' env GIT_ASKPASS=/usr/local/bin/engineos-git-askpass GIT_TERMINAL_PROMPT=0 git clone https://example.invalid/tang-os.git /srv/engineos' "$log" >/dev/null ||
     die "install executor did not clone private repo with askpass"
   if grep -F 'fake-token' "$tmp_dir/install-private-repo.txt" >/dev/null || grep -F 'fake-token' "$log" >/dev/null; then
     die "install executor leaked repo token"
   fi
-  [[ ! -e "$target/run/engineos/repo-token" ]] ||
+  [[ ! -e "$target/root/.engineos/repo-token" ]] ||
     die "install executor left repo token in target"
-  [[ ! -e "$target/tmp/engineos-git-askpass" ]] ||
+  [[ ! -e "$target/usr/local/bin/engineos-git-askpass" ]] ||
     die "install executor left git askpass helper in target"
 
   rm -rf "$target" "$log" "$package_cache"
