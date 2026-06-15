@@ -10,6 +10,8 @@ syslinux
 systemd
 sudo
 git
+github-cli
+git-lfs
 openssh
 networkmanager
 ca-certificates
@@ -26,6 +28,13 @@ fzf
 zoxide
 wl-clipboard
 bash-completion
+bat
+btop
+eza
+lazygit
+tealdeer
+man-db
+man-pages
 foot
 ttf-dejavu
 base-devel

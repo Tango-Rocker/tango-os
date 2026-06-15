@@ -13,6 +13,8 @@ DEFAULT_REPO_URL="${ENGINEOS_OFFICIAL_REPO_URL:-https://github.com/Tango-Rocker/
 DEFAULT_SYSTEM_DEVICE="${ENGINEOS_INSTALL_DEFAULT_DEVICE:-/dev/disk/by-id/ata-WDC_WD10EZEX-00WN4A0_WD-WCC6Y1ZP5EAX}"
 DEFAULT_HOME_NTFS_SOURCE="${ENGINEOS_INSTALL_HOME_NTFS_SOURCE:-LABEL=Tango}"
 DEFAULT_HOME_NTFS_OPTIONS="${ENGINEOS_INSTALL_HOME_NTFS_OPTIONS:-uid=1000,gid=1000,umask=022,fmask=133,dmask=022,windows_names,nofail,x-systemd.device-timeout=10s}"
+PACKAGED_POST_INSTALL_PAYLOAD="/usr/share/engineos/post-install-payload"
+SOURCE_POST_INSTALL_PAYLOAD="/srv/engineos/tools/post-install-payload"
 
 usage() {
   cat <<'HELP'
@@ -97,6 +99,17 @@ run_sudo() {
 require_command() {
   local cmd="$1"
   have_cmd "$cmd" || die "$cmd is required for EngineDev install"
+}
+
+installed_post_install_payload() {
+  local target="$1"
+  local packaged_script="$target$PACKAGED_POST_INSTALL_PAYLOAD/scripts/setup_dev_environment.sh"
+
+  if [[ -x "$packaged_script" ]]; then
+    printf '%s\n' "$PACKAGED_POST_INSTALL_PAYLOAD"
+  else
+    printf '%s\n' "$SOURCE_POST_INSTALL_PAYLOAD"
+  fi
 }
 
 ensure_host_pacman_servers() {
@@ -416,6 +429,8 @@ run_installer() {
   local pacstrap_conf=""
   local boot_part root_part var_part srv_part resolved_home_ntfs_source=""
   local packages=()
+  local post_install_payload=""
+  local post_install_script=""
   local post_install_args=()
 
   mapfile -t packages < <(engineos_install_packages)
@@ -534,11 +549,13 @@ run_installer() {
   run_step "assign Tang-OS workspace to dev user" arch-chroot "$target" chown -R "$user:$user" /srv/engineos
   run_step "build installed local package repo" arch-chroot "$target" runuser -u "$user" -- env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos build repo
 
-  post_install_args=(--payload /srv/engineos/tools/post-install-payload --user "$user" --force-config)
+  post_install_payload="$(installed_post_install_payload "$target")"
+  post_install_script="$post_install_payload/scripts/setup_dev_environment.sh"
+  post_install_args=(--payload "$post_install_payload" --user "$user" --force-config)
   if [[ "$skip_codex" == true ]]; then
     post_install_args+=(--skip-codex)
   fi
-  run_step "run installed post-install payload" arch-chroot "$target" /srv/engineos/tools/post-install-payload/scripts/setup_dev_environment.sh "${post_install_args[@]}"
+  run_step "run installed post-install payload" arch-chroot "$target" "$post_install_script" "${post_install_args[@]}"
   run_step "validate installed builder shape" arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos validate builder --mock
   run_step "validate installed local repo" arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos validate repo
 
@@ -680,7 +697,7 @@ print_dev_plan() {
   fi
   quote_line arch-chroot "$target" chown -R "$user:$user" /srv/engineos
   quote_line arch-chroot "$target" runuser -u "$user" -- env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos build repo
-  quote_line arch-chroot "$target" /srv/engineos/tools/post-install-payload/scripts/setup_dev_environment.sh --payload /srv/engineos/tools/post-install-payload --user "$user"
+  quote_line arch-chroot "$target" "$PACKAGED_POST_INSTALL_PAYLOAD/scripts/setup_dev_environment.sh" --payload "$PACKAGED_POST_INSTALL_PAYLOAD" --user "$user"
   quote_line arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos validate builder --mock
   quote_line arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos validate repo
 

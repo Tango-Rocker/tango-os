@@ -28,6 +28,8 @@ else
 fi
 
 for plugin_file in \
+  /usr/share/fzf/key-bindings.zsh \
+  /usr/share/fzf/completion.zsh \
   /usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh \
   /usr/share/zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh; do
   [[ -r "$plugin_file" ]] && source "$plugin_file"
@@ -39,5 +41,20 @@ if [[ -r /usr/share/zsh/plugins/zsh-history-substring-search/zsh-history-substri
   bindkey '^[[B' history-substring-search-down
 fi
 
-alias ll='ls -alF'
+if command -v zoxide >/dev/null 2>&1; then
+  eval "$(zoxide init zsh)"
+fi
+
+if command -v eza >/dev/null 2>&1; then
+  alias ls='eza --group-directories-first'
+  alias ll='eza -al --group-directories-first --git'
+else
+  alias ll='ls -alF'
+fi
+
+if command -v bat >/dev/null 2>&1; then
+  alias view='bat'
+fi
+
+alias lg='lazygit'
 alias engineos-tmux='tmux new -A -s engineos'

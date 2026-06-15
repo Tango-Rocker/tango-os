@@ -1114,7 +1114,7 @@ EOF_PACMAN
     die "install dry-run missing repo auth plan"
   grep -F 'env GIT_TERMINAL_PROMPT=0 git clone https://example.invalid/tang-os.git /srv/engineos' "$out" >/dev/null ||
     die "install dry-run missing official repo clone"
-  grep -F 'setup_dev_environment.sh --payload /srv/engineos/tools/post-install-payload --user dev' "$out" >/dev/null ||
+  grep -F 'setup_dev_environment.sh --payload /usr/share/engineos/post-install-payload --user dev' "$out" >/dev/null ||
     die "install dry-run missing post-install payload handoff"
   grep -F 'chown -R dev:dev /srv/engineos' "$out" >/dev/null ||
     die "install dry-run did not assign source workspace to dev"
@@ -1204,7 +1204,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -n "$target" ]] || exit 2
-mkdir -p "$target/etc/pacman.d" "$target/etc/sudoers.d" "$target/boot" "$target/var" "$target/srv" "$target/home"
+mkdir -p "$target/etc/pacman.d" "$target/etc/sudoers.d" "$target/boot" "$target/var" "$target/srv" "$target/home" "$target/usr/share/engineos/post-install-payload/scripts"
+touch "$target/usr/share/engineos/post-install-payload/scripts/setup_dev_environment.sh"
+chmod +x "$target/usr/share/engineos/post-install-payload/scripts/setup_dev_environment.sh"
 printf '[options]\n' >"$target/etc/pacman.conf"
 FAKE
   cat >"$fake_bin/genfstab" <<'FAKE'
@@ -1268,7 +1270,7 @@ FAKE
     die "install executor did not assign source workspace to dev"
   grep -F 'arch-chroot '"$target"' runuser -u dev -- env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos build repo' "$log" >/dev/null ||
     die "install executor did not build source repo as dev with cleared EngineOS wrapper env"
-  grep -F 'arch-chroot '"$target"' /srv/engineos/tools/post-install-payload/scripts/setup_dev_environment.sh' "$log" >/dev/null ||
+  grep -F 'arch-chroot '"$target"' /usr/share/engineos/post-install-payload/scripts/setup_dev_environment.sh' "$log" >/dev/null ||
     die "install executor did not run post-install payload"
   grep -F 'Server = file:///srv/engineos/repo/$arch' "$target/etc/pacman.conf" >/dev/null ||
     die "install executor did not configure installed local pacman repo"

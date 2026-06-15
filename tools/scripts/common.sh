@@ -155,15 +155,30 @@ engineos_builder_packages() {
     curl \
     qemu-desktop \
     edk2-ovmf \
+    vim \
+    neovim \
     foot \
     zsh \
     tmux \
+    fzf \
+    zoxide \
+    wl-clipboard \
+    bash-completion \
     python \
     jq \
     ripgrep \
     fd \
     just \
     rsync \
+    github-cli \
+    git-lfs \
+    lazygit \
+    btop \
+    bat \
+    eza \
+    tealdeer \
+    man-db \
+    man-pages \
     docker \
     docker-compose \
     docker-buildx \

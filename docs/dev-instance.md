@@ -12,6 +12,8 @@ The target dev instance should have:
 - tmux configured with mouse support and packaged tmux plugins
 - zsh configured with packaged oh-my-zsh and packaged zsh plugins
 - Docker installed, enabled, started, and usable by `dev`
+- dev conveniences installed from Arch packages: Neovim, fzf, zoxide, wl-clipboard,
+  GitHub CLI, Git LFS, lazygit, btop, bat, eza, tldr, and local man pages
 - first-deploy logs under `/var/log/engineos/post-first-deploy.log`
 - staged payload assets under `/tmp/engineos-post-first-deploy` during setup
 
@@ -90,6 +92,12 @@ The deploy command copies `tools/post-install-payload/` to the guest and runs:
 ```bash
 bash /tmp/engineos-post-first-deploy/scripts/setup_dev_environment.sh --payload /tmp/engineos-post-first-deploy
 ```
+
+The destructive `engineos install dev` path uses the packaged payload from
+`/usr/share/engineos/post-install-payload` when the installed `engineos-cli`
+package provides it, with `/srv/engineos/tools/post-install-payload` as the
+fallback. Rebuild the EngineDev ISO after payload changes so autoinstall uses
+the intended first-boot setup.
 
 Payload layout:
 

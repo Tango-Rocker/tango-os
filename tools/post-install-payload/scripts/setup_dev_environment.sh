@@ -164,16 +164,31 @@ install_packages() {
     curl
     git
     openssh
+    vim
+    neovim
     tmux
     zsh
     zsh-autosuggestions
     zsh-completions
     zsh-history-substring-search
     zsh-syntax-highlighting
+    fzf
+    zoxide
+    wl-clipboard
+    bash-completion
     jq
     ripgrep
     fd
     just
+    github-cli
+    git-lfs
+    lazygit
+    btop
+    bat
+    eza
+    tealdeer
+    man-db
+    man-pages
     base-devel
     engineos-cli
     engineos-agent-tools
@@ -345,6 +360,14 @@ validate_setup() {
     else
       log "FAIL command missing: $cmd"
       failures=$((failures + 1))
+    fi
+  done
+
+  for cmd in nvim fzf zoxide wl-copy gh git-lfs lazygit btop bat eza tldr man; do
+    if have_cmd "$cmd"; then
+      log "OK dev convenience command: $cmd"
+    else
+      log "WARN dev convenience command missing: $cmd"
     fi
   done
 

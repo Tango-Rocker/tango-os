@@ -1,6 +1,6 @@
 pkgname=engineos-cli
 pkgver=0.1.0
-pkgrel=16
+pkgrel=17
 pkgdesc="EngineOS command-line control surface"
 arch=('any')
 url="https://example.invalid/engineos"
