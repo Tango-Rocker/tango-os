@@ -1,7 +1,9 @@
 # Agent Workflow
 
-The `engineos` CLI is the control surface for humans and agents. The project MCP
-server wraps known CLI commands; it does not expose arbitrary shell access.
+The `engineos` CLI is the execution surface for humans and agents. Skills carry
+repeatable workflow judgment. The project MCP server is intentionally read-only:
+it exposes bounded status/docs discovery, not build, test, proof, or runtime
+command wrappers.
 
 ## Default Loop
 
@@ -46,6 +48,10 @@ Validate it with:
 python tools/mcp/engineos_mcp_server.py --self-test
 ./tools/engineos/engineos test agent
 ```
+
+Run local work through direct CLI commands such as `engineos test agent` or
+`engineos proof launchpad --runtime --dry-run`; do not add MCP tools just to
+mirror local commands.
 
 ## Status Discipline
 

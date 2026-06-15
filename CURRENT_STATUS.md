@@ -1,6 +1,6 @@
 # Current Status
 
-Current focus: add a safe EngineDev autoinstall path so a booted ISO can install a persistent, self-hosting dev OS, clone the official Tang-OS repo into `/srv/engineos`, run post-install setup, and hand off to `dev` for Codex-driven EngineOS/game work.
+Current focus: make the EngineRuntime startup shell prove hardware GL acceleration on the AMD target, with shell-owned Wayland clients still launched through the EngineOS app stack.
 
 PoC 0 build-lab acceptance is complete for EngineDev. The Arch builder can repeatably rebuild the local package repo and EngineDev ISO, the rebuilt ISO checksum passes, the ISO boots headlessly in QEMU, SSH comes up through the forwarded port, and `engineos proof booted-iso --vm` passes inside the clean live guest. The first-deploy dev environment follow-on is also proven: the guest has tmux, Docker, Docker Compose, Codex CLI, and the post-install payload applied.
 
@@ -91,9 +91,11 @@ e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeO
 - The shell writes live state to `/run/user/1000/engineos/shell-state.json`. The final Runtime proof showed schema `engineos-shell-state-v0`, `bootstrap=launchpad`, `active_slot=cube`, terminal mapped but hidden, cube mapped and visible, and engine unmapped because assets were missing.
 - `engineos-shell` now tracks shell-launched child processes by pid, records the intended launchpad role, marks launches when that role maps, reaps `SIGCHLD`, and logs exit status plus `reason=process-exited-before-map` for slot commands that die before creating a surface.
 - Local validation for the shell bootstrap entry point passed after freeing WSL resources: `bash -n ...`, `tools/engineos/engineos build shell --dry-run`, `tools/engineos/engineos test shell-actions`, and `tools/engineos/engineos test shell` all completed. Expected local warnings remain: non-Arch host, missing `pkg-config` wlroots modules, and a WSL systemd user-session warning.
-- The Codex/agent harness is now repo-owned instead of a generated sidecar: `.codex/config.toml`, `.codex/hooks.example.json`, `.agents/skills/*`, `tools/hooks/*.py`, and `tools/mcp/engineos_mcp_server.py` are packaged through `engineos-agent-tools`. Local validation passed with `python tools/mcp/engineos_mcp_server.py --self-test`, `./tools/engineos/engineos test agent`, `./tools/engineos/engineos test mcp`, `./tools/engineos/engineos preflight repo --package engineos-agent-tools`, and `./tools/engineos/engineos lint packages --package engineos-agent-tools`; the expected local warning remains that real package builds are not checked off Arch Linux.
+- The Codex/agent harness is now repo-owned instead of a generated sidecar: `.codex/config.toml`, `.codex/hooks.example.json`, `.agents/skills/*`, `tools/hooks/*.py`, and `tools/mcp/engineos_mcp_server.py` are packaged through `engineos-agent-tools`. Following the repo's CLI/skills/MCP philosophy, MCP is read-only status/docs orientation while local builds, tests, proofs, logs, and runtime actions stay on the direct `engineos` CLI. Local validation passed with `python tools/mcp/engineos_mcp_server.py --self-test`, `./tools/engineos/engineos test agent`, `./tools/engineos/engineos test mcp`, `./tools/engineos/engineos preflight repo --package engineos-agent-tools`, and `./tools/engineos/engineos lint packages --package engineos-agent-tools`; the expected local warning remains that real package builds are not checked off Arch Linux.
 - Runtime terminal startup now lands directly in the configured dev shell: packaged `runtime.conf` sets `ENGINEOS_TERMINAL_SESSION_CMD='tmux new -A -s engineos'`, `engineos terminal` runs that command under `zsh -lc` inside the selected graphical terminal, and the Runtime `engineos` user inherits the checked-in `.zshrc`/`.tmux.conf` from `/etc/skel`.
 - Runtime graphical client launch is now pinned to the shell-owned Wayland display: `engineos-shell` exports Wayland session hints and unsets `DISPLAY` for spawned terminal/engine clients, `engineos terminal` requires `WAYLAND_DISPLAY` by default and no longer falls back to `xterm`, and `engineos-runtime.service` sets `XDG_SESSION_TYPE=wayland` plus `ENGINEOS_TERMINAL_REQUIRE_WAYLAND=true`. VM renderer limitations still apply; hardware acceleration must be proven on the AMD target.
+- Bare-metal boot validation now treats shell renderer evidence as an acceptance gate: `engineos validate boot --bare-metal` requires `/var/log/engineos/shell.log`, rejects pixman/llvmpipe/softpipe/software-renderer markers, and requires GL-capable shell renderer evidence such as GLES/EGL or an explicit `wlr_renderer=gles2|vulkan` marker.
+- `engineos vm boot` now has a `--gl` dry-run/test path that selects `virtio-vga-gl` and a GL-capable display backend. A real accelerated Runtime VM launch was attempted on the Arch builder with `virtio-vga-gl` plus `egl-headless,gl=on`, but QEMU failed before boot with `egl: no drm render node available`; the builder currently exposes only `/dev/dri/card1` to the `dev` session, not a `renderD*` node. The separate Hyper-V EngineDev VM also exposes only `/dev/dri/card1`, and `engineos doctor --vm` reports Mesa `llvmpipe`, so neither current VM path proves accelerated shell rendering.
 - `engineos vm boot` now supports `--audio hda`, which adds a QEMU ICH9 HDA controller and duplex codec. A Runtime VM booted with that option exposes `HDA Intel` in `/proc/asound/cards`, `aplay -l` lists `Generic Analog`, WirePlumber reports `Built-in Audio Analog Stereo` sink/source, and `speaker-test -D default` reaches the guest audio path. QEMU is using a discard backend, so this proves guest audio plumbing but not audible host output.
 - EngineRuntime includes the Quake audio default path through `/etc/engineos/quake.conf` with `ENGINEOS_QUAKE_SDL_AUDIODRIVER=pulseaudio`.
 - EngineRuntime TTY shell launch passes default terminal, cube, and engine commands into `engineos-shell`, so `Alt+Return`, `Alt+G`, `Alt+1`, `Alt+2`, `Alt+3`, and `Alt+Tab` have configured launchpad actions.
@@ -108,10 +110,11 @@ e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeO
 - Interactive Quake keyboard/mouse/audio in a live Runtime console session with user assets.
 - Persistent Quake asset mounting is not implemented yet; the current Hyper-V VM still loses manually copied assets on reboot because it is a live ISO, even though the writable overlay is now large enough for session-local copies.
 - Real audible output is not proven in the current Hyper-V/basic QEMU path. Hyper-V is not presenting a sound device to Linux, and the QEMU HDA proof uses an audio discard backend; prove audible output on hardware or an audio-forwarding VM/RDP path.
+- Accelerated VM graphics are not available in the current lab VM paths: the builder QEMU GL path fails without a host DRM render node, and the Hyper-V test guest reports llvmpipe.
 - Visible hardware/frame-capture proof of the Runtime shell is still missing; the current Runtime proof is headless QEMU evidence from logs, state JSON, and app renderer/frame logs.
 - Runtime launchpad with user-provided Quake assets is not proven yet, so the engine slot has not mapped as a live Quake surface in Runtime.
 - Real USB writing to removable media.
-- Bare-metal AMD boot, DRM/KMS validation, and hardware renderer proof.
+- Bare-metal AMD boot, DRM/KMS validation, and hardware GL shell startup proof.
 - Hyper-V CPU/RAM settings are not changed from this repo; raising them requires elevated Windows PowerShell.
 
 ## Next Commands
@@ -180,6 +183,22 @@ sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'engineos logs runtime --last
 sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'cat /proc/asound/cards; wpctl status'
 ```
 
+Accelerated Runtime VM retest when the host exposes `/dev/dri/renderD*`:
+
+```bash
+cd /srv/engineos
+./tools/engineos/engineos vm boot engineruntime --gl --background --ssh-port 2293 --audio hda
+sshpass -p engineos ssh -p 2293 engineos@127.0.0.1 'engineos proof booted-iso --runtime'
+sshpass -p engineos ssh -p 2293 engineos@127.0.0.1 'engineos logs shell --last 200; engineos logs app --last 200'
+```
+
+Current expected blocker on the Arch builder VM:
+
+```text
+qemu-system-x86_64: egl: no drm render node available
+qemu-system-x86_64: egl: render node init failed
+```
+
 Windows Hyper-V ISO test VM:
 
 ```powershell
@@ -219,6 +238,20 @@ Expected markers:
 - `launch action label=bootstrap-cube role=cube`
 - `launch action exit label=... role=... status=... mapped=...`
 - `launchpad slot unavailable role=engine reason=process-exited-before-map` when Quake exits before mapping
+
+Bare-metal GL shell startup proof after booting EngineRuntime on the AMD target:
+
+```bash
+engineos proof booted-iso --bare-metal
+engineos proof shell-launch --bare-metal
+engineos logs shell --last 200
+engineos capture frame --target shell
+```
+
+Expected shell renderer markers:
+
+- no `pixman`, `llvmpipe`, `softpipe`, or software-renderer markers in `/var/log/engineos/shell.log`
+- `GLES2`, `EGL`, or explicit `wlr_renderer=gles2|vulkan` evidence for the shell renderer
 
 ## Resource Note
 

@@ -11,6 +11,7 @@ WARNINGS=0
 RUNTIME_CONF="${ENGINEOS_RUNTIME_CONF:-/etc/engineos/runtime.conf}"
 APPS_MANIFEST="${ENGINEOS_APPS_MANIFEST:-$(engineos_apps_manifest "$(engineos_root)")}"
 LOG_DIR="${ENGINEOS_LOG_DIR:-/var/log/engineos}"
+SHELL_LOG="${ENGINEOS_SHELL_LOG:-$LOG_DIR/shell.log}"
 DRI_DIR="${ENGINEOS_DRI_DIR:-/dev/dri}"
 DRM_SYSFS="${ENGINEOS_DRM_SYSFS:-/sys/class/drm}"
 DOCTOR_CMD="${ENGINEOS_DOCTOR_CMD:-$SCRIPT_DIR/doctor.sh}"
@@ -240,6 +241,43 @@ runtime_autostart_log_check() {
 	fi
 }
 
+shell_renderer_check() {
+  local shell_log="${1:-$SHELL_LOG}"
+
+  if [[ ! -r "$shell_log" ]]; then
+    if [[ "$MODE" == "bare-metal" ]]; then
+      fail "shell renderer log missing: $shell_log"
+    else
+      warn "shell renderer log missing: $shell_log"
+    fi
+    return
+  fi
+
+  ok "shell renderer log exists"
+  if grep -Eiq 'pixman|llvmpipe|softpipe|software rasterizer|software renderer|wlr_allow_software=(1|true|yes)|libgl_always_software=(1|true|yes)' "$shell_log"; then
+    if [[ "$MODE" == "bare-metal" ]]; then
+      fail "shell renderer log shows software rendering; see $shell_log"
+    else
+      warn "shell renderer log shows software rendering; acceptable only for VM smoke paths"
+    fi
+    return
+  fi
+
+  if grep -Eiq 'renderer diagnostics|GLES2|EGL|wlr_renderer=(gles2|vulkan)' "$shell_log"; then
+    ok "shell renderer diagnostics present"
+  else
+    fail "shell renderer diagnostics missing; see $shell_log"
+  fi
+
+  if [[ "$MODE" == "bare-metal" ]]; then
+    if grep -Eiq 'GLES2|EGL|wlr_renderer=(gles2|vulkan)' "$shell_log"; then
+      ok "bare-metal shell renderer has GL-capable evidence"
+    else
+      fail "bare-metal shell renderer does not show GL-capable evidence; see $shell_log"
+    fi
+  fi
+}
+
 bare_metal_graphics_check() {
   local doctor_output
 
@@ -366,6 +404,7 @@ if [[ "$MODE" == "runtime" || "$MODE" == "bare-metal" ]]; then
   runtime_config_check
   runtime_recovery_help_check
   runtime_autostart_log_check
+  shell_renderer_check
 fi
 
 if [[ "$MODE" == "bare-metal" ]]; then

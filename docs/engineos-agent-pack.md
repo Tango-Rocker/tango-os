@@ -6,7 +6,7 @@ sidecar. It gives agents three layers:
 ```text
 AGENTS.md                         always-loaded repository rules
 .agents/skills/*/SKILL.md         task routers and area workflows
-tools/mcp/engineos_mcp_server.py  bounded wrappers around engineos commands
+tools/mcp/engineos_mcp_server.py  read-only status/docs discovery
 ```
 
 ## Installed Files
@@ -31,12 +31,19 @@ tools/mcp/engineos_mcp_server.py
 The `engineos-agent-tools` package installs the same guidance under
 `/usr/share/engineos` and executable helpers under `/usr/share/engineos/tools`.
 
-## MCP Tool Surface
+## Interface Policy
 
-The MCP server exposes typed operations for status, docs, doctor, logs, app
-state, app manifest validation, assets, preflight, validation, focused tests,
-repo/ISO/shell dry-runs, packages, proofs, shell/Quake smoke runs, engine
-runner control, frame capture, and crash bundles.
+Use direct `engineos` CLI commands for local builds, tests, proofs, logs, and
+runtime actions. Use skills to capture repeatable workflows and safety rules.
+The MCP server is limited to read-only orientation:
+
+- `project_status`
+- `read_status`
+- status and agent-document resources
+- prompts that point back to direct CLI proof commands
+
+Do not add MCP tools just to mirror local commands that are already scriptable,
+documented, and safe through the CLI.
 
 The server must never expose:
 

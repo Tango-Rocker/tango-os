@@ -8,7 +8,7 @@ A sprint here means a focused work chunk, not a calendar promise. Each chunk sho
 
 Current phase: EngineRuntime/engine-loop proof.
 
-Immediate target: prove the generated EngineRuntime ISO boots, starts the runtime service, leaves recovery logs, and can launch the EngineOS shell/Quake path far enough to collect useful evidence.
+Immediate target: prove the generated EngineRuntime ISO boots on the AMD target with an accelerated startup shell, rejects software compositor rendering, leaves recovery logs, and can launch terminal/cube/Quake through the shell-owned Wayland app stack.
 
 PoC 0 is complete:
 
@@ -112,5 +112,10 @@ engineos proof booted-iso --bare-metal
 - build hygiene
 
 EngineRuntime has a generated ISO and packaged launchpad runtime path. Runtime autostart, DRM/libinput shell startup, crash-bundle recovery, terminal/cube launchpad mapping, Quake missing-asset handling, shell state JSON, and emulated VM audio-device plumbing are proven in builder-hosted QEMU; interactive Quake with user assets, visible hardware rendering, and audible hardware audio still need live proof.
+
+The next hardware gate is explicit: `engineos validate boot --bare-metal` and
+`engineos proof shell-launch --bare-metal` must reject pixman/llvmpipe/software
+shell rendering and require GL-capable renderer evidence from the startup shell
+log before later tiling or overlay shell work counts as progress.
 
 Polish is important, but it should not block the first usable MVP.

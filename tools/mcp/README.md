@@ -1,8 +1,8 @@
 # EngineOS MCP
 
-`engineos_mcp_server.py` exposes bounded EngineOS operations to Codex through
-stdio MCP. It wraps the existing `engineos` CLI and does not expose arbitrary
-shell execution.
+`engineos_mcp_server.py` exposes bounded EngineOS orientation to Codex through
+stdio MCP. It is intentionally read-only: local builds, tests, proofs, logs, and
+runtime actions stay on the direct `engineos` CLI and are guided by skills.
 
 ## Self-Test
 
@@ -26,28 +26,20 @@ Auto-approvable read-only tools:
 
 - `project_status`
 - `read_status`
-- `doctor`
-- `logs`
-- `app_status`
-- `app_manifest`
-- `assets`
 
-Prompt-gate tools that can run tests, write artifacts, consume disk/time, start
-processes, or mutate build output:
+Do not add MCP tools for local `engineos` execution surfaces such as:
 
-- `preflight`
-- `validate`
-- `test`
 - `build_repo`
 - `build_iso`
-- `build_shell`
-- `package`
+- `preflight`
+- `test`
 - `proof`
-- `run_shell_smoke`
+- `logs`
 - `run_quake_smoke`
-- `engine`
-- `capture_frame`
 - `crash_bundle`
+
+Those remain direct CLI commands so the same interface works for humans,
+scripts, CI, and agents.
 
 Never add tools for raw sudo, recursive deletion, package removal, secret reads,
 or direct edits to generated `work/` and `out/` artifacts.

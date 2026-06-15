@@ -34,3 +34,11 @@ Likely phase: after MVP.
 Why: useful once single-monitor TTY/KMS behavior is stable.
 
 Likely phase: polish after MVP.
+
+### Shell Overlays And Tiling
+
+Why: compositor-owned overlays, window placement, and tiling are the right way
+to draw above terminal/game/app surfaces without pretending clients share one GL
+context.
+
+Likely phase: after bare-metal GL shell startup and input recovery are proven.

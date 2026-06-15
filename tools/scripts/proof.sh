@@ -474,6 +474,7 @@ proof_shell_launch() {
     run_step "app launch ownership dry-run" printf '%s\n' "grep -E 'app launch app=(terminal|cube|quake) owner=engineos-shell' $app_log"
     run_step "renderer doctor dry-run" printf '%s\n' "engineos doctor --vm"
     if [[ "$mode" == "bare-metal" ]]; then
+      run_step "bare-metal shell renderer dry-run" printf '%s\n' "grep -E 'renderer diagnostics|GLES2|EGL|wlr_renderer=(gles2|vulkan)' $shell_log && ! grep -Ei 'pixman|llvmpipe|softpipe|software renderer' $shell_log"
       run_step "bare-metal renderer rejection dry-run" printf '%s\n' "engineos validate boot --bare-metal"
     fi
     printf '\nShell-launch proof dry-run completed.\n'
@@ -492,6 +493,14 @@ proof_shell_launch() {
     die "shell log does not show shell-owned client environment"
   grep -E 'renderer diagnostics' "$shell_log" >/dev/null ||
     die "shell log does not show renderer diagnostics"
+
+  if [[ "$mode" == "bare-metal" ]]; then
+    if grep -Eiq 'pixman|llvmpipe|softpipe|software rasterizer|software renderer|wlr_allow_software=(1|true|yes)|libgl_always_software=(1|true|yes)' "$shell_log"; then
+      die "bare-metal shell log shows software rendering"
+    fi
+    grep -Eiq 'GLES2|EGL|wlr_renderer=(gles2|vulkan)' "$shell_log" ||
+      die "bare-metal shell log does not show GL-capable renderer evidence"
+  fi
 
   [[ -r "$terminal_log" ]] || die "terminal log missing: $terminal_log"
   grep -F 'owner=engineos-shell' "$terminal_log" >/dev/null ||

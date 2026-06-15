@@ -125,20 +125,30 @@ run_mcp() {
     die "MCP self-test did not report engineos server"
   grep -F '"project_status"' "$out" >/dev/null ||
     die "MCP self-test did not list project_status tool"
-  grep -F '"proof"' "$out" >/dev/null ||
-    die "MCP self-test did not list proof tool"
+  grep -F '"read_status"' "$out" >/dev/null ||
+    die "MCP self-test did not list read_status tool"
+  if grep -F '"proof"' "$out" >/dev/null || grep -F '"build_iso"' "$out" >/dev/null; then
+    die "MCP self-test exposed local execution wrapper tools"
+  fi
 
   printf '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}\n' |
     python3 "$server" >"$out"
   grep -F '"name":"project_status"' "$out" >/dev/null ||
     die "MCP tools/list missing project_status"
-  grep -F '"name":"build_iso"' "$out" >/dev/null ||
-    die "MCP tools/list missing build_iso"
+  grep -F '"name":"read_status"' "$out" >/dev/null ||
+    die "MCP tools/list missing read_status"
+  if grep -F '"name":"build_iso"' "$out" >/dev/null ||
+    grep -F '"name":"proof"' "$out" >/dev/null ||
+    grep -F '"name":"logs"' "$out" >/dev/null; then
+    die "MCP tools/list exposed local execution wrapper tools"
+  fi
 
   printf '{"jsonrpc":"2.0","id":2,"method":"resources/list","params":{}}\n' |
     python3 "$server" >"$out"
   grep -F 'engineos://status/current' "$out" >/dev/null ||
     die "MCP resources/list missing current status resource"
+  grep -F 'engineos://agent/pack' "$out" >/dev/null ||
+    die "MCP resources/list missing agent pack resource"
 
   printf 'MCP server smoke test passed\n'
 }
@@ -1002,6 +1012,20 @@ run_vm() {
     die "engineruntime VM dry-run did not include HDA controller"
   grep -F -- '-device hda-duplex\,audiodev=audio0' "$out" >/dev/null ||
     die "engineruntime VM dry-run did not include HDA duplex codec"
+  env -u WAYLAND_DISPLAY -u DISPLAY "$SCRIPT_DIR/vm.sh" boot engineruntime --dry-run --iso "$runtime_iso" --memory 1024 --cpus 1 --gl --no-kvm >"$out"
+  grep -F 'display:  egl-headless,gl=on' "$out" >/dev/null ||
+    die "engineruntime GL VM dry-run did not select egl-headless GL display"
+  grep -F 'gl:       true' "$out" >/dev/null ||
+    die "engineruntime GL VM dry-run did not print GL mode"
+  grep -F -- '-vga none' "$out" >/dev/null ||
+    die "engineruntime GL VM dry-run did not disable default VGA"
+  grep -F -- '-device virtio-vga-gl' "$out" >/dev/null ||
+    die "engineruntime GL VM dry-run did not include virtio-vga-gl"
+  if "$SCRIPT_DIR/vm.sh" boot engineruntime --dry-run --iso "$runtime_iso" --memory 1024 --cpus 1 --display none --gl --no-kvm >"$out" 2>&1; then
+    die "engineruntime GL VM dry-run accepted display none"
+  fi
+  grep -F -- '--gl requires a GL-capable display backend' "$out" >/dev/null ||
+    die "engineruntime GL VM dry-run did not explain display none rejection"
 
   printf 'vm boot dry-run test passed\n'
 }
@@ -1325,6 +1349,11 @@ run_proof() {
     die "shell-launch proof did not check renderer diagnostics"
   grep -F 'owner=engineos-shell' "$tmp_dir/shell-launch.txt" >/dev/null ||
     die "shell-launch proof did not check shell-owned launch markers"
+  ENGINEOS_LOG_DIR="$tmp_dir/logs" "$SCRIPT_DIR/proof.sh" shell-launch --bare-metal --dry-run >"$tmp_dir/shell-launch-bare-metal.txt"
+  grep -F 'bare-metal shell renderer dry-run' "$tmp_dir/shell-launch-bare-metal.txt" >/dev/null ||
+    die "bare-metal shell-launch proof did not include shell renderer gate"
+  grep -F 'wlr_renderer=(gles2|vulkan)' "$tmp_dir/shell-launch-bare-metal.txt" >/dev/null ||
+    die "bare-metal shell-launch proof did not require GL-capable renderer evidence"
   ENGINEOS_LOG_DIR="$tmp_dir/logs" "$SCRIPT_DIR/proof.sh" launchpad --runtime --dry-run >"$tmp_dir/launchpad.txt"
   grep -F 'Launchpad proof dry-run completed' "$tmp_dir/launchpad.txt" >/dev/null ||
     die "launchpad proof dry-run did not complete"
@@ -1776,6 +1805,7 @@ FAKE
     die "runtime boot validation did not call doctor in VM mode"
 
   printf '[2026-01-01T00:00:00Z] starting EngineOS shell mode=--tty recovery=tty2\n' >"$log_dir/runtime-start.log"
+  printf '[2026-01-01T00:00:00Z] renderer diagnostics backend=drm,libinput wlr_renderer=pixman\n' >"$log_dir/shell.log"
   PATH="$fake_bin:$PATH" \
     ENGINEOS_RUNTIME_CONF="$runtime_conf" \
     ENGINEOS_APPS_MANIFEST="$apps_manifest" \
@@ -1788,8 +1818,11 @@ FAKE
   if grep -F 'runtime autostart appears to still be running' "$out" >/dev/null; then
     die "runtime boot validation warned for active runtime shell service"
   fi
+  grep -F 'shell renderer log shows software rendering; acceptable only for VM smoke paths' "$out" >/dev/null ||
+    die "runtime boot validation did not keep pixman shell evidence as a VM warning"
 
   : >"$doctor_log"
+  printf '[2026-01-01T00:00:00Z] renderer diagnostics backend=drm,libinput wlr_renderer=gles2 EGL platform=gbm\n' >"$log_dir/shell.log"
   PATH="$fake_bin:$PATH" \
     ENGINEOS_RUNTIME_CONF="$runtime_conf" \
     ENGINEOS_APPS_MANIFEST="$apps_manifest" \
@@ -1805,8 +1838,27 @@ FAKE
     die "bare-metal boot validation did not validate connected DRM output"
   grep -F 'AMD display device visible to lspci' "$out" >/dev/null ||
     die "bare-metal boot validation did not verify AMD display fixture"
+  grep -F 'shell renderer log exists' "$out" >/dev/null ||
+    die "bare-metal boot validation did not check shell renderer log"
+  grep -F 'bare-metal shell renderer has GL-capable evidence' "$out" >/dev/null ||
+    die "bare-metal boot validation did not require GL-capable shell evidence"
   grep -Fx -- '--bare-metal' "$doctor_log" >/dev/null ||
     die "bare-metal boot validation did not call doctor in bare-metal mode"
+
+  printf '[2026-01-01T00:00:00Z] renderer diagnostics backend=drm,libinput wlr_renderer=pixman\n' >"$log_dir/shell.log"
+  if PATH="$fake_bin:$PATH" \
+      ENGINEOS_RUNTIME_CONF="$runtime_conf" \
+      ENGINEOS_APPS_MANIFEST="$apps_manifest" \
+      ENGINEOS_LOG_DIR="$log_dir" \
+      ENGINEOS_DRI_DIR="$dri_dir" \
+      ENGINEOS_DRM_SYSFS="$drm_sysfs" \
+      ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
+      ENGINEOS_FAKE_DOCTOR_ARGS="$doctor_log" \
+      "$SCRIPT_DIR/validate_boot.sh" --bare-metal >"$out" 2>&1; then
+    die "bare-metal boot validation accepted pixman shell renderer evidence"
+  fi
+  grep -F 'shell renderer log shows software rendering' "$out" >/dev/null ||
+    die "bare-metal boot validation did not reject pixman shell renderer evidence"
 
   printf 'boot validation fixture test passed\n'
 }

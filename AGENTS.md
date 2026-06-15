@@ -36,7 +36,7 @@ engines/              QuakeSpasm and future engine ports
 tools/engineos/       primary CLI
 tools/scripts/        implementation helpers for the CLI
 tools/post-install-payload/ first-deploy guest setup scripts and assets
-tools/mcp/            bounded MCP wrappers for the EngineOS CLI
+tools/mcp/            read-only MCP status/docs bridge
 docs/                 architecture, plans, and workflow docs
 .agents/skills/       local task skills
 tests/                smoke checks

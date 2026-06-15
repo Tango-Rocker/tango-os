@@ -21,7 +21,8 @@ Options:
   --out-dir <path>      Directory to search for ISO artifacts (default: out/)
   --memory <MiB>        Guest memory in MiB (default: 4096)
   --cpus <N>            Guest CPU count (default: 2)
-  --display <backend>   QEMU display backend: auto, gtk, sdl, or none (default: auto)
+  --display <backend>   QEMU display backend: auto, gtk, sdl, egl-headless, or none (default: auto)
+  --gl                  Enable QEMU virgl with virtio-vga-gl and a GL display backend
   --audio <mode>        QEMU audio device mode: none or hda (default: none)
   --background          Start QEMU in the background and write logs under artifacts/logs
   --ssh-port <port>     Forward host port to guest ssh port 22 (default: 2222)
@@ -103,6 +104,7 @@ boot_vm() {
   local memory="4096"
   local cpus="2"
   local display="${ENGINEOS_VM_DISPLAY:-auto}"
+  local gl=false
   local audio="${ENGINEOS_VM_AUDIO:-none}"
   local background=false
   local ssh_port="${ENGINEOS_VM_SSH_PORT:-2222}"
@@ -153,6 +155,9 @@ boot_vm() {
         display="${1:-}"
         [[ -n "$display" ]] || die "--display requires a backend"
         ;;
+      --gl)
+        gl=true
+        ;;
       --audio)
         shift
         audio="${1:-}"
@@ -197,11 +202,23 @@ boot_vm() {
   [[ -f "$iso_path" ]] || die "ISO not found: $iso_path"
 
   if [[ "$display" == auto ]]; then
-    if [[ -n "${WAYLAND_DISPLAY:-}" || -n "${DISPLAY:-}" ]]; then
+    if [[ "$gl" == true && -z "${WAYLAND_DISPLAY:-}" && -z "${DISPLAY:-}" ]]; then
+      display="egl-headless"
+    elif [[ -n "${WAYLAND_DISPLAY:-}" || -n "${DISPLAY:-}" ]]; then
       display="gtk"
     else
       display="none"
     fi
+  fi
+
+  if [[ "$gl" == true && "$display" == "none" ]]; then
+    die "--gl requires a GL-capable display backend such as egl-headless, gtk, or sdl"
+  fi
+
+  if [[ "$gl" == true && "$display" != *,* ]]; then
+    display="${display},gl=on"
+  elif [[ "$gl" == true && "$display" != *"gl="* ]]; then
+    display="${display},gl=on"
   fi
 
   case "$audio" in
@@ -238,8 +255,13 @@ boot_vm() {
     -cdrom "$iso_path"
     -netdev "user,id=net0,hostfwd=tcp::${ssh_port}-:22"
     -device virtio-net-pci,netdev=net0
-    -display "$display"
   )
+
+  if [[ "$gl" == true ]]; then
+    cmd+=(-vga none -device virtio-vga-gl)
+  fi
+
+  cmd+=(-display "$display")
 
   if [[ "$audio" == hda ]]; then
     cmd+=(
@@ -273,6 +295,7 @@ boot_vm() {
   printf '  profile:  %s\n' "$profile"
   printf '  iso:      %s\n' "$iso_path"
   printf '  display:  %s\n' "$display"
+  printf '  gl:       %s\n' "$gl"
   printf '  audio:    %s\n' "$audio"
   printf '  ssh:      host port %s -> guest port 22\n' "$ssh_port"
   if [[ "$background" == true ]]; then

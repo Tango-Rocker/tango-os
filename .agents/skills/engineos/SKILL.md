@@ -60,9 +60,11 @@ docs/agent-workflow.md
 docs/agent-lsp.md
 ```
 
-The MCP server wraps known EngineOS commands only. It must not expose arbitrary
-shell, raw sudo, package removal, recursive deletion, secret reads, or direct
-editing of generated `work/` or `out/` artifacts.
+The MCP server is read-only orientation glue. Use direct `engineos` CLI commands
+for local builds, tests, proofs, logs, and runtime actions. Do not add MCP tools
+just to mirror local commands, and never expose arbitrary shell, raw sudo,
+package removal, recursive deletion, secret reads, or direct editing of
+generated `work/` or `out/` artifacts.
 
 ## Hard Boundaries
 

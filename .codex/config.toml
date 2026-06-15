@@ -12,44 +12,11 @@ enabled = true
 
 enabled_tools = [
   "project_status",
-  "read_status",
-  "doctor",
-  "logs",
-  "app_status",
-  "app_manifest",
-  "assets",
-  "preflight",
-  "validate",
-  "test",
-  "build_repo",
-  "build_iso",
-  "build_shell",
-  "package",
-  "proof",
-  "run_shell_smoke",
-  "run_quake_smoke",
-  "engine",
-  "capture_frame",
-  "crash_bundle"
+  "read_status"
 ]
 
 [mcp_servers.engineos.tools.project_status]
 approval_mode = "approve"
 
 [mcp_servers.engineos.tools.read_status]
-approval_mode = "approve"
-
-[mcp_servers.engineos.tools.doctor]
-approval_mode = "approve"
-
-[mcp_servers.engineos.tools.logs]
-approval_mode = "approve"
-
-[mcp_servers.engineos.tools.app_status]
-approval_mode = "approve"
-
-[mcp_servers.engineos.tools.app_manifest]
-approval_mode = "approve"
-
-[mcp_servers.engineos.tools.assets]
 approval_mode = "approve"

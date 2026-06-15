@@ -84,7 +84,7 @@ Goal: prove the runtime image on the AMD target with real DRM/KMS, input, audio,
 Acceptance:
 
 - EngineRuntime boots on the AMD machine
-- hardware renderer is not llvmpipe/softpipe
+- startup shell renderer is GL-capable and is not pixman/llvmpipe/softpipe
 - at least one DRM output is connected and validated
 - keyboard/mouse/game input reaches shell and Quake
 - audio works through PipeWire/Pulse
@@ -119,4 +119,4 @@ engineos proof booted-iso --bare-metal
 - dynamic multi-monitor layout
 - rich 3D cockpit
 - package signing
-- MCP wrappers around the CLI
+- external/shared MCP integrations when they add value beyond direct CLI

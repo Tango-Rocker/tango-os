@@ -70,7 +70,7 @@ engineos commands:
   proof booted-iso [--vm|--runtime|--bare-metal] [--dry-run]
   proof shell-launch [--vm|--runtime|--bare-metal] [--dry-run]
   proof launchpad [--vm|--runtime|--bare-metal] [--dry-run]
-  vm boot [enginedev|engineruntime] [--dry-run] [--audio none|hda]
+  vm boot [enginedev|engineruntime] [--dry-run] [--gl] [--audio none|hda]
   usb list|write --iso <path> --device <block-device> [--dry-run]
   capture frame --target shell
   record input <trace.json>

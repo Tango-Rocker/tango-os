@@ -24,3 +24,6 @@ Validation:
 ./tools/engineos/engineos test agent
 python tools/mcp/engineos_mcp_server.py --self-test
 ```
+
+The MCP server is read-only. Run local EngineOS work through the direct CLI and
+use skills for repeatable workflow guidance.
