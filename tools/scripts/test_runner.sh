@@ -1495,6 +1495,10 @@ run_post_first_deploy() {
     die "post-first-deploy dev shell service does not launch tmux"
   grep -F 'engineos-shell' "$ROOT/tools/post-install-payload/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not request engineos-shell"
+  grep -F 'engineos-cli' "$ROOT/tools/post-install-payload/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not request engineos-cli"
+  grep -F 'engineos-agent-tools' "$ROOT/tools/post-install-payload/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not request engineos-agent-tools"
   grep -F 'engineos-cube' "$ROOT/tools/post-install-payload/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not request engineos-cube"
 
@@ -1531,6 +1535,10 @@ run_repo() {
     die "repo dry-run did not document local dependency handling"
   grep -F 'package logs:' "$out" >/dev/null ||
     die "repo dry-run did not document package log directory"
+  grep -F 'package sources:' "$out" >/dev/null ||
+    die "repo dry-run did not document package source directory"
+  grep -F 'package build dir:' "$out" >/dev/null ||
+    die "repo dry-run did not document package build directory"
   grep -F 'packages/engineos-quakespasm' "$out" >/dev/null ||
     die "repo dry-run did not include engineos-quakespasm"
 

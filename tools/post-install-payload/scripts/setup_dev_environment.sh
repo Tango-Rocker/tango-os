@@ -175,6 +175,8 @@ install_packages() {
     fd
     just
     base-devel
+    engineos-cli
+    engineos-agent-tools
     engineos-oh-my-zsh
     engineos-tmux-plugins
     engineos-cube
