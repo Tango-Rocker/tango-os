@@ -11,6 +11,7 @@ ONLY_PACKAGE=""
 REPO_ARCH="${ENGINEOS_REPO_ARCH:-x86_64}"
 REPO_DIR="${ENGINEOS_REPO_DIR:-$ROOT/repo/$REPO_ARCH}"
 REPO_NAME="${ENGINEOS_REPO_NAME:-engineos}"
+PACKAGE_LOG_DIR="${ENGINEOS_PACKAGE_LOG_DIR:-$ROOT/artifacts/logs}"
 
 mapfile -t PACKAGES < <(engineos_packages)
 
@@ -196,6 +197,7 @@ if [[ "$DRY_RUN" == true ]]; then
   printf '  makepkg: rebuild existing package artifacts with -f\n'
   printf '  repo-add: after each package, refresh %s/%s.db.tar.gz from latest package artifacts in %s\n' "$REPO_DIR" "$REPO_NAME" "$REPO_DIR"
   printf '  local deps: already-built engineos-* runtime dependencies are satisfied from %s\n' "$REPO_DIR"
+  printf '  package logs: %s\n' "$PACKAGE_LOG_DIR"
   exit 0
 fi
 
@@ -206,6 +208,7 @@ have_cmd pacman || die "pacman is missing"
 have_cmd vercmp || die "vercmp is missing; install pacman"
 
 mkdir -p "$REPO_DIR"
+mkdir -p "$PACKAGE_LOG_DIR"
 REAL_PACMAN="$(command -v pacman)"
 PACMAN_WRAPPER_DIR="$(mktemp -d "${TMPDIR:-/tmp}/engineos-pacman-wrapper.XXXXXX")"
 PACMAN_WRAPPER="$(create_local_dep_pacman_wrapper "$PACMAN_WRAPPER_DIR")"
@@ -221,6 +224,7 @@ for pkg in "${selected_packages[@]}"; do
   (
     cd "$pkg_dir"
     ENGINEOS_ROOT="$ROOT" \
+      ENGINEOS_LOG_DIR="$PACKAGE_LOG_DIR" \
       ENGINEOS_REAL_PACMAN="$REAL_PACMAN" \
       ENGINEOS_REPO_DIR="$REPO_DIR" \
       PACMAN="$PACMAN_WRAPPER" \

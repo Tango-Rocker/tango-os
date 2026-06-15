@@ -1529,6 +1529,8 @@ run_repo() {
     die "repo dry-run did not document latest-artifact selection"
   grep -F 'local deps: already-built engineos-* runtime dependencies' "$out" >/dev/null ||
     die "repo dry-run did not document local dependency handling"
+  grep -F 'package logs:' "$out" >/dev/null ||
+    die "repo dry-run did not document package log directory"
   grep -F 'packages/engineos-quakespasm' "$out" >/dev/null ||
     die "repo dry-run did not include engineos-quakespasm"
 
