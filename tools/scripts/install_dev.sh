@@ -10,17 +10,25 @@ ACTION="${1:-help}"
 shift || true
 
 DEFAULT_REPO_URL="${ENGINEOS_OFFICIAL_REPO_URL:-https://github.com/Tango-Rocker/tango-os.git}"
+DEFAULT_SYSTEM_DEVICE="${ENGINEOS_INSTALL_DEFAULT_DEVICE:-/dev/disk/by-id/ata-WDC_WD10EZEX-00WN4A0_WD-WCC6Y1ZP5EAX}"
+DEFAULT_HOME_NTFS_SOURCE="${ENGINEOS_INSTALL_HOME_NTFS_SOURCE:-LABEL=Tango}"
+DEFAULT_HOME_NTFS_OPTIONS="${ENGINEOS_INSTALL_HOME_NTFS_OPTIONS:-uid=1000,gid=1000,umask=022,fmask=133,dmask=022,windows_names,nofail,x-systemd.device-timeout=10s}"
 
 usage() {
   cat <<'HELP'
-Usage: install_dev.sh dev --dry-run --device <block-device> [options]
-       install_dev.sh dev --device <block-device> --yes-i-understand-this-wipes-device [options]
+Usage: install_dev.sh dev --dry-run [--device <block-device>] [options]
+       install_dev.sh dev [--device <block-device>] --yes-i-understand-this-wipes-device [options]
 
 Plan an EngineDev bare-metal autoinstall.
 
 Options:
-  --device path            Target whole-disk block device, for example /dev/nvme0n1
+  --device path            Target whole-disk block device
+                           (default: current Windows F: disk by-id path)
   --target path            Temporary install mountpoint (default: /mnt/engineos)
+  --home-ntfs-source spec  Existing NTFS volume to mount at /home
+                           (default: LABEL=Tango, current Windows E:)
+  --home-ntfs-options opts Mount options for the NTFS /home volume
+  --no-home-ntfs           Keep /home on the installed root filesystem
   --repo-url url           Tang-OS Git repo to clone into /srv/engineos
   --repo-token-file path   Optional file containing a GitHub token for private repo clone
   --repo-seed path         Optional local repo/checkout copied into target /tmp for VM proof
@@ -28,7 +36,8 @@ Options:
   --no-package-cache       Ignore any ISO package cache and use pacman defaults
   --branch name            Optional Git branch to check out after clone
   --hostname name          Installed hostname (default: enginedev)
-  --root-size size         Root partition size for sfdisk (default: 16G)
+  --root-size size         Root partition size for sfdisk (default: 64G)
+  --var-size size          /var partition size for sfdisk (default: 128G)
   --user name              Installed dev user (default: dev)
   --skip-codex             Do not install Codex during post-install
   --dry-run                Print the install plan only
@@ -62,10 +71,12 @@ require_whole_disk_shape() {
 
 partition_paths() {
   local device="$1"
-  if [[ "$device" == /dev/nvme* || "$device" == /dev/mmcblk* ]]; then
-    printf '%s\n' "${device}p1" "${device}p2" "${device}p3"
+  if [[ "$device" == /dev/disk/by-id/* || "$device" == /dev/disk/by-path/* ]]; then
+    printf '%s\n' "${device}-part1" "${device}-part2" "${device}-part3" "${device}-part4"
+  elif [[ "$device" == /dev/nvme* || "$device" == /dev/mmcblk* ]]; then
+    printf '%s\n' "${device}p1" "${device}p2" "${device}p3" "${device}p4"
   else
-    printf '%s\n' "${device}1" "${device}2" "${device}3"
+    printf '%s\n' "${device}1" "${device}2" "${device}3" "${device}4"
   fi
 }
 
@@ -126,7 +137,8 @@ target_has_mounts() {
 wait_for_partitions() {
   local boot_part="$1"
   local root_part="$2"
-  local srv_part="$3"
+  local var_part="$3"
+  local srv_part="$4"
   local _i
 
   if [[ "${ENGINEOS_INSTALL_ALLOW_FAKE_DEVICE:-}" == "true" ]]; then
@@ -134,11 +146,46 @@ wait_for_partitions() {
   fi
 
   for _i in 1 2 3 4 5; do
-    [[ -b "$boot_part" && -b "$root_part" && -b "$srv_part" ]] && return
+    [[ -b "$boot_part" && -b "$root_part" && -b "$var_part" && -b "$srv_part" ]] && return
     sleep 1
   done
 
-  die "partition devices did not appear: $boot_part $root_part $srv_part"
+  die "partition devices did not appear: $boot_part $root_part $var_part $srv_part"
+}
+
+resolve_home_ntfs_source() {
+  local source="$1"
+  local resolved=""
+
+  [[ -n "$source" ]] || return 0
+
+  if [[ "$source" == /dev/* ]]; then
+    if [[ "${ENGINEOS_INSTALL_ALLOW_FAKE_DEVICE:-}" == "true" ]]; then
+      printf '%s\n' "$source"
+      return
+    fi
+    [[ -b "$source" ]] || die "NTFS /home source is not a block device: $source"
+    printf '%s\n' "$source"
+    return
+  fi
+
+  case "$source" in
+    LABEL=*|UUID=*|PARTUUID=*)
+      if [[ "${ENGINEOS_INSTALL_ALLOW_FAKE_DEVICE:-}" == "true" ]]; then
+        printf '%s\n' "$source"
+        return
+      fi
+      resolved="$(findfs "$source" 2>/dev/null || true)"
+      [[ -n "$resolved" ]] || die "could not resolve NTFS /home source: $source"
+      [[ -b "$resolved" ]] || die "resolved NTFS /home source is not a block device: $resolved"
+      printf '%s\n' "$source"
+      ;;
+    none|"")
+      ;;
+    *)
+      die "NTFS /home source must be /dev/..., LABEL=..., UUID=..., PARTUUID=..., or none: $source"
+      ;;
+  esac
 }
 
 package_cache_has_packages() {
@@ -210,10 +257,12 @@ write_pacstrap_pacman_conf() {
 
 write_sfdisk_layout() {
   local root_size="$1"
+  local var_size="$2"
   cat <<EOF
 label: gpt
 ,1G,U
 ,$root_size,L
+,$var_size,L
 ,,L
 EOF
 }
@@ -292,8 +341,15 @@ EOF
 configure_installed_user() {
   local target="$1"
   local user="$2"
+  local home_on_ntfs="${3:-false}"
 
-  run_step "create dev user" arch-chroot "$target" useradd -m -G wheel,input,audio,video,render,docker -s /usr/bin/zsh "$user"
+  if [[ "$home_on_ntfs" == true ]]; then
+    run_step "create dev user" arch-chroot "$target" useradd -M -d "/home/$user" -G wheel,input,audio,video,render,docker -s /usr/bin/zsh "$user"
+    run_step "create NTFS-backed dev home" arch-chroot "$target" mkdir -p "/home/$user"
+    run_step "seed dev home from skeleton" arch-chroot "$target" cp -a /etc/skel/. "/home/$user/"
+  else
+    run_step "create dev user" arch-chroot "$target" useradd -m -G wheel,input,audio,video,render,docker -s /usr/bin/zsh "$user"
+  fi
   printf '%s:%s\n' "$user" "$user" | run_step "set dev validation password" arch-chroot "$target" chpasswd
   printf '%%wheel ALL=(ALL:ALL) NOPASSWD: ALL\n' | sudo tee "$target/etc/sudoers.d/10-engineos-wheel" >/dev/null
   sudo chmod 0440 "$target/etc/sudoers.d/10-engineos-wheel"
@@ -348,23 +404,29 @@ run_installer() {
   local hostname="$5"
   local user="$6"
   local root_size="$7"
-  local skip_codex="$8"
-  local repo_seed="$9"
-  local package_cache="${10}"
-  local use_package_cache="${11}"
-  local repo_token_file="${12:-}"
+  local var_size="$8"
+  local home_ntfs_source="$9"
+  local home_ntfs_options="${10}"
+  local skip_codex="${11}"
+  local repo_seed="${12}"
+  local package_cache="${13}"
+  local use_package_cache="${14}"
+  local repo_token_file="${15:-}"
   local chroot_repo_url="$repo_url"
   local pacstrap_conf=""
-  local boot_part root_part srv_part
+  local boot_part root_part var_part srv_part resolved_home_ntfs_source=""
   local packages=()
   local post_install_args=()
 
   mapfile -t packages < <(engineos_install_packages)
-  read -r boot_part root_part srv_part <<<"$(partition_paths "$device" | paste -sd ' ' -)"
+  read -r boot_part root_part var_part srv_part <<<"$(partition_paths "$device" | paste -sd ' ' -)"
 
   for cmd in lsblk wipefs sfdisk mkfs.fat mkfs.ext4 mount pacstrap genfstab arch-chroot blkid git sudo; do
     require_command "$cmd"
   done
+  if [[ -n "$home_ntfs_source" ]]; then
+    require_command findfs
+  fi
 
   [[ "$(id -u)" -eq 0 ]] || require_command sudo
   [[ "$target" == /* ]] || die "--target must be absolute"
@@ -380,10 +442,16 @@ run_installer() {
   if findmnt "$target" >/dev/null 2>&1; then
     die "target mountpoint is already mounted: $target"
   fi
+  resolved_home_ntfs_source="$(resolve_home_ntfs_source "$home_ntfs_source")"
 
   printf 'EngineOS EngineDev autoinstall\n'
   printf '  device:   %s\n' "$device"
   printf '  target:   %s\n' "$target"
+  if [[ -n "$resolved_home_ntfs_source" ]]; then
+    printf '  home:     %s mounted at /home as NTFS\n' "$home_ntfs_source"
+  else
+    printf '  home:     installed root filesystem\n'
+  fi
   printf '  repo:     %s\n' "$repo_url"
   if [[ -n "$repo_token_file" && -z "$repo_seed" ]]; then
     printf '  repo auth: token file supplied (redacted)\n'
@@ -409,19 +477,24 @@ run_installer() {
   fi
 
   run_sudo "wipe target signatures" wipefs --all "$device"
-  write_sfdisk_layout "$root_size" | run_step "partition target disk" sudo sfdisk "$device"
+  write_sfdisk_layout "$root_size" "$var_size" | run_step "partition target disk" sudo sfdisk "$device"
   sudo udevadm settle || true
-  wait_for_partitions "$boot_part" "$root_part" "$srv_part"
+  wait_for_partitions "$boot_part" "$root_part" "$var_part" "$srv_part"
 
   run_sudo "format EFI partition" mkfs.fat -F32 -n ENGOS_EFI "$boot_part"
   run_sudo "format root partition" mkfs.ext4 -F -L ENGINEOS_ROOT "$root_part"
+  run_sudo "format /var partition" mkfs.ext4 -F -L ENGINEOS_VAR "$var_part"
   run_sudo "format persistent /srv partition" mkfs.ext4 -F -L ENGINEOS_DEV_SRV "$srv_part"
 
   run_sudo "create install target" mkdir -p "$target"
   run_sudo "mount root partition" mount "$root_part" "$target"
-  run_sudo "create target mountpoints" mkdir -p "$target/boot" "$target/srv"
+  run_sudo "create target mountpoints" mkdir -p "$target/boot" "$target/var" "$target/srv" "$target/home"
   run_sudo "mount EFI partition" mount "$boot_part" "$target/boot"
+  run_sudo "mount /var partition" mount "$var_part" "$target/var"
   run_sudo "mount persistent /srv partition" mount "$srv_part" "$target/srv"
+  if [[ -n "$resolved_home_ntfs_source" ]]; then
+    run_sudo "mount NTFS /home volume" mount -t ntfs-3g -o "$home_ntfs_options" "$home_ntfs_source" "$target/home"
+  fi
 
   ensure_host_pacman_servers
   ensure_host_pacman_keyring
@@ -437,7 +510,11 @@ run_installer() {
   write_pacman_engineos_repo "$target"
   write_bootloader_entry "$target" "$root_part"
   run_step "install systemd-boot" arch-chroot "$target" bootctl install
-  configure_installed_user "$target" "$user"
+  if [[ -n "$resolved_home_ntfs_source" ]]; then
+    configure_installed_user "$target" "$user" true
+  else
+    configure_installed_user "$target" "$user" false
+  fi
 
   run_step "enable installed services" arch-chroot "$target" systemctl enable NetworkManager.service sshd.service docker.service
   if [[ -n "$repo_seed" ]]; then
@@ -489,24 +566,40 @@ print_dev_plan() {
   local hostname="$5"
   local user="$6"
   local root_size="$7"
-  local repo_seed="$8"
-  local package_cache="$9"
-  local use_package_cache="${10}"
-  local repo_token_file="${11:-}"
+  local var_size="$8"
+  local home_ntfs_source="$9"
+  local home_ntfs_options="${10}"
+  local repo_seed="${11}"
+  local package_cache="${12}"
+  local use_package_cache="${13}"
+  local repo_token_file="${14:-}"
   local boot_part="${device}1"
   local root_part="${device}2"
-  local srv_part="${device}3"
+  local var_part="${device}3"
+  local srv_part="${device}4"
 
-  if [[ "$device" == /dev/nvme* || "$device" == /dev/mmcblk* ]]; then
+  if [[ "$device" == /dev/disk/by-id/* || "$device" == /dev/disk/by-path/* ]]; then
+    boot_part="${device}-part1"
+    root_part="${device}-part2"
+    var_part="${device}-part3"
+    srv_part="${device}-part4"
+  elif [[ "$device" == /dev/nvme* || "$device" == /dev/mmcblk* ]]; then
     boot_part="${device}p1"
     root_part="${device}p2"
-    srv_part="${device}p3"
+    var_part="${device}p3"
+    srv_part="${device}p4"
   fi
 
   printf 'EngineOS EngineDev autoinstall plan\n'
   printf '  root:     %s\n' "$ROOT"
   printf '  device:   %s\n' "$device"
   printf '  target:   %s\n' "$target"
+  if [[ -n "$home_ntfs_source" ]]; then
+    printf '  home:     %s mounted at /home as NTFS\n' "$home_ntfs_source"
+    printf '  home opts:%s\n' " $home_ntfs_options"
+  else
+    printf '  home:     installed root filesystem\n'
+  fi
   printf '  repo:     %s\n' "$repo_url"
   if [[ -n "$repo_token_file" && -z "$repo_seed" ]]; then
     printf '  repo auth: token file supplied (redacted)\n'
@@ -528,24 +621,35 @@ print_dev_plan() {
   printf '  - run only from a booted EngineDev ISO\n'
   printf '  - refuse mounted target devices\n'
   printf '  - require explicit wipe acknowledgement for real mode\n'
-  printf '  - keep /srv on a separate persistent partition for repo and package artifacts\n'
+  printf '  - keep /var separate for logs, package caches, and Docker data\n'
+  printf '  - keep /srv separate for repo and package artifacts\n'
+  printf '  - mount the existing NTFS home volume without formatting it\n'
 
   printf '\nPlanned destructive disk layout:\n'
   printf '  %s  EFI system partition, 1 GiB, FAT32\n' "$boot_part"
   printf '  %s  EngineDev root, %s, ext4\n' "$root_part" "$root_size"
+  printf '  %s  EngineDev /var, %s, ext4 label ENGINEOS_VAR\n' "$var_part" "$var_size"
   printf '  %s  persistent /srv workspace, remaining space, ext4 label ENGINEOS_DEV_SRV\n' "$srv_part"
+  if [[ -n "$home_ntfs_source" ]]; then
+    printf '  %s  existing NTFS volume mounted at /home, not formatted\n' "$home_ntfs_source"
+  fi
 
   printf '\nPlanned commands:\n'
   quote_line lsblk -o NAME,PATH,SIZE,TYPE,FSTYPE,MOUNTPOINTS,MODEL "$device"
   quote_line wipefs --all "$device"
-  quote_line sfdisk "$device" "< engineos generated GPT layout: 1G EFI, $root_size root, rest /srv"
+  quote_line sfdisk "$device" "< engineos generated GPT layout: 1G EFI, $root_size root, $var_size /var, rest /srv"
   quote_line mkfs.fat -F32 -n ENGOS_EFI "$boot_part"
   quote_line mkfs.ext4 -F -L ENGINEOS_ROOT "$root_part"
+  quote_line mkfs.ext4 -F -L ENGINEOS_VAR "$var_part"
   quote_line mkfs.ext4 -F -L ENGINEOS_DEV_SRV "$srv_part"
   quote_line mount "$root_part" "$target"
-  quote_line mkdir -p "$target/boot" "$target/srv"
+  quote_line mkdir -p "$target/boot" "$target/var" "$target/srv" "$target/home"
   quote_line mount "$boot_part" "$target/boot"
+  quote_line mount "$var_part" "$target/var"
   quote_line mount "$srv_part" "$target/srv"
+  if [[ -n "$home_ntfs_source" ]]; then
+    quote_line mount -t ntfs-3g -o "$home_ntfs_options" "$home_ntfs_source" "$target/home"
+  fi
   if [[ "$use_package_cache" == true ]]; then
     quote_line pacstrap -c -C "<generated pacman.conf with CacheDir=$package_cache>" "$target" base linux linux-firmware "plus EngineOS builder/dev package set"
   else
@@ -553,7 +657,13 @@ print_dev_plan() {
   fi
   quote_line genfstab -U "$target" ">> $target/etc/fstab"
   quote_line arch-chroot "$target" bootctl install
-  quote_line arch-chroot "$target" useradd -m -G wheel,input,audio,video,render,docker -s /usr/bin/zsh "$user"
+  if [[ -n "$home_ntfs_source" ]]; then
+    quote_line arch-chroot "$target" useradd -M -d "/home/$user" -G wheel,input,audio,video,render,docker -s /usr/bin/zsh "$user"
+    quote_line arch-chroot "$target" mkdir -p "/home/$user"
+    quote_line arch-chroot "$target" cp -a /etc/skel/. "/home/$user/"
+  else
+    quote_line arch-chroot "$target" useradd -m -G wheel,input,audio,video,render,docker -s /usr/bin/zsh "$user"
+  fi
   quote_line arch-chroot "$target" systemctl enable NetworkManager.service sshd.service docker.service
   if [[ -n "$repo_seed" ]]; then
     quote_line cp -a "$repo_seed/." "$target/tmp/tang-os-seed/"
@@ -583,7 +693,7 @@ print_dev_plan() {
 }
 
 install_dev() {
-  local device=""
+  local device="$DEFAULT_SYSTEM_DEVICE"
   local target="/mnt/engineos"
   local repo_url="$DEFAULT_REPO_URL"
   local repo_token_file="${ENGINEOS_REPO_TOKEN_FILE:-}"
@@ -592,7 +702,10 @@ install_dev() {
   local use_package_cache=true
   local branch=""
   local hostname="enginedev"
-  local root_size="16G"
+  local root_size="64G"
+  local var_size="128G"
+  local home_ntfs_source="$DEFAULT_HOME_NTFS_SOURCE"
+  local home_ntfs_options="$DEFAULT_HOME_NTFS_OPTIONS"
   local user="dev"
   local skip_codex=false
   local dry_run=false
@@ -609,6 +722,20 @@ install_dev() {
         shift
         target="${1:-}"
         [[ -n "$target" && "$target" == /* ]] || die "--target requires an absolute path"
+        ;;
+      --home-ntfs-source)
+        shift
+        home_ntfs_source="${1:-}"
+        [[ -n "$home_ntfs_source" ]] || die "--home-ntfs-source requires /dev/..., LABEL=..., UUID=..., PARTUUID=..., or none"
+        [[ "$home_ntfs_source" != "none" ]] || home_ntfs_source=""
+        ;;
+      --home-ntfs-options)
+        shift
+        home_ntfs_options="${1:-}"
+        [[ -n "$home_ntfs_options" ]] || die "--home-ntfs-options requires mount options"
+        ;;
+      --no-home-ntfs)
+        home_ntfs_source=""
         ;;
       --repo-url)
         shift
@@ -649,6 +776,11 @@ install_dev() {
         root_size="${1:-}"
         [[ -n "$root_size" ]] || die "--root-size requires a size"
         ;;
+      --var-size)
+        shift
+        var_size="${1:-}"
+        [[ -n "$var_size" ]] || die "--var-size requires a size"
+        ;;
       --user)
         shift
         user="${1:-}"
@@ -677,12 +809,12 @@ install_dev() {
   require_whole_disk_shape "$device"
 
   if [[ "$dry_run" == true ]]; then
-    print_dev_plan "$device" "$target" "$repo_url" "$branch" "$hostname" "$user" "$root_size" "$repo_seed" "$package_cache" "$use_package_cache" "$repo_token_file"
+    print_dev_plan "$device" "$target" "$repo_url" "$branch" "$hostname" "$user" "$root_size" "$var_size" "$home_ntfs_source" "$home_ntfs_options" "$repo_seed" "$package_cache" "$use_package_cache" "$repo_token_file"
     return
   fi
 
   "$acknowledged" || die "real install mode will require --yes-i-understand-this-wipes-device"
-  run_installer "$device" "$target" "$repo_url" "$branch" "$hostname" "$user" "$root_size" "$skip_codex" "$repo_seed" "$package_cache" "$use_package_cache" "$repo_token_file"
+  run_installer "$device" "$target" "$repo_url" "$branch" "$hostname" "$user" "$root_size" "$var_size" "$home_ntfs_source" "$home_ntfs_options" "$skip_codex" "$repo_seed" "$package_cache" "$use_package_cache" "$repo_token_file"
 }
 
 case "$ACTION" in

@@ -271,7 +271,8 @@ engineos_install_packages() {
     linux-firmware-whence \
     efibootmgr \
     dosfstools \
-    e2fsprogs
+    e2fsprogs \
+    ntfs-3g
   engineos_builder_packages
 }
 

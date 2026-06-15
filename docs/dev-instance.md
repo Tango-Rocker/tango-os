@@ -32,6 +32,19 @@ EngineDev autoinstall defaults to cloning:
 https://github.com/Tango-Rocker/tango-os.git
 ```
 
+On the current bare-metal Windows lab, the no-`--device` installer default
+targets the disk that is currently `F:` in Windows:
+
+```text
+/dev/disk/by-id/ata-WDC_WD10EZEX-00WN4A0_WD-WCC6Y1ZP5EAX
+```
+
+The installer repartitions that disk as GPT with a 1 GiB EFI partition, ext4
+root, ext4 `/var`, and persistent ext4 `/srv`. It also mounts the existing
+Windows `E:` NTFS volume labeled `Tango` at `/home` by default. Override with
+`--device`, `ENGINEOS_INSTALL_DEFAULT_DEVICE`, `--home-ntfs-source`, or
+`--no-home-ntfs` for VM proofs or different hardware.
+
 For a private repo, do not bake a PAT into the ISO or post-install payload.
 Create a fine-grained read-only token scoped to `Tango-Rocker/tango-os` with
 Contents read permission only, place it on the live guest outside the repo, and
@@ -39,7 +52,6 @@ pass it at install time:
 
 ```bash
 sudo engineos install dev \
-  --device /dev/sdX \
   --repo-token-file /run/engineos-secrets/tango-os-readonly.token \
   --branch main \
   --yes-i-understand-this-wipes-device

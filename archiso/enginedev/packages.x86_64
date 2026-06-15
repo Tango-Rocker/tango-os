@@ -51,6 +51,7 @@ zip
 docker
 docker-compose
 docker-buildx
+ntfs-3g
 llvm
 openmp
 libc++

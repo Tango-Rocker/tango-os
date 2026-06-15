@@ -1084,6 +1084,15 @@ Include = /etc/pacman.d/mirrorlist
 EOF_PACMAN
   "$SCRIPT_DIR/install_dev.sh" dev \
     --dry-run \
+    --target "$target" \
+    --no-home-ntfs >"$tmp_dir/install-default.txt"
+  grep -F 'device:   /dev/disk/by-id/ata-WDC_WD10EZEX-00WN4A0_WD-WCC6Y1ZP5EAX' "$tmp_dir/install-default.txt" >/dev/null ||
+    die "install dry-run did not default to the configured F: disk by-id path"
+  grep -F 'home:     installed root filesystem' "$tmp_dir/install-default.txt" >/dev/null ||
+    die "install dry-run did not honor --no-home-ntfs"
+
+  "$SCRIPT_DIR/install_dev.sh" dev \
+    --dry-run \
     --device /dev/engineos-test-disk \
     --target "$target" \
     --repo-url https://example.invalid/tang-os.git \
@@ -1093,6 +1102,10 @@ EOF_PACMAN
     die "install dry-run missing plan header"
   grep -F 'device:   /dev/engineos-test-disk' "$out" >/dev/null ||
     die "install dry-run missing target device"
+  grep -F 'home:     LABEL=Tango mounted at /home as NTFS' "$out" >/dev/null ||
+    die "install dry-run missing default NTFS home mount"
+  grep -F 'EngineDev /var, 128G, ext4 label ENGINEOS_VAR' "$out" >/dev/null ||
+    die "install dry-run missing /var partition plan"
   grep -F 'persistent /srv workspace' "$out" >/dev/null ||
     die "install dry-run missing persistent /srv plan"
   grep -F 'cache:    /opt/engineos/install-cache/pkg' "$out" >/dev/null ||
@@ -1167,6 +1180,11 @@ FAKE
 printf 'mount %s\n' "$*" >>"$ENGINEOS_FAKE_INSTALL_LOG"
 mkdir -p "${@: -1}"
 FAKE
+  cat >"$fake_bin/findfs" <<'FAKE'
+#!/usr/bin/env bash
+printf 'findfs %s\n' "$*" >>"$ENGINEOS_FAKE_INSTALL_LOG"
+printf '/dev/fake-home\n'
+FAKE
   cat >"$fake_bin/pacstrap" <<'FAKE'
 #!/usr/bin/env bash
 printf 'pacstrap %s\n' "$*" >>"$ENGINEOS_FAKE_INSTALL_LOG"
@@ -1186,7 +1204,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -n "$target" ]] || exit 2
-mkdir -p "$target/etc/pacman.d" "$target/etc/sudoers.d" "$target/boot" "$target/srv"
+mkdir -p "$target/etc/pacman.d" "$target/etc/sudoers.d" "$target/boot" "$target/var" "$target/srv" "$target/home"
 printf '[options]\n' >"$target/etc/pacman.conf"
 FAKE
   cat >"$fake_bin/genfstab" <<'FAKE'
@@ -1230,6 +1248,14 @@ FAKE
     die "install executor did not wipe target"
   grep -F 'sfdisk /dev/engineos-test-disk' "$log" >/dev/null ||
     die "install executor did not partition target"
+  grep -F 'mkfs.ext4 -F -L ENGINEOS_VAR /dev/engineos-test-disk3' "$log" >/dev/null ||
+    die "install executor did not format /var partition"
+  grep -F 'mount /dev/engineos-test-disk3 '"$target"'/var' "$log" >/dev/null ||
+    die "install executor did not mount /var partition"
+  grep -F 'mount -t ntfs-3g -o uid=1000,gid=1000,umask=022,fmask=133,dmask=022,windows_names,nofail,x-systemd.device-timeout=10s LABEL=Tango '"$target"'/home' "$log" >/dev/null ||
+    die "install executor did not mount default NTFS home volume"
+  grep -F 'arch-chroot '"$target"' useradd -M -d /home/dev -G wheel,input,audio,video,render,docker -s /usr/bin/zsh dev' "$log" >/dev/null ||
+    die "install executor did not create NTFS-home user without useradd -m"
   grep -F 'pacstrap -c -C ' "$log" >/dev/null ||
     die "install executor did not run pacstrap with cached host package mode"
   grep -F "CacheDir = $package_cache" /tmp/engineos-install-pacman-*.conf >/dev/null ||

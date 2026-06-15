@@ -58,7 +58,7 @@ engineos commands:
   assets check|explain|path|prepare quake
   artifacts list|checksum|export
   release checklist [--dry-run] [--out-dir <dir>] [--export-dir <dir>]
-  install dev --dry-run --device <block-device> [--repo-url <url>]
+  install dev --dry-run [--device <block-device>] [--repo-url <url>]
   app launch terminal|cube|quake [args...]
   app status [--json]
   app manifest path|show|validate
