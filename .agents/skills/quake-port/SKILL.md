@@ -1,39 +1,41 @@
+---
+name: quake-port
+description: Use when changing QuakeSpasm source, Quake package definitions, asset policy, engine wrapper behavior, app launch quake routing, or engine-runner integration.
+---
+
 # Quake Port Skill
 
-## When To Use
+Quake is the first engine loop proof. The shell should survive engine failure,
+and commercial assets must stay outside the repo and ISO.
 
-Use this skill when changing QuakeSpasm source, wrappers, asset manifests, or `engineos run quake`.
-
-## Commands To Run
+## Checks
 
 ```bash
-./engines/quakespasm/engineos/fetch.sh --dry-run
-./engines/quakespasm/engineos/build.sh --dry-run
+./tools/engineos/engineos fetch engine quake --status
 ./tools/engineos/engineos build engine quake --dry-run
-./engines/quakespasm/engineos/smoke-test.sh
+./tools/engineos/engineos validate engine quake --mock
 ./tools/engineos/engineos run quake --smoke
+./tools/engineos/engineos assets check quake
 ./tools/engineos/engineos logs engine --last 200
 ```
 
-## Files That Matter
+For Runtime launchpad routing:
+
+```bash
+./tools/engineos/engineos app manifest validate
+./tools/engineos/engineos proof launchpad --runtime --dry-run
+```
+
+## Files
 
 ```text
 engines/quakespasm/
-packages/engineos-quake-template/assets.toml
+packages/engineos-quakespasm/PKGBUILD
+packages/engineos-quake-template/
+packages/engineos-config/files/etc/engineos/quake.conf
 docs/asset-policy.md
+tools/scripts/assets.sh
+tools/scripts/app.sh
+tools/scripts/engine_runner.sh
 artifacts/logs/engine.log
 ```
-
-## Known Traps
-
-- Do not commit commercial Quake assets.
-- Prefer SDL2 and OpenGL for the first loop.
-- Keep launch behavior deterministic before adding engine-runner control.
-
-## Expected Output
-
-The smoke path should succeed without commercial assets and record whether the QuakeSpasm binary is available.
-
-## Recovery Steps
-
-If the binary is missing, keep the wrapper smoke path passing, then add source checkout and build instructions under `engines/quakespasm/upstream`.

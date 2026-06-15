@@ -298,6 +298,24 @@ lint_pkgbuild() {
         return
       fi
       ;;
+    engineos-agent-tools)
+      if ! grep -q 'engineos_mcp_server.py' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: MCP server is not installed"
+        return
+      fi
+      if ! grep -q 'tools/hooks/session_start.py' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: Codex hooks are not installed"
+        return
+      fi
+      if ! grep -q '.codex/config.toml' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: Codex config is not installed"
+        return
+      fi
+      if ! grep -q '.agents/skills/engineos/SKILL.md' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: root EngineOS skill is not installed"
+        return
+      fi
+      ;;
     engineos-shell)
       if ! grep -q 'meson install' "$pkg_dir/PKGBUILD"; then
         fail "$pkg: Meson shell binary is not installed"

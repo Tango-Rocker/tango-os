@@ -10,7 +10,8 @@ Use these files by purpose:
 - [dev-instance.md](dev-instance.md): first-deploy setup for a booted EngineDev guest
 - [agent-harness.md](agent-harness.md): command policy for agents
 - [agent-lsp.md](agent-lsp.md): semantic navigation expectations
-- [agent-workflow.md](agent-workflow.md): older short workflow notes, kept only for quick command reminders
+- [agent-workflow.md](agent-workflow.md): quick workflow checklist and Codex harness notes
+- [engineos-agent-pack.md](engineos-agent-pack.md): Codex config, hooks, skills, and MCP server integration
 - [asset-policy.md](asset-policy.md): Quake asset rules
 
 Area-specific docs live next to their code:

@@ -1,44 +1,35 @@
+---
+name: render-gl
+description: Use for OpenGL renderer changes, frame capture, cube renderer evidence, Mesa/Vulkan diagnostics, shell visible-frame checks, or future renderer boundary work.
+---
+
 # Render GL Skill
 
-## When To Use
+OpenGL/Mesa is the current proof path. VM software rendering is useful smoke
+evidence but does not replace bare-metal AMD validation.
 
-Use this skill for OpenGL renderer checks, frame capture work, and VM graphics diagnostics.
+## Rules
 
-## Commands To Run
+- Keep raw GL work behind renderer/backend files.
+- Prefer simple visible frame evidence before visual polish.
+- Record renderer name/version and whether software rendering is in use.
+- Do not block early proofs on virtual GPU limitations.
 
-```bash
-./tools/engineos/engineos doctor --vm
-glxinfo -B
-vulkaninfo --summary
-```
-
-Future commands:
+## Checks
 
 ```bash
-engineos capture frame --target shell
-engineos test render --smoke
+./tools/engineos/engineos doctor --mock
+./tools/engineos/engineos test render --smoke
+./tools/engineos/engineos capture frame --target shell
+./tools/engineos/engineos proof launchpad --runtime --dry-run
 ```
 
-## Files That Matter
+In a booted Runtime proof:
 
-```text
-tools/engineos/engineos
-docs/architecture.md
-shell/
-engines/quakespasm/
+```bash
+engineos logs app --last 200
+engineos logs shell --last 200
+engineos proof launchpad --runtime
 ```
 
-## Known Traps
-
-- llvmpipe is acceptable for some VM smoke tests but not final graphics validation.
-- Real AMD Mesa behavior must be checked on bare metal.
-- Avoid blocking early work on virtual GPU limitations.
-
-## Expected Output
-
-Diagnostics should identify the renderer, Vulkan device summary when available, and whether software rendering is in use.
-
-## Recovery Steps
-
-If GL tools are missing, install `mesa-utils` and `vulkan-tools` in the builder or test environment.
-
+Expected Runtime evidence includes cube log `gl_renderer=` and `frames=`.

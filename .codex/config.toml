@@ -1,0 +1,55 @@
+# Project-scoped Codex configuration for Tang-OS / EngineOS.
+# Keep this file focused on project capabilities. User-level sandbox and
+# approval policy should stay in the user's Codex config.
+
+[mcp_servers.engineos]
+command = "python"
+args = ["tools/mcp/engineos_mcp_server.py"]
+startup_timeout_sec = 10
+tool_timeout_sec = 120
+default_tools_approval_mode = "prompt"
+enabled = true
+
+enabled_tools = [
+  "project_status",
+  "read_status",
+  "doctor",
+  "logs",
+  "app_status",
+  "app_manifest",
+  "assets",
+  "preflight",
+  "validate",
+  "test",
+  "build_repo",
+  "build_iso",
+  "build_shell",
+  "package",
+  "proof",
+  "run_shell_smoke",
+  "run_quake_smoke",
+  "engine",
+  "capture_frame",
+  "crash_bundle"
+]
+
+[mcp_servers.engineos.tools.project_status]
+approval_mode = "approve"
+
+[mcp_servers.engineos.tools.read_status]
+approval_mode = "approve"
+
+[mcp_servers.engineos.tools.doctor]
+approval_mode = "approve"
+
+[mcp_servers.engineos.tools.logs]
+approval_mode = "approve"
+
+[mcp_servers.engineos.tools.app_status]
+approval_mode = "approve"
+
+[mcp_servers.engineos.tools.app_manifest]
+approval_mode = "approve"
+
+[mcp_servers.engineos.tools.assets]
+approval_mode = "approve"

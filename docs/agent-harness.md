@@ -27,6 +27,7 @@ pwd
 rg --files --hidden
 ./tools/engineos/engineos --help
 ./tools/engineos/engineos test
+./tools/engineos/engineos test agent
 ```
 
 ## Command Policy
@@ -35,6 +36,7 @@ Use dry-runs outside the Arch builder VM:
 
 ```bash
 ./tools/engineos/engineos doctor --mock
+./tools/engineos/engineos test agent
 ./tools/engineos/engineos builder handoff --dry-run --host dev@<builder-vm-ip>
 ./tools/engineos/engineos builder handoff --dry-run --host dev@<builder-vm-ip> --run-proof
 ./tools/engineos/engineos builder doctor-proof --dry-run --host dev@<builder-vm-ip>
@@ -104,6 +106,14 @@ For first-deploy setup of a booted EngineDev guest, see
 [dev-instance.md](dev-instance.md). The payload lives in
 `tools/post-install-payload/`; do not add secrets or commercial game assets to
 that payload.
+
+For Codex/MCP harness changes, run:
+
+```bash
+python tools/mcp/engineos_mcp_server.py --self-test
+./tools/engineos/engineos test agent
+./tools/engineos/engineos preflight repo --package engineos-agent-tools
+```
 
 ## Focus Boundaries
 

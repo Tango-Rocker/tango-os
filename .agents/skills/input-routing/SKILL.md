@@ -1,45 +1,41 @@
+---
+name: input-routing
+description: Use when changing shell input focus, pointer capture, keyboard shortcuts, emergency release, input traces, or game-vs-shell routing behavior.
+---
+
 # Input Routing Skill
 
-## When To Use
+Input bugs can make the machine feel broken. Preserve recovery and collect
+traces before changing routing policy.
 
-Use this skill when implementing focus modes, game capture, emergency release, input traces, or replay.
+## Rules
 
-## Commands To Run
+- Keep an emergency release path available.
+- Do not let game focus permanently steal shell focus.
+- TTY/KMS input changes need VM smoke first and bare-metal proof later.
+- Keep traces replayable with `engineos record input` / `engineos replay input`.
 
-Future commands:
-
-```bash
-engineos test input
-engineos record input traces/focus.json
-engineos replay input traces/focus.json
-```
-
-Current scaffold checks:
+## Checks
 
 ```bash
-./tools/engineos/engineos run shell --headless
-./tools/engineos/engineos logs shell --last 200
+./tools/engineos/engineos test input
+./tools/engineos/engineos test shell-actions
+./tools/engineos/engineos record input artifacts/input-trace.json
+./tools/engineos/engineos replay input artifacts/input-trace.json
 ```
 
-## Files That Matter
+For runtime validation:
+
+```bash
+engineos proof launchpad --runtime
+engineos logs shell --last 200
+```
+
+## Files
 
 ```text
 shell/
-engine-runner/
-tools/engineos/engineos
-artifacts/logs/
+tools/scripts/input_trace.sh
+tools/scripts/test_runner.sh
+docs/mvp-plan.md
 ```
-
-## Known Traps
-
-- Always preserve an emergency input release path.
-- Separate terminal focus mode from game capture mode.
-- Record enough trace metadata to replay failures.
-
-## Expected Output
-
-Input tests should prove focus transitions, pointer event context, and recovery behavior before game capture is enabled by default.
-
-## Recovery Steps
-
-If focus gets stuck in a test build, disable capture by default, add logging around mode transitions, and require explicit capture toggles.

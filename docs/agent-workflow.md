@@ -1,55 +1,60 @@
 # Agent Workflow
 
-The `engineos` CLI is the control surface for humans and agents. MCP wrappers should call known CLI commands later instead of exposing arbitrary shell access first.
+The `engineos` CLI is the control surface for humans and agents. The project MCP
+server wraps known CLI commands; it does not expose arbitrary shell access.
 
 ## Default Loop
 
 ```bash
 ./tools/engineos/engineos doctor --mock
+./tools/engineos/engineos test agent
 ./tools/engineos/engineos bootstrap builder --dry-run
 ./tools/engineos/engineos validate builder --mock
 ./tools/engineos/engineos validate repo --dry-run
 ./tools/engineos/engineos proof build-lab --dry-run
-./tools/engineos/engineos test vm
 ./tools/engineos/engineos build repo --dry-run
 ./tools/engineos/engineos build iso --dry-run
 ./tools/engineos/engineos test
 ```
 
-On the Arch builder VM, replace dry-runs with real builds after package definitions are ready:
+On the Arch builder VM, replace dry-runs with real builds only after the local
+proof path is clean:
 
 ```bash
+cd /srv/engineos
 ./tools/engineos/engineos bootstrap builder
 ./tools/engineos/engineos validate builder
 ./tools/engineos/engineos proof build-lab
-./tools/engineos/engineos vm boot enginedev
+./tools/engineos/engineos vm boot enginedev --display none --background --ssh-port 2222
+```
+
+## Codex Harness
+
+Project-local Codex integration lives in:
+
+```text
+.codex/config.toml
+.codex/hooks.example.json
+.agents/skills/*/SKILL.md
+tools/hooks/*.py
+tools/mcp/engineos_mcp_server.py
+```
+
+Validate it with:
+
+```bash
+python tools/mcp/engineos_mcp_server.py --self-test
+./tools/engineos/engineos test agent
 ```
 
 ## Status Discipline
 
-When work changes build behavior, update `CURRENT_STATUS.md` with:
+When work changes build, boot, runtime, or agent behavior, update
+`CURRENT_STATUS.md` with:
 
 - what now works
+- what was tested
 - what is still blocked
 - the next command to run
 
-## MCP Direction
-
-Future MCP servers should wrap these commands:
-
-```text
-engineos build repo
-engineos build iso <profile>
-engineos bootstrap builder
-engineos validate builder
-engineos validate repo
-engineos proof build-lab
-engineos proof booted-iso --vm
-engineos vm boot <profile>
-engineos test [scope]
-engineos logs <unit>
-engineos crash-bundle [--vm|--runtime|--bare-metal]
-engineos doctor
-```
-
-CLI first. MCP wrappers later.
+Put useful off-track ideas in `BACKLOG.md` and return to the current proof.

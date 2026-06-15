@@ -1,67 +1,42 @@
+---
+name: code-navigation
+description: Use when navigating unfamiliar EngineOS code, checking symbols, locating definitions/references, or deciding whether LSP can help in this harness.
+---
+
 # Code Navigation Skill
 
-## When To Use
+Prefer semantic navigation when the LSP MCP is responding. In this harness it
+has previously failed with `Transport closed`, so do not block EngineOS proofs
+on it.
 
-Use this skill when tracing code behavior, renaming symbols, checking diagnostics, or deciding whether LSP or text search is the right tool.
-
-## Commands To Run
-
-For current Bash-heavy work:
+## First Steps
 
 ```bash
+rg --files
 rg "pattern"
-bash -n tools/engineos/engineos tools/scripts/*.sh
-shellcheck tools/engineos/engineos tools/scripts/*.sh
 ```
 
-For supported source files, use the LSP MCP when it responds:
+For Bash, Markdown, PKGBUILDs, archiso profiles, and package lists, use text
+search and project checks. These files are not LSP-backed here.
 
-```text
-mcp__sdl_scaffoliding_lsp.lsp_server_status
-lsp_server_status
-lsp_document_symbols
-lsp_diagnostics
-lsp_workspace_diagnostics
-lsp_completions
-lsp_hover
-lsp_signature_help
-lsp_goto_definition
-lsp_goto_type_definition
-lsp_find_references
-lsp_find_implementations
-lsp_type_hierarchy
-lsp_call_hierarchy
-lsp_workspace_symbols
-lsp_find_symbol
-lsp_related_files
-lsp_file_imports
-lsp_file_exports
+## LSP Flow
+
+When LSP responds for a supported source file:
+
+1. Check server status.
+2. Use document symbols for an outline.
+3. Use diagnostics after opening the file.
+4. Use definition/references before deleting or changing behavior.
+5. Use hover/signature help for types and API details.
+
+See `docs/agent-lsp.md` for the exact tool names and current limitations.
+
+## Local Checks
+
+```bash
+bash -n tools/engineos/engineos tools/scripts/*.sh engines/quakespasm/engineos/*.sh tests/smoke.sh archiso/enginedev/profiledef.sh archiso/engineruntime/profiledef.sh
+./tools/engineos/engineos build shell --dry-run
+./tools/engineos/engineos package engineos-shell --dry-run
 ```
 
-## Files That Matter
-
-```text
-docs/agent-lsp.md
-tools/engineos/engineos
-tools/scripts/
-shell/
-engine-runner/
-```
-
-## Known Traps
-
-- The current LSP MCP is available as `mcp__sdl_scaffoliding_lsp`, but the local status probe has failed with `Transport closed`.
-- Diagnostics, workspace-symbol, file import/export, type-hierarchy, call-hierarchy, completions, and find-symbol tools are exposed after `tool_search`, but live calls still depend on the MCP transport responding.
-- `lsp_smart_search` and `lsp_rename` are not currently exposed in this session.
-- `.sh` files are not currently configured for LSP in this harness.
-- Extensionless Bash files are not currently configured for LSP.
-- `rg` is still the right tool for docs, config, package lists, and string search.
-- C/wlroots API compatibility is proven by the Arch builder VM compiler until local LSP is stable.
-
-## Expected Output
-
-Use semantic LSP results only when the MCP supports the file language and responds successfully. Otherwise, use shell syntax checks, `shellcheck` if available, project dry-runs, and focused text search.
-
-## Recovery Steps
-
-If LSP reports unsupported language, stop trying to force it. Record the limitation if relevant and use the project checks instead.
+Compiler truth for wlroots/C compatibility belongs on the Arch builder VM.

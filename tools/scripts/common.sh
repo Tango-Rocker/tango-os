@@ -167,16 +167,49 @@ engineos_builder_packages() {
     docker \
     docker-compose \
     docker-buildx \
+    llvm \
+    openmp \
+    libc++ \
+    ccache \
+    sccache \
+    mold \
+    bear \
     cmake \
     meson \
     ninja \
+    pkgconf \
     clang \
     lld \
     gcc \
     gdb \
     lldb \
+    cppcheck \
+    doxygen \
+    graphviz \
+    strace \
+    ltrace \
+    valgrind \
+    perf \
+    elfutils \
+    debuginfod \
+    libunwind \
     mesa \
     mesa-utils \
+    renderdoc \
+    apitrace \
+    vulkan-headers \
+    vulkan-icd-loader \
+    vulkan-validation-layers \
+    vulkan-extra-layers \
+    vulkan-extra-tools \
+    vulkan-utility-libraries \
+    vulkan-profiles \
+    spirv-headers \
+    spirv-tools \
+    glslang \
+    shaderc \
+    volk \
+    directx-shader-compiler \
     vulkan-tools \
     vulkan-radeon \
     libdrm \
@@ -192,13 +225,42 @@ engineos_builder_packages() {
     wireplumber \
     alsa-utils \
     sdl2-compat \
+    sdl2_image \
+    sdl2_mixer \
+    sdl2_ttf \
+    sdl2_net \
     openal \
+    glew \
+    glfw \
+    glu \
     freetype2 \
     libpng \
     libjpeg-turbo \
     libogg \
     libvorbis \
-    mpg123
+    mpg123 \
+    glm \
+    assimp \
+    bullet \
+    box2d \
+    lua \
+    luajit \
+    luarocks \
+    fmt \
+    spdlog \
+    nlohmann-json \
+    yaml-cpp \
+    tomlplusplus \
+    catch2 \
+    gtest \
+    benchmark \
+    enet \
+    imagemagick \
+    ffmpeg \
+    sox \
+    pacman-contrib \
+    namcap \
+    devtools
 }
 
 engineos_install_packages() {

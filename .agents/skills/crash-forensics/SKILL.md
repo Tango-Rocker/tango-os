@@ -1,35 +1,43 @@
+---
+name: crash-forensics
+description: Use when shell, runtime service, engine, VM boot, graphics, audio, input, package, or proof behavior fails and evidence must be gathered before changing code.
+---
+
 # Crash Forensics Skill
 
-## When To Use
+Collect evidence before guessing.
 
-Use this skill when shell, engine, ISO boot, or test VM behavior fails and logs need to be gathered.
-
-## Commands To Run
+## Sequence
 
 ```bash
-./tools/engineos/engineos logs shell --last 200
-./tools/engineos/engineos logs engine --last 200
+./tools/engineos/engineos doctor --mock
+./tools/engineos/engineos logs all --last 200
+./tools/engineos/engineos app status --json
+./tools/engineos/engineos app manifest validate
 ./tools/engineos/engineos crash-bundle
 ```
 
-## Files That Matter
+Inside a booted ISO, use the mode that matches the session:
 
-```text
-artifacts/logs/
-artifacts/crash-bundles/
-tools/scripts/crash_bundle.sh
+```bash
+engineos proof booted-iso --vm
+engineos proof launchpad --runtime
+engineos crash-bundle --runtime
+engineos logs runtime --last 200
+engineos logs shell --last 200
+engineos logs engine --last 200
 ```
 
-## Known Traps
+## Preserve
 
-- `journalctl` output may be unavailable outside a systemd boot.
-- VM graphics failures are not final evidence about bare-metal AMD behavior.
-- Missing logs are a bug in the command wrapper if the process was launched through `engineos`.
+- Exact failed command and working directory.
+- Git status and commit.
+- VM/bare-metal mode.
+- Last shell/app/engine/runtime logs.
+- App status JSON and shell state JSON.
+- Crash bundle path.
 
-## Expected Output
+## Rule
 
-`engineos crash-bundle` prints the bundle directory path and writes metadata, `doctor.txt`, available logs, engine status, Quake asset check output, preflight output, and journal files when available.
-
-## Recovery Steps
-
-If no logs are present, reproduce the failure through an `engineos run` or `engineos test` command so the wrapper can capture predictable output.
+Do not hide crash loops by disabling recovery TTY, running the compositor as
+root, or deleting logs.

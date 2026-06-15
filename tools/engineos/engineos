@@ -84,7 +84,7 @@ engineos commands:
   run shell --headless|--nested|--tty
   logs shell|app|engine|runtime|live-setup|doctor|boot|all [--last N] [--files|--journal]
   crash-bundle [--vm|--runtime|--bare-metal]
-  test [smoke|all|compositor|shell-actions|engine-runner-env|app|assets|reliability|logs|artifacts|terminal|vm|usb|install|proof|builder-handoff|builder-doctor|post-first-deploy|builder|bootstrap|repo|boot|engine|shell|input|render|outputs]
+  test [smoke|all|agent|mcp|compositor|shell-actions|engine-runner-env|app|assets|reliability|logs|artifacts|terminal|vm|usb|install|proof|builder-handoff|builder-doctor|post-first-deploy|builder|bootstrap|repo|boot|engine|shell|input|render|outputs]
 HELP
 }
 

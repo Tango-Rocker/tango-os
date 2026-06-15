@@ -12,6 +12,8 @@ shift || true
 usage() {
   cat <<'HELP'
 Usage: test_runner.sh [smoke|all]
+       test_runner.sh agent
+       test_runner.sh mcp
        test_runner.sh compositor --headless
        test_runner.sh shell-actions
        test_runner.sh engine-runner-env
@@ -56,6 +58,7 @@ run_all_step() {
 run_all() {
   printf 'EngineOS full local test suite\n'
   run_all_step smoke
+  run_all_step agent
   run_all_step compositor --headless
   run_all_step shell-actions
   run_all_step engine-runner-env
@@ -100,6 +103,66 @@ run_compositor() {
       die "compositor test expects --headless or --nested"
       ;;
   esac
+}
+
+run_mcp() {
+  local tmp_dir="${TMPDIR:-/tmp}/engineos-mcp-test-$$"
+  local out="$tmp_dir/out.json"
+  local server="$ROOT/tools/mcp/engineos_mcp_server.py"
+
+  cleanup_mcp() {
+    rm -rf "${tmp_dir:-}"
+    trap - RETURN
+  }
+  trap cleanup_mcp RETURN
+
+  mkdir -p "$tmp_dir"
+  [[ -f "$server" ]] || die "MCP server missing: $server"
+  have_cmd python3 || die "python3 is required for MCP self-test"
+
+  python3 "$server" --self-test >"$out"
+  grep -F '"server": "engineos"' "$out" >/dev/null ||
+    die "MCP self-test did not report engineos server"
+  grep -F '"project_status"' "$out" >/dev/null ||
+    die "MCP self-test did not list project_status tool"
+  grep -F '"proof"' "$out" >/dev/null ||
+    die "MCP self-test did not list proof tool"
+
+  printf '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}\n' |
+    python3 "$server" >"$out"
+  grep -F '"name":"project_status"' "$out" >/dev/null ||
+    die "MCP tools/list missing project_status"
+  grep -F '"name":"build_iso"' "$out" >/dev/null ||
+    die "MCP tools/list missing build_iso"
+
+  printf '{"jsonrpc":"2.0","id":2,"method":"resources/list","params":{}}\n' |
+    python3 "$server" >"$out"
+  grep -F 'engineos://status/current' "$out" >/dev/null ||
+    die "MCP resources/list missing current status resource"
+
+  printf 'MCP server smoke test passed\n'
+}
+
+run_agent() {
+  local skill
+
+  "$SCRIPT_DIR/preflight.sh" repo --package engineos-agent-tools >/dev/null
+  "$SCRIPT_DIR/package_lint.sh" --package engineos-agent-tools >/dev/null
+  run_mcp
+
+  grep -F 'engineos_mcp_server.py' "$ROOT/.codex/config.toml" >/dev/null ||
+    die "Codex config does not reference the EngineOS MCP server"
+  grep -F 'tools/hooks/session_start.py' "$ROOT/.codex/hooks.example.json" >/dev/null ||
+    die "Codex hook example does not reference the session-start hook"
+
+  for skill in "$ROOT"/.agents/skills/*/SKILL.md; do
+    grep -Fx -- '---' "$skill" >/dev/null ||
+      die "skill missing frontmatter fence: $skill"
+    grep -F 'description:' "$skill" >/dev/null ||
+      die "skill missing description frontmatter: $skill"
+  done
+
+  printf 'agent harness smoke test passed\n'
 }
 
 run_installed_preflight() {
@@ -1933,6 +1996,12 @@ case "$SCOPE" in
     ;;
   all)
     run_all
+    ;;
+  agent)
+    run_agent
+    ;;
+  mcp)
+    run_mcp
     ;;
   compositor)
     run_compositor "$@"
