@@ -9,14 +9,16 @@ StartLimitIntervalSec=60
 [Service]
 Type=simple
 User=dev
-SupplementaryGroups=input audio video render docker
+SupplementaryGroups=wheel input audio video render docker
 PAMName=login
 WorkingDirectory=/home/dev
 Environment=ENGINEOS_LOG_DIR=/var/log/engineos
+Environment=ENGINEOS_ENGINE_SOCKET=/run/engineos/engine-runner.sock
 Environment=XDG_SESSION_TYPE=wayland
 Environment=ENGINEOS_TERMINAL_REQUIRE_WAYLAND=true
 Environment=ENGINEOS_SHELL_BOOTSTRAP=terminal
 Environment="ENGINEOS_TERMINAL_SESSION_CMD=tmux new -A -s engineos"
+UMask=0002
 ExecStart=/usr/local/bin/engineos-dev-shell-start
 Restart=on-failure
 RestartSec=3

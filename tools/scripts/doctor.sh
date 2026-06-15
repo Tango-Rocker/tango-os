@@ -365,7 +365,7 @@ print_kv "profile" "${ENGINEOS_PROFILE:-unknown}"
 
 if have_cmd pacman; then
   printf '\n# package versions\n'
-  pacman -Q archiso mesa wlroots wayland pipewire wireplumber engineos-config engineos-cli engineos-agent-tools engineos-shell engineos-engine-runner engineos-quakespasm engineos-quake-template 2>/dev/null || true
+  pacman -Q archiso mesa wlroots wayland pipewire wireplumber engineos-config engineos-cli engineos-agent-tools engineos-cube engineos-shell engineos-engine-runner engineos-quakespasm engineos-quake-template 2>/dev/null || true
 else
   print_kv "pacman" "unavailable"
 fi

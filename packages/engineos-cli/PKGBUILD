@@ -1,6 +1,6 @@
 pkgname=engineos-cli
 pkgver=0.1.0
-pkgrel=8
+pkgrel=15
 pkgdesc="EngineOS command-line control surface"
 arch=('any')
 url="https://example.invalid/engineos"
@@ -28,6 +28,7 @@ package() {
   install -Dm755 "$_engineos_root/tools/scripts/assets.sh" "$pkgdir/usr/lib/engineos/scripts/assets.sh"
   install -Dm755 "$_engineos_root/tools/scripts/artifacts.sh" "$pkgdir/usr/lib/engineos/scripts/artifacts.sh"
   install -Dm755 "$_engineos_root/tools/scripts/release.sh" "$pkgdir/usr/lib/engineos/scripts/release.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/install_dev.sh" "$pkgdir/usr/lib/engineos/scripts/install_dev.sh"
   install -Dm755 "$_engineos_root/tools/scripts/terminal_launcher.sh" "$pkgdir/usr/lib/engineos/scripts/terminal_launcher.sh"
   install -Dm755 "$_engineos_root/tools/scripts/capture_frame.sh" "$pkgdir/usr/lib/engineos/scripts/capture_frame.sh"
   install -Dm755 "$_engineos_root/tools/scripts/doctor.sh" "$pkgdir/usr/lib/engineos/scripts/doctor.sh"

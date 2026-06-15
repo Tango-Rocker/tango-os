@@ -1,6 +1,6 @@
 pkgname=engineos-engine-runner
 pkgver=0.1.0
-pkgrel=2
+pkgrel=5
 pkgdesc="EngineOS engine runner placeholder"
 arch=('x86_64')
 url="https://example.invalid/engineos"

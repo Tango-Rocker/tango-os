@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
@@ -41,6 +43,7 @@ enum engineos_shell_mode {
 enum engineos_surface_role {
 	ENGINEOS_SURFACE_UNKNOWN,
 	ENGINEOS_SURFACE_TERMINAL,
+	ENGINEOS_SURFACE_CUBE,
 	ENGINEOS_SURFACE_ENGINE,
 };
 
@@ -54,7 +57,7 @@ enum engineos_bootstrap_mode {
 	ENGINEOS_BOOTSTRAP_NONE,
 	ENGINEOS_BOOTSTRAP_TERMINAL,
 	ENGINEOS_BOOTSTRAP_ENGINE,
-	ENGINEOS_BOOTSTRAP_ALL,
+	ENGINEOS_BOOTSTRAP_LAUNCHPAD,
 };
 
 struct engineos_shell_server {
@@ -72,6 +75,7 @@ struct engineos_shell_server {
 	struct wl_list views;
 	struct wl_list keyboards;
 	struct wl_list pointers;
+	struct wl_list launches;
 	struct wl_listener new_output;
 	struct wl_listener new_input;
 	struct wl_listener new_xdg_surface;
@@ -85,15 +89,29 @@ struct engineos_shell_server {
 	const char *mode_name;
 	const char *startup_cmd;
 	const char *terminal_cmd;
+	const char *cube_cmd;
 	const char *engine_cmd;
+	char *state_dir;
+	char *state_file;
 	enum engineos_bootstrap_mode bootstrap_mode;
 	enum engineos_input_mode input_mode;
+	enum engineos_surface_role active_slot;
+	enum engineos_surface_role pending_slot;
 	bool game_capture;
 	int smoke_ms;
 	unsigned int output_count;
 	unsigned int keyboard_count;
 	unsigned int pointer_count;
 	unsigned int view_count;
+};
+
+struct engineos_shell_launch {
+	struct wl_list link;
+	pid_t pid;
+	enum engineos_surface_role role;
+	char *label;
+	char *command;
+	bool mapped;
 };
 
 struct engineos_shell_keyboard {
@@ -138,11 +156,23 @@ struct engineos_shell_view {
 
 static const char *view_title(struct engineos_shell_view *view);
 static const char *view_app_id(struct engineos_shell_view *view);
+static const char *surface_role_name(enum engineos_surface_role role);
+static bool is_launchpad_role(enum engineos_surface_role role);
 static void clear_keyboard_focus(struct engineos_shell_server *server);
 static void clear_pointer_focus(struct engineos_shell_server *server,
 	const char *reason);
+static void set_view_activated(struct engineos_shell_view *view, bool activated);
+static void focus_view(struct engineos_shell_view *view);
 static void focus_matching_role(struct engineos_shell_server *server,
 	enum engineos_surface_role role);
+static void set_active_slot(struct engineos_shell_server *server,
+	enum engineos_surface_role role, const char *reason);
+static void apply_launchpad_visibility(struct engineos_shell_server *server,
+	const char *reason);
+static void launch_or_activate_slot(struct engineos_shell_server *server,
+	enum engineos_surface_role role, const char *reason);
+static void write_shell_state(struct engineos_shell_server *server,
+	const char *reason);
 
 static const char *mode_to_string(enum engineos_shell_mode mode) {
 	switch (mode) {
@@ -161,7 +191,7 @@ static const char *mode_to_string(enum engineos_shell_mode mode) {
 static void usage(FILE *out, const char *argv0) {
 	fprintf(out,
 		"Usage: %s [--headless|--nested|--tty] [--smoke] [--smoke-ms N] [--startup CMD]\n"
-		"          [--terminal CMD] [--engine CMD] [--bootstrap MODE]\n"
+		"          [--terminal CMD] [--cube CMD] [--engine CMD] [--bootstrap MODE]\n"
 		"\n"
 		"Start the EngineOS wlroots shell bootstrap.\n"
 		"\n"
@@ -173,8 +203,9 @@ static void usage(FILE *out, const char *argv0) {
 		"  --smoke-ms N    start and exit after N milliseconds\n"
 		"  --startup CMD   run CMD after the Wayland socket is ready\n"
 		"  --terminal CMD  command launched by Alt+Return\n"
+		"  --cube CMD      command launched by Alt+2\n"
 		"  --engine CMD    command launched by Alt+G\n"
-		"  --bootstrap MODE  start none, terminal, engine, or all after shell startup\n"
+		"  --bootstrap MODE  start none, terminal, engine, or launchpad after shell startup\n"
 		"  --version       print version\n"
 		"  --help          print this help\n",
 		argv0);
@@ -186,8 +217,8 @@ static const char *bootstrap_mode_name(enum engineos_bootstrap_mode mode) {
 		return "terminal";
 	case ENGINEOS_BOOTSTRAP_ENGINE:
 		return "engine";
-	case ENGINEOS_BOOTSTRAP_ALL:
-		return "all";
+	case ENGINEOS_BOOTSTRAP_LAUNCHPAD:
+		return "launchpad";
 	case ENGINEOS_BOOTSTRAP_NONE:
 	default:
 		return "none";
@@ -208,8 +239,8 @@ static bool parse_bootstrap_mode(const char *value,
 		*mode = ENGINEOS_BOOTSTRAP_ENGINE;
 		return true;
 	}
-	if (strcmp(value, "all") == 0) {
-		*mode = ENGINEOS_BOOTSTRAP_ALL;
+	if (strcmp(value, "launchpad") == 0 || strcmp(value, "all") == 0) {
+		*mode = ENGINEOS_BOOTSTRAP_LAUNCHPAD;
 		return true;
 	}
 	return false;
@@ -259,7 +290,110 @@ static int terminate_from_smoke_timer(void *data) {
 	return 0;
 }
 
-static void spawn_command(const char *label, const char *cmd) {
+static struct engineos_shell_launch *find_launch_by_pid(
+		struct engineos_shell_server *server, pid_t pid) {
+	struct engineos_shell_launch *launch;
+	wl_list_for_each(launch, &server->launches, link) {
+		if (launch->pid == pid) {
+			return launch;
+		}
+	}
+	return NULL;
+}
+
+static void mark_launch_role_mapped(struct engineos_shell_server *server,
+		enum engineos_surface_role role) {
+	struct engineos_shell_launch *launch;
+	wl_list_for_each_reverse(launch, &server->launches, link) {
+		if (launch->role == role && !launch->mapped) {
+			launch->mapped = true;
+			wlr_log(WLR_INFO,
+				"launch action mapped label=%s role=%s pid=%ld",
+				launch->label, surface_role_name(launch->role),
+				(long)launch->pid);
+			write_shell_state(server, "launch-mapped");
+			return;
+		}
+	}
+}
+
+static void free_launch(struct engineos_shell_launch *launch) {
+	if (launch == NULL) {
+		return;
+	}
+	wl_list_remove(&launch->link);
+	free(launch->label);
+	free(launch->command);
+	free(launch);
+}
+
+static const char *wait_status_name(int status) {
+	if (WIFEXITED(status)) {
+		return "exited";
+	}
+	if (WIFSIGNALED(status)) {
+		return "signaled";
+	}
+	return "unknown";
+}
+
+static int wait_status_code(int status) {
+	if (WIFEXITED(status)) {
+		return WEXITSTATUS(status);
+	}
+	if (WIFSIGNALED(status)) {
+		return WTERMSIG(status);
+	}
+	return -1;
+}
+
+static int reap_child_processes(int signal_number, void *data) {
+	(void)signal_number;
+	struct engineos_shell_server *server = data;
+	int status = 0;
+	pid_t pid;
+
+	while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+		struct engineos_shell_launch *launch = find_launch_by_pid(server, pid);
+		if (launch == NULL) {
+			wlr_log(WLR_INFO,
+				"launch action exit label=unknown role=unknown pid=%ld status=%s code=%d mapped=unknown",
+				(long)pid, wait_status_name(status),
+				wait_status_code(status));
+			continue;
+		}
+
+		wlr_log(WLR_INFO,
+			"launch action exit label=%s role=%s pid=%ld status=%s code=%d mapped=%s command=%s",
+			launch->label, surface_role_name(launch->role), (long)pid,
+			wait_status_name(status), wait_status_code(status),
+			launch->mapped ? "true" : "false", launch->command);
+
+		if (is_launchpad_role(launch->role) && !launch->mapped) {
+			if (server->pending_slot == launch->role) {
+				server->pending_slot = ENGINEOS_SURFACE_UNKNOWN;
+			}
+			wlr_log(WLR_INFO,
+				"launchpad slot unavailable role=%s reason=process-exited-before-map status=%s code=%d",
+				surface_role_name(launch->role), wait_status_name(status),
+				wait_status_code(status));
+			apply_launchpad_visibility(server, "launch-exited-before-map");
+		}
+
+		write_shell_state(server, "launch-exit");
+		free_launch(launch);
+	}
+
+	if (pid < 0 && errno != ECHILD) {
+		wlr_log(WLR_ERROR, "waitpid failed while reaping children: %s",
+			strerror(errno));
+	}
+
+	return 0;
+}
+
+static void spawn_command(struct engineos_shell_server *server, const char *label,
+		enum engineos_surface_role role, const char *cmd) {
 	if (cmd == NULL || cmd[0] == '\0') {
 		wlr_log(WLR_INFO, "launch action ignored label=%s reason=no-command", label);
 		return;
@@ -283,8 +417,33 @@ static void spawn_command(const char *label, const char *cmd) {
 		execl("/bin/sh", "/bin/sh", "-c", cmd, (char *)NULL);
 		_exit(127);
 	}
-	wlr_log(WLR_INFO, "launch action label=%s pid=%ld command=%s",
-		label, (long)pid, cmd);
+
+	struct engineos_shell_launch *launch = calloc(1, sizeof(*launch));
+	if (launch == NULL) {
+		wlr_log(WLR_ERROR,
+			"launch action untracked label=%s role=%s pid=%ld reason=oom command=%s",
+			label, surface_role_name(role), (long)pid, cmd);
+		return;
+	}
+	launch->pid = pid;
+	launch->role = role;
+	launch->label = strdup(label);
+	launch->command = strdup(cmd);
+	if (launch->label == NULL || launch->command == NULL) {
+		wlr_log(WLR_ERROR,
+			"launch action untracked label=%s role=%s pid=%ld reason=oom command=%s",
+			label, surface_role_name(role), (long)pid, cmd);
+		free(launch->label);
+		free(launch->command);
+		free(launch);
+		return;
+	}
+	wl_list_insert(&server->launches, &launch->link);
+
+	wlr_log(WLR_INFO,
+		"launch action label=%s role=%s pid=%ld command=%s",
+		label, surface_role_name(role), (long)pid, cmd);
+	write_shell_state(server, "launch-spawned");
 }
 
 static const char *input_type_name(enum wlr_input_device_type type) {
@@ -330,6 +489,8 @@ static const char *surface_role_name(enum engineos_surface_role role) {
 	switch (role) {
 	case ENGINEOS_SURFACE_TERMINAL:
 		return "terminal";
+	case ENGINEOS_SURFACE_CUBE:
+		return "cube";
 	case ENGINEOS_SURFACE_ENGINE:
 		return "engine";
 	case ENGINEOS_SURFACE_UNKNOWN:
@@ -349,6 +510,260 @@ static const char *input_mode_name(enum engineos_input_mode mode) {
 	default:
 		return "unknown";
 	}
+}
+
+static bool is_launchpad_role(enum engineos_surface_role role) {
+	return role == ENGINEOS_SURFACE_TERMINAL ||
+		role == ENGINEOS_SURFACE_CUBE ||
+		role == ENGINEOS_SURFACE_ENGINE;
+}
+
+static const char *slot_command(struct engineos_shell_server *server,
+		enum engineos_surface_role role) {
+	switch (role) {
+	case ENGINEOS_SURFACE_TERMINAL:
+		return server->terminal_cmd;
+	case ENGINEOS_SURFACE_CUBE:
+		return server->cube_cmd;
+	case ENGINEOS_SURFACE_ENGINE:
+		return server->engine_cmd;
+	case ENGINEOS_SURFACE_UNKNOWN:
+	default:
+		return NULL;
+	}
+}
+
+static void primary_output_size(struct engineos_shell_server *server,
+		int *width, int *height) {
+	*width = 1280;
+	*height = 720;
+
+	struct engineos_shell_output *output;
+	wl_list_for_each(output, &server->outputs, link) {
+		wlr_output_effective_resolution(output->output, width, height);
+		if (*width <= 0) {
+			*width = 1280;
+		}
+		if (*height <= 0) {
+			*height = 720;
+		}
+		return;
+	}
+}
+
+static struct engineos_shell_view *find_mapped_role(
+		struct engineos_shell_server *server,
+		enum engineos_surface_role role) {
+	struct engineos_shell_view *view;
+	wl_list_for_each(view, &server->views, link) {
+		if (view->mapped && view->role == role) {
+			return view;
+		}
+	}
+	return NULL;
+}
+
+static char *join_state_path(const char *dir, const char *name) {
+	size_t dir_len = strlen(dir);
+	size_t name_len = strlen(name);
+	bool slash = dir_len > 0 && dir[dir_len - 1] == '/';
+	size_t len = dir_len + (slash ? 0 : 1) + name_len + 1;
+	char *path = malloc(len);
+	if (path == NULL) {
+		return NULL;
+	}
+	snprintf(path, len, "%s%s%s", dir, slash ? "" : "/", name);
+	return path;
+}
+
+static bool init_shell_state_path(struct engineos_shell_server *server) {
+	const char *state_dir = getenv("ENGINEOS_STATE_DIR");
+	if (state_dir != NULL && state_dir[0] != '\0') {
+		server->state_dir = strdup(state_dir);
+	} else {
+		const char *runtime_dir = getenv("XDG_RUNTIME_DIR");
+		if (runtime_dir != NULL && runtime_dir[0] != '\0') {
+			server->state_dir = join_state_path(runtime_dir, "engineos");
+		} else {
+			server->state_dir = strdup("/tmp/engineos");
+		}
+	}
+	if (server->state_dir == NULL) {
+		return false;
+	}
+
+	server->state_file = join_state_path(server->state_dir, "shell-state.json");
+	return server->state_file != NULL;
+}
+
+static void json_write_string(FILE *file, const char *value) {
+	fputc('"', file);
+	if (value != NULL) {
+		for (const unsigned char *p = (const unsigned char *)value; *p != '\0'; p++) {
+			switch (*p) {
+			case '\\':
+				fputs("\\\\", file);
+				break;
+			case '"':
+				fputs("\\\"", file);
+				break;
+			case '\n':
+				fputs("\\n", file);
+				break;
+			case '\r':
+				fputs("\\r", file);
+				break;
+			case '\t':
+				fputs("\\t", file);
+				break;
+			default:
+				if (*p < 0x20) {
+					fprintf(file, "\\u%04x", *p);
+				} else {
+					fputc(*p, file);
+				}
+				break;
+			}
+		}
+	}
+	fputc('"', file);
+}
+
+static void write_slot_state(FILE *file, struct engineos_shell_server *server,
+		enum engineos_surface_role role) {
+	struct engineos_shell_view *view = find_mapped_role(server, role);
+	bool mapped = view != NULL;
+	bool active = mapped && server->active_slot == role;
+
+	fprintf(file, "    \"%s\": {", surface_role_name(role));
+	fprintf(file, "\"mapped\": %s", mapped ? "true" : "false");
+	fprintf(file, ", \"visible\": %s", active ? "true" : "false");
+	fprintf(file, ", \"title\": ");
+	json_write_string(file, mapped ? view_title(view) : "");
+	fprintf(file, ", \"app_id\": ");
+	json_write_string(file, mapped ? view_app_id(view) : "");
+	fprintf(file, "}");
+}
+
+static bool mkdir_p(const char *path, mode_t mode) {
+	if (path == NULL || path[0] == '\0') {
+		return false;
+	}
+
+	char *copy = strdup(path);
+	if (copy == NULL) {
+		return false;
+	}
+
+	for (char *p = copy + 1; *p != '\0'; p++) {
+		if (*p != '/') {
+			continue;
+		}
+		*p = '\0';
+		if (mkdir(copy, mode) < 0 && errno != EEXIST) {
+			free(copy);
+			return false;
+		}
+		*p = '/';
+	}
+
+	bool ok = mkdir(copy, mode) == 0 || errno == EEXIST;
+	free(copy);
+	return ok;
+}
+
+static void write_shell_state(struct engineos_shell_server *server,
+		const char *reason) {
+	if (server->state_dir == NULL || server->state_file == NULL) {
+		return;
+	}
+
+	if (!mkdir_p(server->state_dir, 0775)) {
+		wlr_log(WLR_ERROR, "failed to create shell state dir %s: %s",
+			server->state_dir, strerror(errno));
+		return;
+	}
+
+	char *tmp_file = join_state_path(server->state_dir, "shell-state.json.tmp");
+	if (tmp_file == NULL) {
+		wlr_log(WLR_ERROR, "failed to allocate shell state temp path");
+		return;
+	}
+
+	FILE *file = fopen(tmp_file, "w");
+	if (file == NULL) {
+		wlr_log(WLR_ERROR, "failed to open shell state file %s: %s",
+			tmp_file, strerror(errno));
+		free(tmp_file);
+		return;
+	}
+
+	fprintf(file, "{\n");
+	fprintf(file, "  \"schema\": \"engineos-shell-state-v0\",\n");
+	fprintf(file, "  \"pid\": %ld,\n", (long)getpid());
+	fprintf(file, "  \"mode\": ");
+	json_write_string(file, server->mode_name);
+	fprintf(file, ",\n  \"wayland_display\": ");
+	json_write_string(file, getenv("WAYLAND_DISPLAY"));
+	fprintf(file, ",\n  \"bootstrap\": ");
+	json_write_string(file, bootstrap_mode_name(server->bootstrap_mode));
+	fprintf(file, ",\n  \"active_slot\": ");
+	json_write_string(file, surface_role_name(server->active_slot));
+	fprintf(file, ",\n  \"pending_slot\": ");
+	json_write_string(file, surface_role_name(server->pending_slot));
+	fprintf(file, ",\n  \"input\": {\"mode\": ");
+	json_write_string(file, input_mode_name(server->input_mode));
+	fprintf(file, ", \"capture\": %s},\n",
+		server->game_capture ? "true" : "false");
+	fprintf(file, "  \"counts\": {\"outputs\": %u, \"keyboards\": %u, \"pointers\": %u, \"views\": %u},\n",
+		server->output_count, server->keyboard_count,
+		server->pointer_count, server->view_count);
+	fprintf(file, "  \"last_reason\": ");
+	json_write_string(file, reason != NULL ? reason : "unspecified");
+	fprintf(file, ",\n  \"slots\": {\n");
+	write_slot_state(file, server, ENGINEOS_SURFACE_TERMINAL);
+	fprintf(file, ",\n");
+	write_slot_state(file, server, ENGINEOS_SURFACE_CUBE);
+	fprintf(file, ",\n");
+	write_slot_state(file, server, ENGINEOS_SURFACE_ENGINE);
+	fprintf(file, "\n  },\n  \"launches\": [");
+
+	bool first = true;
+	struct engineos_shell_launch *launch;
+	wl_list_for_each(launch, &server->launches, link) {
+		if (!first) {
+			fprintf(file, ",");
+		}
+		first = false;
+		fprintf(file, "\n    {\"pid\": %ld, \"role\": ", (long)launch->pid);
+		json_write_string(file, surface_role_name(launch->role));
+		fprintf(file, ", \"label\": ");
+		json_write_string(file, launch->label);
+		fprintf(file, ", \"mapped\": %s, \"command\": ",
+			launch->mapped ? "true" : "false");
+		json_write_string(file, launch->command);
+		fprintf(file, "}");
+	}
+	if (!first) {
+		fprintf(file, "\n  ");
+	}
+	fprintf(file, "]\n}\n");
+
+	bool ok = true;
+	if (fclose(file) != 0) {
+		wlr_log(WLR_ERROR, "failed to close shell state file %s: %s",
+			tmp_file, strerror(errno));
+		ok = false;
+	}
+	if (ok && rename(tmp_file, server->state_file) < 0) {
+		wlr_log(WLR_ERROR, "failed to publish shell state file %s: %s",
+			server->state_file, strerror(errno));
+		ok = false;
+	}
+	if (!ok) {
+		unlink(tmp_file);
+	}
+	free(tmp_file);
 }
 
 static void clear_pointer_focus(struct engineos_shell_server *server,
@@ -449,6 +864,11 @@ static bool focused_view_pointer_coords(struct engineos_shell_server *server,
 static void set_input_mode_for_clicked_view(struct engineos_shell_view *view) {
 	struct engineos_shell_server *server = view->server;
 
+	if (is_launchpad_role(view->role)) {
+		set_active_slot(server, view->role, "click-focus");
+		return;
+	}
+
 	server->game_capture = false;
 	switch (view->role) {
 	case ENGINEOS_SURFACE_ENGINE:
@@ -465,12 +885,19 @@ static void set_input_mode_for_clicked_view(struct engineos_shell_view *view) {
 		input_mode_name(server->input_mode),
 		server->game_capture ? "game" : "none",
 		surface_role_name(view->role));
+	write_shell_state(server, "click-focus");
 }
 
 static enum engineos_surface_role classify_view_role(struct engineos_shell_view *view) {
 	const char *app_id = view_app_id(view);
 	const char *title = view_title(view);
 
+	if (ascii_contains_ci(app_id, "engineos-cube") ||
+			ascii_contains_ci(title, "engineos-cube") ||
+			ascii_contains_ci(app_id, "cube") ||
+			ascii_contains_ci(title, "cube")) {
+		return ENGINEOS_SURFACE_CUBE;
+	}
 	if (ascii_contains_ci(app_id, "quake") ||
 			ascii_contains_ci(title, "quake") ||
 			ascii_contains_ci(app_id, "engine") ||
@@ -492,15 +919,21 @@ static enum engineos_surface_role classify_view_role(struct engineos_shell_view 
 static void apply_view_layout(struct engineos_shell_view *view) {
 	int x = 40;
 	int y = 40;
+	int width = 0;
+	int height = 0;
 
 	switch (view->role) {
 	case ENGINEOS_SURFACE_TERMINAL:
-		x = 40;
-		y = 40;
-		break;
+	case ENGINEOS_SURFACE_CUBE:
 	case ENGINEOS_SURFACE_ENGINE:
-		x = 120;
-		y = 80;
+		x = 0;
+		y = 0;
+		primary_output_size(view->server, &width, &height);
+		if (view->xdg_surface != NULL &&
+				view->xdg_surface->toplevel != NULL) {
+			wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel,
+				width, height);
+		}
 		break;
 	case ENGINEOS_SURFACE_UNKNOWN:
 	default:
@@ -509,31 +942,109 @@ static void apply_view_layout(struct engineos_shell_view *view) {
 		break;
 	}
 	wlr_scene_node_set_position(&view->scene_tree->node, x, y);
-	wlr_log(WLR_INFO, "layout view role=%s x=%d y=%d title=%s app_id=%s",
-		surface_role_name(view->role), x, y, view_title(view), view_app_id(view));
+	if (is_launchpad_role(view->role)) {
+		wlr_log(WLR_INFO,
+			"layout view role=%s fullscreen=%dx%d active_slot=%s title=%s app_id=%s",
+			surface_role_name(view->role), width, height,
+			surface_role_name(view->server->active_slot),
+			view_title(view), view_app_id(view));
+	} else {
+		wlr_log(WLR_INFO, "layout view role=%s x=%d y=%d title=%s app_id=%s",
+			surface_role_name(view->role), x, y, view_title(view),
+			view_app_id(view));
+	}
+}
+
+static void apply_launchpad_visibility(struct engineos_shell_server *server,
+		const char *reason) {
+	struct engineos_shell_view *view;
+	struct engineos_shell_view *active_view = NULL;
+
+	wl_list_for_each(view, &server->views, link) {
+		if (!view->mapped || !is_launchpad_role(view->role)) {
+			continue;
+		}
+
+		bool active = view->role == server->active_slot;
+		apply_view_layout(view);
+		wlr_scene_node_set_enabled(&view->scene_tree->node, active);
+		if (active) {
+			active_view = view;
+		} else {
+			set_view_activated(view, false);
+		}
+		wlr_log(WLR_INFO,
+			"launchpad slot visibility role=%s active=%s reason=%s",
+			surface_role_name(view->role), active ? "true" : "false",
+			reason != NULL ? reason : "unspecified");
+	}
+
+	if (active_view != NULL) {
+		focus_view(active_view);
+	} else if (is_launchpad_role(server->active_slot)) {
+		wlr_log(WLR_INFO,
+			"launchpad slot unavailable role=%s reason=%s",
+			surface_role_name(server->active_slot),
+			reason != NULL ? reason : "unspecified");
+		clear_keyboard_focus(server);
+	}
+	schedule_outputs(server);
+}
+
+static void set_active_slot(struct engineos_shell_server *server,
+		enum engineos_surface_role role, const char *reason) {
+	if (!is_launchpad_role(role)) {
+		wlr_log(WLR_INFO, "launchpad active slot ignored role=%s reason=%s",
+			surface_role_name(role),
+			reason != NULL ? reason : "unspecified");
+		return;
+	}
+
+	server->active_slot = role;
+	server->input_mode = role == ENGINEOS_SURFACE_ENGINE ?
+		ENGINEOS_INPUT_GAME : ENGINEOS_INPUT_TERMINAL;
+	if (server->input_mode != ENGINEOS_INPUT_GAME) {
+		server->game_capture = false;
+	}
+
+	wlr_log(WLR_INFO,
+		"launchpad active slot=%s mode=%s capture=%s reason=%s",
+		surface_role_name(server->active_slot),
+		input_mode_name(server->input_mode),
+		server->game_capture ? "game" : "none",
+		reason != NULL ? reason : "unspecified");
+	apply_launchpad_visibility(server, reason);
+	write_shell_state(server, reason);
 }
 
 static void set_input_mode(struct engineos_shell_server *server,
 		enum engineos_input_mode mode, const char *reason) {
-	server->input_mode = mode;
-	if (mode != ENGINEOS_INPUT_GAME) {
-		server->game_capture = false;
-	}
-
-	wlr_log(WLR_INFO, "input mode=%s capture=%s reason=%s",
-		input_mode_name(server->input_mode),
-		server->game_capture ? "game" : "none",
-		reason != NULL ? reason : "unspecified");
-
 	switch (mode) {
 	case ENGINEOS_INPUT_SHELL:
+		server->input_mode = mode;
+		server->game_capture = false;
+		wlr_log(WLR_INFO, "input mode=%s capture=%s reason=%s",
+			input_mode_name(server->input_mode),
+			server->game_capture ? "game" : "none",
+			reason != NULL ? reason : "unspecified");
 		clear_keyboard_focus(server);
+		write_shell_state(server, reason);
 		break;
 	case ENGINEOS_INPUT_TERMINAL:
-		focus_matching_role(server, ENGINEOS_SURFACE_TERMINAL);
+		set_active_slot(server, ENGINEOS_SURFACE_TERMINAL, reason);
 		break;
 	case ENGINEOS_INPUT_GAME:
-		focus_matching_role(server, ENGINEOS_SURFACE_ENGINE);
+		if (find_mapped_role(server, ENGINEOS_SURFACE_ENGINE) != NULL) {
+			set_active_slot(server, ENGINEOS_SURFACE_ENGINE, reason);
+		} else {
+			server->game_capture = false;
+			wlr_log(WLR_INFO,
+				"input mode request ignored requested=game active_slot=%s capture=none reason=%s engine_mapped=false",
+				surface_role_name(server->active_slot),
+				reason != NULL ? reason : "unspecified");
+			launch_or_activate_slot(server, ENGINEOS_SURFACE_ENGINE, reason);
+			write_shell_state(server, "game-mode-engine-unavailable");
+		}
 		break;
 	}
 }
@@ -542,10 +1053,21 @@ static void toggle_game_capture(struct engineos_shell_server *server) {
 	if (server->input_mode != ENGINEOS_INPUT_GAME) {
 		set_input_mode(server, ENGINEOS_INPUT_GAME, "capture-toggle");
 	}
+	if (server->input_mode != ENGINEOS_INPUT_GAME ||
+			find_mapped_role(server, ENGINEOS_SURFACE_ENGINE) == NULL) {
+		server->game_capture = false;
+		wlr_log(WLR_INFO,
+			"input capture=none mode=%s reason=toggle-ignored engine_mapped=false active_slot=%s",
+			input_mode_name(server->input_mode),
+			surface_role_name(server->active_slot));
+		write_shell_state(server, "capture-toggle-ignored");
+		return;
+	}
 	server->game_capture = !server->game_capture;
 	wlr_log(WLR_INFO, "input capture=%s mode=%s reason=toggle",
 		server->game_capture ? "game" : "none",
 		input_mode_name(server->input_mode));
+	write_shell_state(server, "capture-toggle");
 }
 
 static void emergency_release(struct engineos_shell_server *server) {
@@ -650,6 +1172,60 @@ static void focus_next_view(struct engineos_shell_server *server) {
 	}
 }
 
+static void launch_or_activate_slot(struct engineos_shell_server *server,
+		enum engineos_surface_role role, const char *reason) {
+	struct engineos_shell_view *view = find_mapped_role(server, role);
+	if (view != NULL) {
+		set_active_slot(server, role, reason);
+		return;
+	}
+
+	const char *cmd = slot_command(server, role);
+	if (cmd == NULL || cmd[0] == '\0') {
+		wlr_log(WLR_INFO,
+			"launchpad slot unavailable role=%s reason=no-command trigger=%s",
+			surface_role_name(role),
+			reason != NULL ? reason : "unspecified");
+		return;
+	}
+
+	server->pending_slot = role;
+	wlr_log(WLR_INFO,
+		"launchpad slot unavailable role=%s action=launch-requested trigger=%s",
+		surface_role_name(role),
+		reason != NULL ? reason : "unspecified");
+	spawn_command(server, surface_role_name(role), role, cmd);
+}
+
+static void cycle_launchpad_slot(struct engineos_shell_server *server,
+		const char *reason) {
+	static const enum engineos_surface_role slots[] = {
+		ENGINEOS_SURFACE_TERMINAL,
+		ENGINEOS_SURFACE_CUBE,
+		ENGINEOS_SURFACE_ENGINE,
+	};
+	size_t count = sizeof(slots) / sizeof(slots[0]);
+	size_t start = count;
+
+	for (size_t i = 0; i < count; i++) {
+		if (slots[i] == server->active_slot) {
+			start = i;
+			break;
+		}
+	}
+
+	for (size_t offset = 1; offset <= count; offset++) {
+		enum engineos_surface_role role = slots[(start + offset) % count];
+		if (find_mapped_role(server, role) != NULL) {
+			set_active_slot(server, role, reason);
+			return;
+		}
+	}
+
+	wlr_log(WLR_INFO, "launchpad cycle ignored reason=no-mapped-slots trigger=%s",
+		reason != NULL ? reason : "unspecified");
+}
+
 static bool handle_keybinding(struct engineos_shell_server *server,
 		xkb_keysym_t sym, uint32_t modifiers) {
 	switch (sym) {
@@ -669,6 +1245,18 @@ static bool handle_keybinding(struct engineos_shell_server *server,
 	}
 
 	switch (sym) {
+	case XKB_KEY_1:
+		wlr_log(WLR_INFO, "keybinding alt+1: terminal slot");
+		launch_or_activate_slot(server, ENGINEOS_SURFACE_TERMINAL, "alt+1");
+		return true;
+	case XKB_KEY_2:
+		wlr_log(WLR_INFO, "keybinding alt+2: cube slot");
+		launch_or_activate_slot(server, ENGINEOS_SURFACE_CUBE, "alt+2");
+		return true;
+	case XKB_KEY_3:
+		wlr_log(WLR_INFO, "keybinding alt+3: engine slot");
+		launch_or_activate_slot(server, ENGINEOS_SURFACE_ENGINE, "alt+3");
+		return true;
 	case XKB_KEY_Escape:
 		wlr_log(WLR_INFO, "keybinding alt+escape: terminate shell");
 		wl_display_terminate(server->display);
@@ -692,16 +1280,16 @@ static bool handle_keybinding(struct engineos_shell_server *server,
 		return true;
 	case XKB_KEY_Return:
 		wlr_log(WLR_INFO, "keybinding alt+return: launch terminal");
-		spawn_command("terminal", server->terminal_cmd);
+		launch_or_activate_slot(server, ENGINEOS_SURFACE_TERMINAL, "alt+return");
 		return true;
 	case XKB_KEY_g:
 	case XKB_KEY_G:
 		wlr_log(WLR_INFO, "keybinding alt+g: launch engine");
-		spawn_command("engine", server->engine_cmd);
+		launch_or_activate_slot(server, ENGINEOS_SURFACE_ENGINE, "alt+g");
 		return true;
 	case XKB_KEY_Tab:
-		wlr_log(WLR_INFO, "keybinding alt+tab: cycle focus");
-		focus_next_view(server);
+		wlr_log(WLR_INFO, "keybinding alt+tab: cycle launchpad slot");
+		cycle_launchpad_slot(server, "alt+tab");
 		return true;
 	default:
 		return false;
@@ -1143,6 +1731,7 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 			output->name[0] != '\0' ? output->name : "(unnamed)",
 			getenv("WLR_BACKENDS") ? getenv("WLR_BACKENDS") : "auto");
 	}
+	write_shell_state(server, "output-added");
 }
 
 static void server_new_input(struct wl_listener *listener, void *data) {
@@ -1164,6 +1753,7 @@ static void server_new_input(struct wl_listener *listener, void *data) {
 	wlr_log(WLR_INFO, "input added type=%s name=%s",
 		input_type_name(device->type),
 		device->name != NULL ? device->name : "(unnamed)");
+	write_shell_state(server, "input-added");
 }
 
 static const char *view_title(struct engineos_shell_view *view) {
@@ -1190,18 +1780,36 @@ static void xdg_surface_map(struct wl_listener *listener, void *data) {
 	view->mapped = true;
 	view->role = classify_view_role(view);
 	apply_view_layout(view);
-	wlr_scene_node_set_enabled(&view->scene_tree->node, true);
-	if ((view->role == ENGINEOS_SURFACE_TERMINAL &&
-				view->server->input_mode == ENGINEOS_INPUT_TERMINAL) ||
-			(view->role == ENGINEOS_SURFACE_ENGINE &&
-				view->server->input_mode == ENGINEOS_INPUT_GAME) ||
-			(view->server->focused_view == NULL &&
-				view->server->input_mode != ENGINEOS_INPUT_SHELL)) {
-		focus_view(view);
+	if (is_launchpad_role(view->role)) {
+		mark_launch_role_mapped(view->server, view->role);
+		bool pending = view->server->pending_slot == view->role;
+		if (pending) {
+			view->server->pending_slot = ENGINEOS_SURFACE_UNKNOWN;
+		}
+		if (pending || view->role == view->server->active_slot) {
+			set_active_slot(view->server, view->role,
+				pending ? "pending-slot-mapped" : "slot-mapped");
+		} else {
+			wlr_scene_node_set_enabled(&view->scene_tree->node, false);
+			wlr_log(WLR_INFO,
+				"launchpad slot mapped inactive role=%s active_slot=%s",
+				surface_role_name(view->role),
+				surface_role_name(view->server->active_slot));
+			apply_launchpad_visibility(view->server, "slot-mapped-inactive");
+		}
+	} else {
+		wlr_log(WLR_INFO, "launchpad unknown view excluded title=%s app_id=%s",
+			view_title(view), view_app_id(view));
+		wlr_scene_node_set_enabled(&view->scene_tree->node, true);
+		if (view->server->focused_view == NULL &&
+				view->server->input_mode != ENGINEOS_INPUT_SHELL) {
+			focus_view(view);
+		}
 	}
 	wlr_log(WLR_INFO, "view mapped role=%s title=%s app_id=%s mapped_total=%u",
 		surface_role_name(view->role), view_title(view), view_app_id(view),
 		view->server->view_count);
+	write_shell_state(view->server, "view-mapped");
 }
 
 static void xdg_surface_unmap(struct wl_listener *listener, void *data) {
@@ -1214,9 +1822,22 @@ static void xdg_surface_unmap(struct wl_listener *listener, void *data) {
 		set_view_activated(view, false);
 		wlr_seat_keyboard_notify_clear_focus(view->server->seat);
 	}
+	if (is_launchpad_role(view->role) &&
+			view->server->active_slot == view->role) {
+		if (find_mapped_role(view->server, ENGINEOS_SURFACE_CUBE) != NULL) {
+			set_active_slot(view->server, ENGINEOS_SURFACE_CUBE, "slot-unmapped");
+		} else if (find_mapped_role(view->server, ENGINEOS_SURFACE_TERMINAL) != NULL) {
+			set_active_slot(view->server, ENGINEOS_SURFACE_TERMINAL, "slot-unmapped");
+		} else if (find_mapped_role(view->server, ENGINEOS_SURFACE_ENGINE) != NULL) {
+			set_active_slot(view->server, ENGINEOS_SURFACE_ENGINE, "slot-unmapped");
+		}
+	} else if (is_launchpad_role(view->role)) {
+		apply_launchpad_visibility(view->server, "slot-unmapped");
+	}
 	schedule_outputs(view->server);
 	wlr_log(WLR_INFO, "view unmapped role=%s title=%s app_id=%s",
 		surface_role_name(view->role), view_title(view), view_app_id(view));
+	write_shell_state(view->server, "view-unmapped");
 }
 
 static void xdg_surface_commit(struct wl_listener *listener, void *data) {
@@ -1224,7 +1845,16 @@ static void xdg_surface_commit(struct wl_listener *listener, void *data) {
 	struct engineos_shell_view *view = wl_container_of(listener, view, commit);
 	if (view->xdg_surface->initial_commit &&
 			view->xdg_surface->toplevel != NULL) {
-		wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel, 0, 0);
+		view->role = classify_view_role(view);
+		if (is_launchpad_role(view->role)) {
+			int width = 0;
+			int height = 0;
+			primary_output_size(view->server, &width, &height);
+			wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel,
+				width, height);
+		} else {
+			wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel, 0, 0);
+		}
 		wlr_log(WLR_INFO, "view initial configure role=%s title=%s app_id=%s",
 			surface_role_name(view->role), view_title(view), view_app_id(view));
 	}
@@ -1241,6 +1871,9 @@ static void xdg_surface_destroy(struct wl_listener *listener, void *data) {
 		server->focused_view = NULL;
 		wlr_seat_keyboard_notify_clear_focus(server->seat);
 	}
+	if (server->pending_slot == view->role) {
+		server->pending_slot = ENGINEOS_SURFACE_UNKNOWN;
+	}
 	if (view->scene_tree != NULL) {
 		wlr_scene_node_destroy(&view->scene_tree->node);
 	}
@@ -1252,6 +1885,16 @@ static void xdg_surface_destroy(struct wl_listener *listener, void *data) {
 	if (server->view_count > 0) {
 		server->view_count--;
 	}
+	if (is_launchpad_role(view->role) && server->active_slot == view->role) {
+		if (find_mapped_role(server, ENGINEOS_SURFACE_CUBE) != NULL) {
+			set_active_slot(server, ENGINEOS_SURFACE_CUBE, "slot-destroyed");
+		} else if (find_mapped_role(server, ENGINEOS_SURFACE_TERMINAL) != NULL) {
+			set_active_slot(server, ENGINEOS_SURFACE_TERMINAL, "slot-destroyed");
+		} else if (find_mapped_role(server, ENGINEOS_SURFACE_ENGINE) != NULL) {
+			set_active_slot(server, ENGINEOS_SURFACE_ENGINE, "slot-destroyed");
+		}
+	}
+	write_shell_state(server, "view-destroyed");
 	free(view);
 }
 
@@ -1396,6 +2039,18 @@ static bool setup_server(struct engineos_shell_server *server) {
 }
 
 static void destroy_server(struct engineos_shell_server *server) {
+	if (!wl_list_empty(&server->launches)) {
+		struct engineos_shell_launch *launch;
+		struct engineos_shell_launch *tmp;
+		wl_list_for_each_safe(launch, tmp, &server->launches, link) {
+			wlr_log(WLR_INFO,
+				"launch action abandoned label=%s role=%s pid=%ld mapped=%s command=%s",
+				launch->label, surface_role_name(launch->role),
+				(long)launch->pid, launch->mapped ? "true" : "false",
+				launch->command);
+			free_launch(launch);
+		}
+	}
 	if (server->display != NULL) {
 		wl_display_destroy_clients(server->display);
 	}
@@ -1431,11 +2086,16 @@ static void destroy_server(struct engineos_shell_server *server) {
 		wl_display_destroy(server->display);
 		server->display = NULL;
 	}
+	free(server->state_file);
+	server->state_file = NULL;
+	free(server->state_dir);
+	server->state_dir = NULL;
 }
 
 int main(int argc, char **argv) {
 	enum engineos_shell_mode mode = ENGINEOS_SHELL_AUTO;
 	struct engineos_shell_server server = {0};
+	wl_list_init(&server.launches);
 
 	static const struct option options[] = {
 		{"headless", no_argument, NULL, 'H'},
@@ -1447,6 +2107,7 @@ int main(int argc, char **argv) {
 		{"terminal", required_argument, NULL, 1000},
 		{"engine", required_argument, NULL, 1001},
 		{"bootstrap", required_argument, NULL, 1002},
+		{"cube", required_argument, NULL, 1003},
 		{"version", no_argument, NULL, 'v'},
 		{"help", no_argument, NULL, 'h'},
 		{0},
@@ -1486,9 +2147,12 @@ int main(int argc, char **argv) {
 		case 1002:
 			if (!parse_bootstrap_mode(optarg, &server.bootstrap_mode)) {
 				fprintf(stderr,
-					"engineos-shell: --bootstrap must be none, terminal, engine, or all\n");
+					"engineos-shell: --bootstrap must be none, terminal, engine, launchpad, or all\n");
 				return 2;
 			}
+			break;
+		case 1003:
+			server.cube_cmd = optarg;
 			break;
 		case 'v':
 			puts("engineos-shell 0.1.0");
@@ -1509,8 +2173,15 @@ int main(int argc, char **argv) {
 
 	server.mode_name = mode_to_string(mode);
 	server.input_mode = ENGINEOS_INPUT_TERMINAL;
+	server.active_slot = ENGINEOS_SURFACE_TERMINAL;
+	server.pending_slot = ENGINEOS_SURFACE_UNKNOWN;
 	apply_mode_environment(mode);
 	wlr_log_init(WLR_DEBUG, NULL);
+	if (!init_shell_state_path(&server)) {
+		fprintf(stderr, "engineos-shell: failed to allocate shell state paths\n");
+		destroy_server(&server);
+		return 1;
+	}
 
 	if (!setup_server(&server)) {
 		destroy_server(&server);
@@ -1520,6 +2191,7 @@ int main(int argc, char **argv) {
 	struct wl_event_loop *event_loop = wl_display_get_event_loop(server.display);
 	wl_event_loop_add_signal(event_loop, SIGINT, terminate_from_signal, &server);
 	wl_event_loop_add_signal(event_loop, SIGTERM, terminate_from_signal, &server);
+	wl_event_loop_add_signal(event_loop, SIGCHLD, reap_child_processes, &server);
 
 	if (server.smoke_ms > 0) {
 		struct wl_event_source *timer =
@@ -1551,8 +2223,9 @@ int main(int argc, char **argv) {
 	wlr_log(WLR_INFO, "input mode=%s capture=%s reason=startup",
 		input_mode_name(server.input_mode),
 		server.game_capture ? "game" : "none");
-	wlr_log(WLR_INFO, "launch commands terminal=%s engine=%s startup=%s",
+	wlr_log(WLR_INFO, "launch commands terminal=%s cube=%s engine=%s startup=%s",
 		server.terminal_cmd != NULL ? server.terminal_cmd : "(none)",
+		server.cube_cmd != NULL ? server.cube_cmd : "(none)",
 		server.engine_cmd != NULL ? server.engine_cmd : "(none)",
 		server.startup_cmd != NULL ? server.startup_cmd : "(none)");
 	wlr_log(WLR_INFO, "bootstrap mode=%s",
@@ -1560,19 +2233,33 @@ int main(int argc, char **argv) {
 	wlr_log(WLR_INFO,
 		"client launch environment wayland_display=%s xdg_session_type=wayland display=unset sdl=wayland gdk=wayland qt=wayland",
 		socket);
-	spawn_command("startup", server.startup_cmd);
-	if (server.bootstrap_mode == ENGINEOS_BOOTSTRAP_TERMINAL ||
-			server.bootstrap_mode == ENGINEOS_BOOTSTRAP_ALL) {
-		spawn_command("bootstrap-terminal", server.terminal_cmd);
+	write_shell_state(&server, "startup");
+	spawn_command(&server, "startup", ENGINEOS_SURFACE_UNKNOWN,
+		server.startup_cmd);
+	if (server.bootstrap_mode == ENGINEOS_BOOTSTRAP_TERMINAL) {
+		set_active_slot(&server, ENGINEOS_SURFACE_TERMINAL, "bootstrap-terminal");
+		spawn_command(&server, "bootstrap-terminal",
+			ENGINEOS_SURFACE_TERMINAL, server.terminal_cmd);
 	}
-	if (server.bootstrap_mode == ENGINEOS_BOOTSTRAP_ENGINE ||
-			server.bootstrap_mode == ENGINEOS_BOOTSTRAP_ALL) {
-		spawn_command("bootstrap-engine", server.engine_cmd);
+	if (server.bootstrap_mode == ENGINEOS_BOOTSTRAP_ENGINE) {
+		set_active_slot(&server, ENGINEOS_SURFACE_ENGINE, "bootstrap-engine");
+		spawn_command(&server, "bootstrap-engine",
+			ENGINEOS_SURFACE_ENGINE, server.engine_cmd);
+	}
+	if (server.bootstrap_mode == ENGINEOS_BOOTSTRAP_LAUNCHPAD) {
+		set_active_slot(&server, ENGINEOS_SURFACE_CUBE, "bootstrap-launchpad");
+		spawn_command(&server, "bootstrap-terminal",
+			ENGINEOS_SURFACE_TERMINAL, server.terminal_cmd);
+		spawn_command(&server, "bootstrap-cube",
+			ENGINEOS_SURFACE_CUBE, server.cube_cmd);
+		spawn_command(&server, "bootstrap-engine",
+			ENGINEOS_SURFACE_ENGINE, server.engine_cmd);
 	}
 
 	wl_display_run(server.display);
 	wlr_log(WLR_INFO, "engineos-shell shutdown outputs=%u keyboards=%u pointers=%u views=%u",
 		server.output_count, server.keyboard_count, server.pointer_count, server.view_count);
+	write_shell_state(&server, "shutdown");
 	destroy_server(&server);
 	return 0;
 }

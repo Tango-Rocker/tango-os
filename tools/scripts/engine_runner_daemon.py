@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import grp
 import json
 import os
 import signal
@@ -14,6 +15,27 @@ def now_utc():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def wheel_gid():
+    try:
+        return grp.getgrnam("wheel").gr_gid
+    except KeyError:
+        return None
+
+
+def apply_shared_permissions(path, mode):
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
+    gid = wheel_gid()
+    if gid is None or not hasattr(os, "chown"):
+        return
+    try:
+        os.chown(path, -1, gid)
+    except OSError:
+        pass
+
+
 class EngineRunner:
     def __init__(self):
         self.root = Path(os.environ.get("ENGINEOS_ROOT", ".")).resolve()
@@ -21,10 +43,14 @@ class EngineRunner:
         self.log_dir = Path(os.environ.get("ENGINEOS_LOG_DIR", str(self.root / "artifacts" / "logs")))
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        apply_shared_permissions(self.state_dir, 0o2775)
+        apply_shared_permissions(self.log_dir, 0o2775)
         self.pid_file = self.state_dir / "engine.pid"
         self.target_file = self.state_dir / "engine.target"
         self.args_file = self.state_dir / "engine.args.json"
         self.log_file = self.log_dir / "engine.log"
+        self.log_file.touch(exist_ok=True)
+        apply_shared_permissions(self.log_file, 0o664)
         self.process = None
         self.target = None
         self.args = []
@@ -238,6 +264,11 @@ def serve(socket_path):
 
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(str(path))
+    try:
+        os.chmod(path, 0o775)
+        os.chown(path, -1, grp.getgrnam("wheel").gr_gid)
+    except (KeyError, OSError):
+        pass
     server.listen(8)
 
     try:
@@ -317,6 +348,7 @@ def main():
     ns = parser.parse_args()
 
     if ns.daemon:
+        os.umask(0o002)
         serve(ns.socket)
         return 0
     if ns.client:

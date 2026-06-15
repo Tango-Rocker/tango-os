@@ -21,6 +21,7 @@ fzf
 zoxide
 wl-clipboard
 foot
+ttf-dejavu
 jq
 ripgrep
 mesa
@@ -45,6 +46,7 @@ engineos-cli
 engineos-oh-my-zsh
 engineos-tmux-plugins
 engineos-agent-tools
+engineos-cube
 engineos-shell
 engineos-engine-runner
 engineos-quakespasm

@@ -144,12 +144,14 @@ FAKE
 
   grep -Fx -- "--nested" "$args_file" >/dev/null || fail "real shell pass-through missing --nested"
   grep -Fx -- "--startup" "$args_file" >/dev/null || fail "nested pass-through missing --startup"
-  grep -F -- "terminal" "$args_file" >/dev/null || fail "nested pass-through missing default terminal launcher"
+  grep -F -- "app launch terminal" "$args_file" >/dev/null || fail "nested pass-through missing default terminal app command"
   grep -Fx -- "--terminal" "$args_file" >/dev/null || fail "nested pass-through missing --terminal"
+  grep -Fx -- "--cube" "$args_file" >/dev/null || fail "nested pass-through missing --cube"
+  grep -F -- "app launch cube" "$args_file" >/dev/null || fail "nested pass-through missing default cube app command"
   grep -Fx -- "--engine" "$args_file" >/dev/null || fail "nested pass-through missing --engine"
-  grep -F -- "app launch quake --smoke" "$args_file" >/dev/null || fail "nested pass-through missing default app command"
+  grep -F -- "app launch quake" "$args_file" >/dev/null || fail "nested pass-through missing default app command"
   if grep -Fx -- "--bootstrap" "$args_file" >/dev/null; then
-    fail "nested pass-through should not bootstrap all by default"
+    fail "nested pass-through should not bootstrap by default"
   fi
 
   ENGINEOS_LOG_DIR="$log_dir" \
@@ -160,7 +162,7 @@ FAKE
 
   grep -Fx -- "--tty" "$args_file" >/dev/null || fail "real shell pass-through missing --tty"
   grep -Fx -- "--bootstrap" "$args_file" >/dev/null || fail "tty pass-through missing --bootstrap"
-  grep -Fx -- "all" "$args_file" >/dev/null || fail "tty pass-through missing bootstrap all"
+  grep -Fx -- "launchpad" "$args_file" >/dev/null || fail "tty pass-through missing bootstrap launchpad"
 
   if [[ "$FAILURES" -eq 0 ]]; then
     ok "real shell command pass-through"
@@ -216,12 +218,23 @@ check_contains "$ROOT/shell/src/engineos-shell.c" '{"headless", no_argument' "sh
 check_contains "$ROOT/shell/src/engineos-shell.c" '{"nested", no_argument' "shell binary supports --nested"
 check_contains "$ROOT/shell/src/engineos-shell.c" '{"tty", no_argument' "shell binary supports --tty"
 check_contains "$ROOT/shell/src/engineos-shell.c" '{"bootstrap", required_argument' "shell binary supports --bootstrap"
+check_contains "$ROOT/shell/src/engineos-shell.c" '{"cube", required_argument' "shell binary supports --cube"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'WLR_BACKENDS", "drm,libinput' "shell tty selects drm/libinput backend"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'keybinding ctrl+alt+backspace: emergency release' "shell emergency release binding"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'keybinding alt+return: launch terminal' "shell terminal launch binding"
+check_contains "$ROOT/shell/src/engineos-shell.c" 'keybinding alt+2: cube slot' "shell cube slot binding"
+check_contains "$ROOT/shell/src/engineos-shell.c" 'keybinding alt+tab: cycle launchpad slot' "shell launchpad cycle binding"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'keybinding alt+g: launch engine' "shell engine launch binding"
-check_contains "$ROOT/shell/src/engineos-shell.c" 'spawn_command("bootstrap-terminal", server.terminal_cmd)' "shell bootstrap terminal launch"
-check_contains "$ROOT/shell/src/engineos-shell.c" 'spawn_command("bootstrap-engine", server.engine_cmd)' "shell bootstrap engine launch"
+check_contains "$ROOT/shell/src/engineos-shell.c" 'spawn_command(&server, "bootstrap-terminal",' "shell bootstrap terminal launch"
+check_contains "$ROOT/shell/src/engineos-shell.c" 'spawn_command(&server, "bootstrap-cube",' "shell bootstrap cube launch"
+check_contains "$ROOT/shell/src/engineos-shell.c" 'spawn_command(&server, "bootstrap-engine",' "shell bootstrap engine launch"
+check_contains "$ROOT/shell/src/engineos-shell.c" 'wl_event_loop_add_signal(event_loop, SIGCHLD, reap_child_processes, &server)' "shell reaps launched app children"
+check_contains "$ROOT/shell/src/engineos-shell.c" 'launch action exit label=%s role=%s' "shell logs launch process exits"
+check_contains "$ROOT/shell/src/engineos-shell.c" 'reason=process-exited-before-map' "shell logs launchpad slot failure before map"
+check_contains "$ROOT/shell/src/engineos-shell.c" 'shell-state.json' "shell writes structured state artifact"
+check_contains "$ROOT/shell/src/engineos-shell.c" 'input mode request ignored requested=game' "shell keeps active slot when engine is unavailable"
+check_contains "$ROOT/shell/src/engineos-shell.c" 'capture-toggle-ignored' "shell refuses capture without mapped engine slot"
+check_contains "$ROOT/shell/src/engineos-shell.c" 'ENGINEOS_BOOTSTRAP_LAUNCHPAD' "shell launchpad bootstrap mode"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'wlr_renderer_autocreate' "shell wlroots 0.19 renderer autocreate"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'setenv("XDG_SESSION_TYPE", "wayland", 1)' "shell launches clients as Wayland session"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'unsetenv("DISPLAY")' "shell prevents X11 display fallback for launched clients"

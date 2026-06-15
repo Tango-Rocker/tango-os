@@ -177,6 +177,7 @@ install_packages() {
     base-devel
     engineos-oh-my-zsh
     engineos-tmux-plugins
+    engineos-cube
     engineos-shell
   )
 
@@ -276,7 +277,11 @@ configure_docker() {
 
   if have_cmd systemctl; then
     as_root systemctl enable docker.service >/dev/null 2>&1 || true
-    as_root systemctl restart docker.service
+    if [[ -d /run/systemd/system ]]; then
+      as_root systemctl restart docker.service
+    else
+      log "systemd is not running; docker.service enabled for next boot"
+    fi
   fi
 }
 

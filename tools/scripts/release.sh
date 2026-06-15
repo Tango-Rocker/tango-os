@@ -91,7 +91,7 @@ append_report_package_expectations() {
       printf -- '- `%s`\n' "$pkg"
     done < <(engineos_packages)
     printf '\n'
-    printf 'Boot validation also expects `engineos-quakespasm` to provide `/usr/bin/quakespasm` inside EngineDev and EngineRuntime.\n'
+    printf 'Boot validation also expects `engineos-cube` to provide `/usr/bin/engineos-cube` and `engineos-quakespasm` to provide `/usr/bin/quakespasm` inside EngineDev and EngineRuntime.\n'
   } >>"$report"
 }
 
@@ -117,6 +117,8 @@ Test VM:
 ```bash
 engineos proof booted-iso --vm
 engineos proof booted-iso --runtime
+engineos app manifest validate
+engineos proof launchpad --runtime
 ```
 
 Bare-metal AMD:
@@ -125,6 +127,7 @@ Bare-metal AMD:
 engineos doctor --bare-metal
 engineos outputs validate --single
 engineos run shell --tty
+engineos app launch terminal
 engineos terminal
 engineos assets check quake
 engineos run quake
@@ -139,7 +142,10 @@ engineos crash-bundle --bare-metal
 - EngineDev must boot in a test VM.
 - EngineRuntime must boot on the target AMD machine.
 - The wlroots shell must compile and run headless, nested, and TTY/KMS.
+- `engineos-cube` must build through the local package repo and provide `/usr/bin/engineos-cube`.
 - `engineos-quakespasm` must build through the local package repo and provide `/usr/bin/quakespasm`.
+- App registry validation must pass through `engineos app manifest validate`.
+- Launchpad bootstrap must pass through `engineos proof launchpad --runtime`.
 - QuakeSpasm must launch with user-provided assets through `engineos run quake`.
 - DRM output validation must pass through `engineos outputs validate --single`.
 - Terminal launch fallback must be checked through `engineos terminal`.

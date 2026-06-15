@@ -27,6 +27,7 @@ zoxide
 wl-clipboard
 bash-completion
 foot
+ttf-dejavu
 base-devel
 cmake
 meson
@@ -79,6 +80,7 @@ engineos-cli
 engineos-oh-my-zsh
 engineos-tmux-plugins
 engineos-agent-tools
+engineos-cube
 engineos-shell
 engineos-engine-runner
 engineos-quakespasm

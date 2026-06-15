@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$SCRIPT_DIR/common.sh"
 
 ROOT="$(engineos_root)"
+APPS_MANIFEST="$(engineos_apps_manifest "$ROOT")"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 MODE="host"
 DOCTOR_ARGS=()
@@ -64,6 +65,8 @@ fi
 
 BUNDLE_DIR="${ENGINEOS_CRASH_BUNDLE_DIR:-$DEFAULT_BUNDLE_DIR}"
 LOG_DIR="${ENGINEOS_LOG_DIR:-$DEFAULT_LOG_DIR}"
+STATE_DIR="${ENGINEOS_STATE_DIR:-$(engineos_default_state_dir "$ROOT")}"
+SHELL_STATE_FILE="$STATE_DIR/shell-state.json"
 
 mkdir -p "$BUNDLE_DIR"
 
@@ -90,6 +93,7 @@ write_unavailable() {
   printf 'mode=%s\n' "$MODE"
   printf 'root=%s\n' "$ROOT"
   printf 'log_dir=%s\n' "$LOG_DIR"
+  printf 'state_dir=%s\n' "$STATE_DIR"
   printf 'uname='
   uname -a 2>/dev/null || true
   printf 'virt='
@@ -103,7 +107,7 @@ if [[ -x "$SCRIPT_DIR/doctor.sh" ]]; then
 fi
 
 if command -v pacman >/dev/null 2>&1; then
-  write_command "$BUNDLE_DIR/pacman-engineos.txt" pacman -Q archiso mesa wlroots wayland pipewire wireplumber engineos-config engineos-cli engineos-agent-tools engineos-shell engineos-engine-runner engineos-quakespasm engineos-quake-template
+  write_command "$BUNDLE_DIR/pacman-engineos.txt" pacman -Q archiso mesa wlroots wayland pipewire wireplumber engineos-config engineos-cli engineos-agent-tools engineos-cube engineos-shell engineos-engine-runner engineos-quakespasm engineos-quake-template
   write_command "$BUNDLE_DIR/pacman-local-repo.txt" pacman -Sl engineos
 fi
 
@@ -116,12 +120,25 @@ else
 fi
 
 if [[ -n "$ENGINEOS" ]]; then
+  write_command "$BUNDLE_DIR/app-status.json" "$ENGINEOS" app status --json
+  write_command "$BUNDLE_DIR/app-manifest-validate.txt" "$ENGINEOS" app manifest validate
   write_command "$BUNDLE_DIR/engine-status.txt" "$ENGINEOS" engine status
   write_command "$BUNDLE_DIR/outputs.txt" "$ENGINEOS" outputs list
   write_command "$BUNDLE_DIR/assets-quake.txt" "$ENGINEOS" assets check quake
   write_command "$BUNDLE_DIR/assets-quake-explain.txt" "$ENGINEOS" assets explain quake
   write_command "$BUNDLE_DIR/assets-quake-path.txt" "$ENGINEOS" assets path quake
   write_command "$BUNDLE_DIR/preflight-scripts.txt" "$ENGINEOS" preflight scripts
+fi
+
+mkdir -p "$BUNDLE_DIR/state"
+if [[ -r "$SHELL_STATE_FILE" ]]; then
+  cp "$SHELL_STATE_FILE" "$BUNDLE_DIR/state/shell-state.json" 2>/dev/null || true
+else
+  printf 'shell state unavailable: %s\n' "$SHELL_STATE_FILE" >"$BUNDLE_DIR/state/shell-state.json"
+fi
+if [[ -d "$STATE_DIR/apps" ]]; then
+  mkdir -p "$BUNDLE_DIR/state/apps"
+  cp -R "$STATE_DIR/apps"/. "$BUNDLE_DIR/state/apps/" 2>/dev/null || true
 fi
 
 mkdir -p "$BUNDLE_DIR/network"
@@ -183,6 +200,9 @@ for config in \
     cp "$config" "$BUNDLE_DIR/config/$(basename "$config")" 2>/dev/null || true
   fi
 done
+if [[ -r "$APPS_MANIFEST" ]]; then
+  cp "$APPS_MANIFEST" "$BUNDLE_DIR/config/apps.toml" 2>/dev/null || true
+fi
 
 if [[ -d "$LOG_DIR" ]]; then
   mkdir -p "$BUNDLE_DIR/logs"

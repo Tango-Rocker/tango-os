@@ -54,6 +54,71 @@ engineos_default_capture_dir() {
   fi
 }
 
+engineos_default_apps_manifest() {
+  local root="$1"
+  if engineos_is_source_root "$root"; then
+    printf '%s\n' "$root/packages/engineos-config/files/etc/engineos/apps.toml"
+  else
+    printf '%s\n' "/etc/engineos/apps.toml"
+  fi
+}
+
+engineos_apps_manifest() {
+  local root="$1"
+  if [[ -n "${ENGINEOS_APPS_MANIFEST:-}" ]]; then
+    printf '%s\n' "$ENGINEOS_APPS_MANIFEST"
+  else
+    engineos_default_apps_manifest "$root"
+  fi
+}
+
+engineos_app_manifest_section() {
+  local manifest="$1"
+  local app="$2"
+  [[ -r "$manifest" ]] || return 1
+
+  awk -v target="[apps.$app]" '
+    /^[[:space:]]*\[/ {
+      in_section = ($0 == target)
+      next
+    }
+    in_section { print }
+  ' "$manifest"
+}
+
+engineos_app_manifest_value() {
+  local manifest="$1"
+  local app="$2"
+  local key="$3"
+
+  engineos_app_manifest_section "$manifest" "$app" | awk -v key="$key" '
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      sub(/^[^=]*=[[:space:]]*/, "", $0)
+      sub(/[[:space:]]*#.*$/, "", $0)
+      sub(/^[[:space:]]*"/, "", $0)
+      sub(/"[[:space:]]*$/, "", $0)
+      print
+      exit
+    }
+  '
+}
+
+engineos_app_manifest_array_contains() {
+  local manifest="$1"
+  local app="$2"
+  local key="$3"
+  local needle="$4"
+  local line
+
+  line="$(engineos_app_manifest_section "$manifest" "$app" | awk -v key="$key" '
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      print
+      exit
+    }
+  ')"
+  [[ "$line" == *"\"$needle\""* ]]
+}
+
 have_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
@@ -65,6 +130,7 @@ engineos_packages() {
     engineos-oh-my-zsh \
     engineos-tmux-plugins \
     engineos-agent-tools \
+    engineos-cube \
     engineos-shell \
     engineos-engine-runner \
     engineos-quakespasm \
@@ -125,7 +191,7 @@ engineos_builder_packages() {
     pipewire-pulse \
     wireplumber \
     alsa-utils \
-    sdl2 \
+    sdl2-compat \
     openal \
     freetype2 \
     libpng \
@@ -133,6 +199,18 @@ engineos_builder_packages() {
     libogg \
     libvorbis \
     mpg123
+}
+
+engineos_install_packages() {
+  printf '%s\n' \
+    base \
+    linux \
+    linux-firmware \
+    linux-firmware-whence \
+    efibootmgr \
+    dosfstools \
+    e2fsprogs
+  engineos_builder_packages
 }
 
 die() {

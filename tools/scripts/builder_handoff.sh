@@ -11,6 +11,17 @@ HOST=""
 DEST="/srv/engineos"
 SKIP_BOOTSTRAP=false
 RUN_PROOF=false
+SSH_BIN="${ENGINEOS_SSH:-ssh}"
+RSYNC_BIN="${ENGINEOS_RSYNC:-rsync}"
+SSH_CONNECT_TIMEOUT="${ENGINEOS_SSH_CONNECT_TIMEOUT:-10}"
+SSH_OPTS=(
+  -o BatchMode=yes
+  -o "ConnectTimeout=$SSH_CONNECT_TIMEOUT"
+  -o ServerAliveInterval=5
+  -o ServerAliveCountMax=1
+  -o StrictHostKeyChecking=accept-new
+)
+RSYNC_RSH="$SSH_BIN -o BatchMode=yes -o ConnectTimeout=$SSH_CONNECT_TIMEOUT -o ServerAliveInterval=5 -o ServerAliveCountMax=1 -o StrictHostKeyChecking=accept-new"
 
 usage() {
   cat <<'HELP'
@@ -24,6 +35,11 @@ builder validation, preflight, package lint, shell build, repo build, repo
 validation, EngineDev ISO build, and artifact listing.
 
 Real mode requires --host. Dry-run mode prints the exact commands.
+
+Environment:
+  ENGINEOS_SSH=<path>               Override SSH command
+  ENGINEOS_RSYNC=<path>             Override rsync command
+  ENGINEOS_SSH_CONNECT_TIMEOUT=<s>  Override SSH connect timeout
 HELP
 }
 
@@ -128,10 +144,12 @@ printf '  dest:           %s\n' "$DEST"
 printf '  dry_run:        %s\n' "$DRY_RUN"
 printf '  skip_bootstrap: %s\n' "$SKIP_BOOTSTRAP"
 printf '  run_proof:      %s\n' "$RUN_PROOF"
+printf '  ssh:            %s\n' "$SSH_BIN"
+printf '  rsync:          %s\n' "$RSYNC_BIN"
 
 run_step "local scaffold check" "$SCRIPT_DIR/preflight.sh" repo
-run_step "prepare remote /srv checkout" ssh "$HOST" "$(remote_setup_command)"
-run_step "sync checkout to builder" rsync -a \
+run_step "prepare remote /srv checkout" "$SSH_BIN" "${SSH_OPTS[@]}" "$HOST" "$(remote_setup_command)"
+run_step "sync checkout to builder" "$RSYNC_BIN" -a -e "$RSYNC_RSH" \
   --exclude artifacts/ \
   --exclude out/ \
   --exclude repo/ \
@@ -145,7 +163,7 @@ run_step "sync checkout to builder" rsync -a \
   --exclude .git/ \
   "$ROOT/" \
   "$(remote_dest)/"
-run_step "run builder package proof" ssh "$HOST" "$(remote_builder_command)"
+run_step "run builder package proof" "$SSH_BIN" "${SSH_OPTS[@]}" "$HOST" "$(remote_builder_command)"
 
 printf '\nBuilder handoff sequence completed.\n'
 if [[ "$DRY_RUN" == true ]]; then

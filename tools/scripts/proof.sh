@@ -16,6 +16,7 @@ Usage: proof.sh build-lab [--dry-run] [--profile enginedev]
        proof.sh hardware-ready [--dry-run] [--profile enginedev|engineruntime] [--out-dir <dir>] [--device <block-device>]
        proof.sh booted-iso [--vm|--runtime|--bare-metal] [--dry-run]
        proof.sh shell-launch [--vm|--runtime|--bare-metal] [--dry-run]
+       proof.sh launchpad [--vm|--runtime|--bare-metal] [--dry-run]
 
 Run focused proof sequences for EngineOS milestones.
 
@@ -33,11 +34,16 @@ write dry-run, then name the in-guest bare-metal proof.
 The booted-iso proof runs inside a generated ISO after it boots.
 The shell-launch proof verifies that engineos-shell is the graphical launch
 point for terminal/tmux and OpenGL app clients.
+The launchpad proof verifies the terminal, cube, and engine slot contract.
 HELP
 }
 
 default_log_dir() {
   engineos_default_log_dir "$ROOT"
+}
+
+default_state_dir() {
+  engineos_default_state_dir "$ROOT"
 }
 
 timestamp_utc() {
@@ -465,7 +471,7 @@ proof_shell_launch() {
     run_step "shell process dry-run" printf '%s\n' "pgrep -a engineos-shell"
     run_step "shell log ownership dry-run" printf '%s\n' "grep -E 'engineos-shell mode=|client launch environment|renderer diagnostics' $shell_log"
     run_step "terminal/tmux ownership dry-run" printf '%s\n' "grep -E 'owner=engineos-shell|session command=tmux new -A -s engineos' $terminal_log"
-    run_step "app launch ownership dry-run" printf '%s\n' "grep -E 'app launch app=quake owner=engineos-shell' $app_log"
+    run_step "app launch ownership dry-run" printf '%s\n' "grep -E 'app launch app=(terminal|cube|quake) owner=engineos-shell' $app_log"
     run_step "renderer doctor dry-run" printf '%s\n' "engineos doctor --vm"
     if [[ "$mode" == "bare-metal" ]]; then
       run_step "bare-metal renderer rejection dry-run" printf '%s\n' "engineos validate boot --bare-metal"
@@ -496,6 +502,12 @@ proof_shell_launch() {
   if [[ -r "$app_log" ]]; then
     grep -F 'owner=engineos-shell' "$app_log" >/dev/null ||
       die "app log exists but does not show shell ownership"
+    grep -F 'app launch app=terminal owner=engineos-shell' "$app_log" >/dev/null ||
+      die "app log does not show terminal launch ownership"
+    grep -F 'app launch app=cube owner=engineos-shell' "$app_log" >/dev/null ||
+      die "app log does not show cube launch ownership"
+    grep -F 'app launch app=quake owner=engineos-shell' "$app_log" >/dev/null ||
+      die "app log does not show Quake launch ownership"
   else
     printf 'WARN app log missing: %s\n' "$app_log"
   fi
@@ -506,6 +518,146 @@ proof_shell_launch() {
   fi
 
   printf '\nShell-launch proof runner completed.\n'
+  printf 'Proof log: %s\n' "$log_file"
+}
+
+proof_launchpad() {
+  local dry_run=false
+  local mode="runtime"
+  local log_dir="${ENGINEOS_LOG_DIR:-$(default_log_dir)}"
+  local state_dir="${ENGINEOS_STATE_DIR:-$(default_state_dir)}"
+  local log_file
+  local engineos_cmd
+  local shell_log
+  local shell_state
+  local app_log
+  local cube_log
+  local engine_log
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run)
+        dry_run=true
+        ;;
+      --vm)
+        mode="vm"
+        ;;
+      --runtime)
+        mode="runtime"
+        ;;
+      --bare-metal)
+        mode="bare-metal"
+        ;;
+      help|--help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        die "unknown launchpad proof option: $1"
+        ;;
+    esac
+    shift
+  done
+
+  if ! mkdir -p "$log_dir" 2>/dev/null || ! touch "$log_dir/.engineos-write-test" 2>/dev/null; then
+    log_dir="${TMPDIR:-/tmp}/engineos-logs"
+    mkdir -p "$log_dir"
+  else
+    rm -f "$log_dir/.engineos-write-test"
+  fi
+  log_file="$log_dir/proof-launchpad-$mode-$(timestamp_utc).log"
+  exec > >(tee -a "$log_file") 2>&1
+
+  printf 'EngineOS launchpad proof\n'
+  printf '  root:    %s\n' "$ROOT"
+  printf '  mode:    %s\n' "$mode"
+  printf '  dry_run: %s\n' "$dry_run"
+  printf '  log:     %s\n' "$log_file"
+
+  engineos_cmd="$(engineos_command)"
+  shell_log="$log_dir/shell.log"
+  shell_state="$state_dir/shell-state.json"
+  app_log="$log_dir/app.log"
+  cube_log="$log_dir/cube.log"
+  engine_log="$log_dir/engine.log"
+
+  if [[ "$dry_run" == true ]]; then
+    run_step "app manifest dry-run" printf '%s\n' "engineos app manifest validate"
+    run_step "launchpad status dry-run" printf '%s\n' "engineos app status --json"
+    run_step "launchpad state dry-run" printf '%s\n' "grep -E 'engineos-shell-state-v0|\"active_slot\": \"cube\"|\"bootstrap\": \"launchpad\"' $shell_state"
+    run_step "launchpad bootstrap dry-run" printf '%s\n' "grep -F 'bootstrap mode=launchpad' $shell_log"
+    run_step "launchpad active cube dry-run" printf '%s\n' "grep -F 'launchpad active slot=cube' $shell_log"
+    run_step "launchpad launch actions dry-run" printf '%s\n' "grep -E 'launch action label=bootstrap-(terminal|cube|engine)' $shell_log"
+    run_step "launchpad app ownership dry-run" printf '%s\n' "grep -E 'app launch app=(terminal|cube|quake) owner=engineos-shell' $app_log"
+    run_step "cube renderer dry-run" printf '%s\n' "grep -E 'gl_renderer=|frames=' $cube_log"
+    run_step "engine slot outcome dry-run" printf '%s\n' "grep -E 'view mapped role=engine|role=engine.*process-exited-before-map|Quake assets missing|QuakeSpasm basedir=' $shell_log $engine_log"
+    if [[ "$mode" == "bare-metal" ]]; then
+      run_step "bare-metal output validation dry-run" printf '%s\n' "engineos outputs validate --single"
+    fi
+    printf '\nLaunchpad proof dry-run completed.\n'
+    return
+  fi
+
+  run_step "app manifest" "$engineos_cmd" app manifest validate
+  run_step "app launcher status json" "$engineos_cmd" app status --json
+  run_step "shell logs" "$engineos_cmd" logs shell --last 200
+  run_step "app logs" "$engineos_cmd" logs app --last 200
+  run_step "engine logs" "$engineos_cmd" logs engine --last 200
+
+  [[ -r "$shell_log" ]] || die "shell log missing: $shell_log"
+  [[ -r "$shell_state" ]] || die "shell state missing: $shell_state"
+  grep -F '"schema": "engineos-shell-state-v0"' "$shell_state" >/dev/null ||
+    die "shell state does not use the expected schema"
+  grep -F '"bootstrap": "launchpad"' "$shell_state" >/dev/null ||
+    die "shell state does not show launchpad bootstrap"
+  grep -F '"active_slot": "cube"' "$shell_state" >/dev/null ||
+    die "shell state does not show cube as active launchpad slot"
+  grep -E '"cube": \{"mapped": true, "visible": true' "$shell_state" >/dev/null ||
+    die "shell state does not show visible mapped cube slot"
+  grep -F 'bootstrap mode=launchpad' "$shell_log" >/dev/null ||
+    die "shell log does not show launchpad bootstrap"
+  grep -F 'launchpad active slot=cube' "$shell_log" >/dev/null ||
+    die "shell log does not show cube as active launchpad slot"
+  grep -E 'launch action label=bootstrap-terminal' "$shell_log" >/dev/null ||
+    die "shell log does not show terminal bootstrap launch action"
+  grep -E 'launch action label=bootstrap-cube' "$shell_log" >/dev/null ||
+    die "shell log does not show cube bootstrap launch action"
+  grep -E 'launch action label=bootstrap-engine' "$shell_log" >/dev/null ||
+    die "shell log does not show engine bootstrap launch action"
+
+  [[ -r "$app_log" ]] || die "app log missing: $app_log"
+  grep -F 'app launch app=terminal owner=engineos-shell' "$app_log" >/dev/null ||
+    die "app log does not show terminal launch ownership"
+  grep -F 'app launch app=cube owner=engineos-shell' "$app_log" >/dev/null ||
+    die "app log does not show cube launch ownership"
+  grep -F 'app launch app=quake owner=engineos-shell' "$app_log" >/dev/null ||
+    die "app log does not show Quake launch ownership"
+
+  [[ -r "$cube_log" ]] || die "cube log missing: $cube_log"
+  grep -F 'gl_renderer=' "$cube_log" >/dev/null ||
+    die "cube log does not show GL renderer evidence"
+  grep -F 'frames=' "$cube_log" >/dev/null ||
+    die "cube log does not show rendered frame evidence"
+
+  if grep -F 'view mapped role=engine' "$shell_log" >/dev/null; then
+    printf 'Engine slot mapped in shell log.\n'
+  elif grep -E 'role=engine.*process-exited-before-map|role=engine.*mapped=false' "$shell_log" >/dev/null; then
+    printf 'Engine slot did not map; shell log has launch lifecycle failure evidence.\n'
+    grep -F 'launchpad active slot=cube' "$shell_log" >/dev/null ||
+      die "cube did not remain the active slot while engine was unavailable"
+  elif [[ -r "$engine_log" ]] && grep -E 'Quake assets missing|QuakeSpasm basedir=' "$engine_log" >/dev/null; then
+    printf 'Engine slot did not map; engine log has Quake asset/runtime outcome evidence.\n'
+    grep -F 'launchpad active slot=cube' "$shell_log" >/dev/null ||
+      die "cube did not remain the active slot while engine was unavailable"
+  else
+    die "engine slot outcome is inconclusive: no mapped engine view and no Quake asset/runtime evidence"
+  fi
+
+  if [[ "$mode" == "bare-metal" ]]; then
+    run_step "bare-metal output validation" "$engineos_cmd" outputs validate --single
+  fi
+
+  printf '\nLaunchpad proof runner completed.\n'
   printf 'Proof log: %s\n' "$log_file"
 }
 
@@ -524,6 +676,9 @@ case "$ACTION" in
     ;;
   shell-launch)
     proof_shell_launch "$@"
+    ;;
+  launchpad)
+    proof_launchpad "$@"
     ;;
   help|--help|-h)
     usage

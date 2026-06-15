@@ -201,6 +201,10 @@ lint_pkgbuild() {
         fail "$pkg: quake.conf is not installed"
         return
       fi
+      if ! grep -q 'apps.toml' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: apps.toml is not installed"
+        return
+      fi
       ;;
     engineos-engine-runner)
       if ! grep -q 'engine_runner_daemon.py' "$pkg_dir/PKGBUILD"; then
@@ -247,6 +251,10 @@ lint_pkgbuild() {
       fi
       if ! grep -q 'release.sh' "$pkg_dir/PKGBUILD"; then
         fail "$pkg: release helper is not installed"
+        return
+      fi
+      if ! grep -q 'install_dev.sh' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: EngineDev installer helper is not installed"
         return
       fi
       if ! grep -q 'terminal_launcher.sh' "$pkg_dir/PKGBUILD"; then
@@ -305,6 +313,24 @@ lint_pkgbuild() {
       fi
       if ! grep -q 'libxkbcommon' "$pkg_dir/PKGBUILD"; then
         fail "$pkg: expected libxkbcommon dependency"
+        return
+      fi
+      ;;
+    engineos-cube)
+      if ! grep -q 'apps/cube' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: cube app source tree is not packaged"
+        return
+      fi
+      if ! grep -q 'meson install' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: Meson cube binary is not installed"
+        return
+      fi
+      if ! grep -q 'sdl2' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: expected SDL2 dependency"
+        return
+      fi
+      if ! grep -q 'mesa' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: expected Mesa dependency"
         return
       fi
       ;;

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-install -d -m 0775 -o root -g wheel /var/log/engineos
-install -d -m 0775 -o root -g wheel /var/lib/engineos
+install -d -m 2775 -o root -g wheel /var/log/engineos
+install -d -m 2775 -o root -g wheel /var/lib/engineos
 chown root:wheel /var/log/engineos /var/lib/engineos
-chmod 0775 /var/log/engineos /var/lib/engineos
+chmod 2775 /var/log/engineos /var/lib/engineos
 
 for group in wheel input audio video render; do
   groupadd -f "$group"

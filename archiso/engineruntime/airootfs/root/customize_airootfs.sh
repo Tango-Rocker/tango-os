@@ -10,11 +10,11 @@ usermod -aG wheel,input,audio,video,render engineos || true
 usermod -s /usr/bin/zsh engineos || true
 printf 'engineos:engineos\n' | chpasswd || true
 
-install -d -m 0775 -o root -g wheel /var/log/engineos
-install -d -m 0775 -o root -g wheel /var/lib/engineos
+install -d -m 2775 -o root -g wheel /var/log/engineos
+install -d -m 2775 -o root -g wheel /var/lib/engineos
 install -d -m 0755 /etc/engineos
 chown root:wheel /var/log/engineos /var/lib/engineos
-chmod 0775 /var/log/engineos /var/lib/engineos
+chmod 2775 /var/log/engineos /var/lib/engineos
 
 ln -sf /usr/share/zoneinfo/UTC /etc/localtime
 printf 'LANG=C.UTF-8\n' >/etc/locale.conf

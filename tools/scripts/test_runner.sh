@@ -24,6 +24,7 @@ Usage: test_runner.sh [smoke|all]
        test_runner.sh terminal
        test_runner.sh vm
        test_runner.sh usb
+       test_runner.sh install
        test_runner.sh proof
        test_runner.sh installed-preflight
        test_runner.sh builder-handoff
@@ -67,6 +68,7 @@ run_all() {
   run_all_step terminal
   run_all_step vm
   run_all_step usb
+  run_all_step install
   run_all_step proof
   run_all_step installed-preflight
   run_all_step builder-handoff
@@ -148,19 +150,23 @@ run_shell_actions() {
   cat >"$fake_shell" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >"$ENGINEOS_FAKE_SHELL_ARGS"
+printf 'fake shell stdout marker\n'
 FAKE
   chmod +x "$fake_shell"
 
   ENGINEOS_SHELL_BIN="$fake_shell" \
     ENGINEOS_FAKE_SHELL_ARGS="$args_file" \
     ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-    ENGINEOS_TERMINAL_CMD="foot --server" \
+    ENGINEOS_TERMINAL_SLOT_CMD="foot --server" \
+    ENGINEOS_CUBE_CMD="engineos app launch cube --smoke" \
     ENGINEOS_ENGINE_CMD="engineos app launch quake --smoke" \
     "$SCRIPT_DIR/shell_runner.sh" --nested >/dev/null
 
   grep -Fx -- "--nested" "$args_file" >/dev/null || die "shell actions test missing --nested"
   grep -Fx -- "--terminal" "$args_file" >/dev/null || die "shell actions test missing --terminal"
   grep -Fx -- "foot --server" "$args_file" >/dev/null || die "shell actions test missing terminal command"
+  grep -Fx -- "--cube" "$args_file" >/dev/null || die "shell actions test missing --cube"
+  grep -Fx -- "engineos app launch cube --smoke" "$args_file" >/dev/null || die "shell actions test missing cube command"
   grep -Fx -- "--engine" "$args_file" >/dev/null || die "shell actions test missing --engine"
   grep -Fx -- "engineos app launch quake --smoke" "$args_file" >/dev/null || die "shell actions test missing app command"
 
@@ -171,11 +177,15 @@ FAKE
 
   grep -Fx -- "--tty" "$args_file" >/dev/null || die "shell actions test missing --tty"
   grep -Fx -- "--terminal" "$args_file" >/dev/null || die "shell actions tty missing --terminal"
-  grep -E -- '(^|/)engineos terminal$' "$args_file" >/dev/null || die "shell actions tty missing default terminal command"
+  grep -E -- '(^|/)engineos app launch terminal$' "$args_file" >/dev/null || die "shell actions tty missing default terminal app command"
+  grep -Fx -- "--cube" "$args_file" >/dev/null || die "shell actions tty missing --cube"
+  grep -E -- '(^|/)engineos app launch cube$' "$args_file" >/dev/null || die "shell actions tty missing default cube command"
   grep -Fx -- "--engine" "$args_file" >/dev/null || die "shell actions tty missing --engine"
-  grep -E -- '(^|/)engineos app launch quake --smoke$' "$args_file" >/dev/null || die "shell actions tty missing default app command"
+  grep -E -- '(^|/)engineos app launch quake$' "$args_file" >/dev/null || die "shell actions tty missing default app command"
   grep -Fx -- "--bootstrap" "$args_file" >/dev/null || die "shell actions tty missing --bootstrap"
-  grep -Fx -- "all" "$args_file" >/dev/null || die "shell actions tty missing bootstrap all"
+  grep -Fx -- "launchpad" "$args_file" >/dev/null || die "shell actions tty missing bootstrap launchpad"
+  grep -F 'fake shell stdout marker' "$tmp_dir/logs/shell.log" >/dev/null ||
+    die "shell actions did not tee real shell output to shell log"
 
   printf 'shell actions smoke test passed\n'
 }
@@ -254,15 +264,20 @@ run_app() {
   }
   trap cleanup_app RETURN
 
-  mkdir -p "$fake_bin" "$log_dir"
+  mkdir -p "$fake_bin" "$log_dir" "$tmp_dir/run"
   cat >"$fake_bin/engineos" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >"$ENGINEOS_FAKE_APP_LAUNCHED"
 FAKE
-  chmod +x "$fake_bin/engineos"
+  cat >"$fake_bin/engineos-cube" <<'FAKE'
+#!/usr/bin/env bash
+printf 'fake cube %s\n' "$*"
+FAKE
+  chmod +x "$fake_bin/engineos" "$fake_bin/engineos-cube"
 
   PATH="$fake_bin:$PATH" \
     ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_STATE_DIR="$tmp_dir/run" \
     ENGINEOS_CMD="$fake_bin/engineos" \
     ENGINEOS_FAKE_APP_LAUNCHED="$launched" \
     WAYLAND_DISPLAY="engineos-test-wayland" \
@@ -272,19 +287,58 @@ FAKE
   grep -F 'app launch app=quake owner=engineos-shell display=engineos-test-wayland sdl=wayland args=--smoke' "$log_dir/app.log" >/dev/null ||
     die "app launcher did not log shell-owned quake launch"
 
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    WAYLAND_DISPLAY="engineos-test-wayland" \
+    "$SCRIPT_DIR/app.sh" launch cube --smoke >"$out"
+  grep -F 'app launch app=cube owner=engineos-shell display=engineos-test-wayland sdl=wayland args=--smoke' "$log_dir/app.log" >/dev/null ||
+    die "app launcher did not log shell-owned cube launch"
+  grep -F 'fake cube --smoke' "$log_dir/cube.log" >/dev/null ||
+    die "app launcher did not write cube output to cube log"
+
   if env -u WAYLAND_DISPLAY -u DISPLAY \
       ENGINEOS_LOG_DIR="$log_dir" \
+      ENGINEOS_STATE_DIR="$tmp_dir/run" \
       "$SCRIPT_DIR/app.sh" launch quake --smoke >/dev/null 2>&1; then
     die "app launcher should require WAYLAND_DISPLAY by default"
   fi
   grep -F 'reason=missing-wayland-display app=quake' "$log_dir/app.log" >/dev/null ||
     die "app launcher did not log missing Wayland display"
 
-  ENGINEOS_LOG_DIR="$log_dir" "$SCRIPT_DIR/app.sh" --dry-run launch terminal --class EngineOS >"$out"
+  ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    "$SCRIPT_DIR/app.sh" --dry-run launch terminal --class EngineOS >"$out"
   grep -F 'EngineOS app launch dry-run' "$out" >/dev/null ||
     die "app launcher dry-run missing header"
   grep -F 'app:      terminal' "$out" >/dev/null ||
     die "app launcher dry-run missing app id"
+
+  printf '[2026-01-01T00:00:00Z] app launch app=terminal owner=engineos-shell display=engineos-test-wayland\n' >>"$log_dir/app.log"
+  {
+    printf '[2026-01-01T00:00:00Z] bootstrap mode=launchpad\n'
+    printf '[2026-01-01T00:00:01Z] launchpad active slot=cube mode=terminal capture=none reason=bootstrap-launchpad\n'
+    printf '[2026-01-01T00:00:02Z] view mapped role=cube title=engineos-cube app_id=engineos-cube mapped_total=1\n'
+  } >"$log_dir/shell.log"
+  ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    "$SCRIPT_DIR/app.sh" status --json >"$out"
+  grep -F '"active_slot":"cube"' "$out" >/dev/null ||
+    die "app status json did not report active cube slot"
+  grep -F '"manifest": "' "$out" >/dev/null ||
+    die "app status json did not report manifest path"
+  grep -F '"terminal": {"app":"terminal","command":"engineos app launch terminal","launch_state":"launch-requested"' "$out" >/dev/null ||
+    die "app status json did not report terminal launch state"
+  grep -F '"cube": {"app":"cube","command":"engineos app launch cube","launch_state":"launch-requested","mapped":true' "$out" >/dev/null ||
+    die "app status json did not report mapped cube state"
+  grep -F '"shell_last_log":"[2026-01-01T00:00:02Z] view mapped role=cube title=engineos-cube app_id=engineos-cube mapped_total=1"' "$out" >/dev/null ||
+    die "app status json did not report shell lifecycle evidence"
+  [[ -f "$tmp_dir/run/apps/cube.status" ]] ||
+    die "app launcher did not write cube state record"
+
+  "$SCRIPT_DIR/app.sh" manifest validate >"$out"
+  grep -F 'App manifest validation summary: 0 failure(s)' "$out" >/dev/null ||
+    die "app manifest validation did not pass"
+  grep -F 'cube.app_ids contains engineos-cube' "$out" >/dev/null ||
+    die "app manifest validation did not check cube app id"
 
   printf 'app launcher smoke test passed\n'
 }
@@ -562,6 +616,18 @@ FAKE
   grep -F 'recovery logs: engineos logs runtime --last 200' "$log_dir/runtime-start.log" >/dev/null ||
     die "runtime kernel disable log did not include runtime logs hint"
 
+  mkdir -p "$tmp_dir/run"
+  cat >"$tmp_dir/run/shell-state.json" <<'JSON'
+{
+  "schema": "engineos-shell-state-v0",
+  "active_slot": "cube",
+  "bootstrap": "launchpad",
+  "slots": {
+    "cube": {"mapped": true, "visible": true}
+  }
+}
+JSON
+
   rm -f "$fake_bin/engineos"
   HOME="$tmp_dir/home" \
     ENGINEOS_STATE_DIR="$tmp_dir/run" \
@@ -574,6 +640,10 @@ FAKE
   [[ -f "$bundle_dir/metadata.txt" ]] || die "crash bundle missing metadata"
   [[ -f "$bundle_dir/doctor.txt" ]] || die "crash bundle missing doctor output"
   [[ -f "$bundle_dir/outputs.txt" ]] || die "crash bundle missing output state"
+  [[ -f "$bundle_dir/app-status.json" ]] || die "crash bundle missing app status"
+  [[ -f "$bundle_dir/app-manifest-validate.txt" ]] || die "crash bundle missing app manifest validation"
+  [[ -f "$bundle_dir/state/shell-state.json" ]] || die "crash bundle missing shell state"
+  [[ -f "$bundle_dir/config/apps.toml" ]] || die "crash bundle missing app manifest config"
   [[ -f "$bundle_dir/network-summary.txt" ]] || die "crash bundle missing network summary"
   [[ -f "$bundle_dir/network/ip-address.txt" ]] || die "crash bundle missing ip address output"
   [[ -f "$bundle_dir/network/ip-route.txt" ]] || die "crash bundle missing ip route output"
@@ -588,6 +658,14 @@ FAKE
     die "crash bundle metadata did not record runtime mode"
   grep -F 'doctor.sh --vm' "$bundle_dir/doctor.txt" >/dev/null ||
     die "runtime crash bundle did not run VM doctor mode"
+  grep -F '"slots": {' "$bundle_dir/app-status.json" >/dev/null ||
+    die "crash bundle app status did not include slot state"
+  grep -F '"schema": "engineos-shell-state-v0"' "$bundle_dir/state/shell-state.json" >/dev/null ||
+    die "crash bundle shell state did not preserve schema"
+  grep -F 'App manifest validation summary: 0 failure(s)' "$bundle_dir/app-manifest-validate.txt" >/dev/null ||
+    die "crash bundle app manifest validation did not pass"
+  grep -F '[apps.cube]' "$bundle_dir/config/apps.toml" >/dev/null ||
+    die "crash bundle app manifest did not include cube section"
   grep -F 'Quake assets missing' "$bundle_dir/assets-quake.txt" >/dev/null ||
     die "crash bundle asset check did not capture missing asset failure"
   grep -F 'connector: card0-HDMI-A-1 status=connected' "$bundle_dir/outputs.txt" >/dev/null ||
@@ -702,6 +780,8 @@ run_release() {
     die "release dry-run report missing EngineDev expectation"
   grep -F '`engineos-quakespasm`' "$report.dry-run" >/dev/null ||
     die "release dry-run report missing engineos-quakespasm package expectation"
+  grep -F '`engineos-cube`' "$report.dry-run" >/dev/null ||
+    die "release dry-run report missing engineos-cube package expectation"
 
   "$SCRIPT_DIR/release.sh" checklist --out-dir "$out_dir" --export-dir "$export_dir" --report "$report" >/dev/null
   [[ -f "$dev_iso.sha256" ]] || die "release checklist missing EngineDev checksum"
@@ -714,6 +794,10 @@ run_release() {
     die "release report missing QuakeSpasm binary proof item"
   grep -F 'engineos outputs validate --single' "$report" >/dev/null ||
     die "release report missing output validation proof item"
+  grep -F 'engineos proof launchpad --runtime' "$report" >/dev/null ||
+    die "release report missing launchpad proof item"
+  grep -F 'engineos app manifest validate' "$report" >/dev/null ||
+    die "release report missing app manifest proof item"
   grep -F 'engineos terminal' "$report" >/dev/null ||
     die "release report missing terminal proof item"
   grep -F 'engineos crash-bundle --bare-metal' "$report" >/dev/null ||
@@ -882,6 +966,249 @@ run_usb() {
   printf 'usb write dry-run test passed\n'
 }
 
+run_install() {
+  local tmp_dir="${TMPDIR:-/tmp}/engineos-install-test-$$"
+  local fake_bin="$tmp_dir/bin"
+  local seed="$tmp_dir/seed"
+  local package_cache="$tmp_dir/pkg-cache"
+  local pacman_conf="$tmp_dir/pacman.conf"
+  local target="$tmp_dir/target"
+  local token_file="$tmp_dir/repo-token"
+  local out="$tmp_dir/install.txt"
+  local log="$tmp_dir/commands.log"
+
+  cleanup_install() {
+    rm -rf "$tmp_dir"
+  }
+  trap cleanup_install RETURN
+
+  mkdir -p "$fake_bin" "$seed/.git" "$seed/tools" "$package_cache"
+  printf 'seed\n' >"$seed/README.md"
+  while IFS= read -r package; do
+    printf 'fake package\n' >"$package_cache/$package-1-1-any.pkg.tar.zst"
+  done < <(engineos_install_packages)
+  cat >"$pacman_conf" <<'EOF_PACMAN'
+[options]
+Architecture = auto
+SigLevel = Required DatabaseOptional
+
+[core]
+Include = /etc/pacman.d/mirrorlist
+EOF_PACMAN
+  "$SCRIPT_DIR/install_dev.sh" dev \
+    --dry-run \
+    --device /dev/engineos-test-disk \
+    --target "$target" \
+    --repo-url https://example.invalid/tang-os.git \
+    --branch main >"$out"
+
+  grep -F 'EngineOS EngineDev autoinstall plan' "$out" >/dev/null ||
+    die "install dry-run missing plan header"
+  grep -F 'device:   /dev/engineos-test-disk' "$out" >/dev/null ||
+    die "install dry-run missing target device"
+  grep -F 'persistent /srv workspace' "$out" >/dev/null ||
+    die "install dry-run missing persistent /srv plan"
+  grep -F 'cache:    /opt/engineos/install-cache/pkg' "$out" >/dev/null ||
+    die "install dry-run missing ISO package cache plan"
+  grep -F 'repo auth: none; clone runs non-interactively' "$out" >/dev/null ||
+    die "install dry-run missing repo auth plan"
+  grep -F 'env GIT_TERMINAL_PROMPT=0 git clone https://example.invalid/tang-os.git /srv/engineos' "$out" >/dev/null ||
+    die "install dry-run missing official repo clone"
+  grep -F 'setup_dev_environment.sh --payload /srv/engineos/tools/post-install-payload --user dev' "$out" >/dev/null ||
+    die "install dry-run missing post-install payload handoff"
+  grep -F 'proof booted-iso --bare-metal' "$out" >/dev/null ||
+    die "install dry-run missing bare-metal handoff proof"
+
+  printf 'fake-token\n' >"$token_file"
+  "$SCRIPT_DIR/install_dev.sh" dev \
+    --dry-run \
+    --device /dev/engineos-test-disk \
+    --target "$target" \
+    --repo-url https://example.invalid/tang-os.git \
+    --repo-token-file "$token_file" \
+    --branch main >"$out"
+  grep -F 'repo auth: token file supplied (redacted)' "$out" >/dev/null ||
+    die "install dry-run did not redact repo token file"
+  grep -F 'GIT_ASKPASS=/tmp/engineos-git-askpass GIT_TERMINAL_PROMPT=0 git clone https://example.invalid/tang-os.git /srv/engineos' "$out" >/dev/null ||
+    die "install dry-run missing private repo askpass clone"
+  if grep -F 'fake-token' "$out" >/dev/null || grep -F "$token_file" "$out" >/dev/null; then
+    die "install dry-run leaked repo token file details"
+  fi
+
+  cat >"$fake_bin/sudo" <<'FAKE'
+#!/usr/bin/env bash
+printf 'sudo %s\n' "$*" >>"$ENGINEOS_FAKE_INSTALL_LOG"
+exec "$@"
+FAKE
+  cat >"$fake_bin/lsblk" <<'FAKE'
+#!/usr/bin/env bash
+printf 'lsblk %s\n' "$*" >>"$ENGINEOS_FAKE_INSTALL_LOG"
+exit 0
+FAKE
+  cat >"$fake_bin/findmnt" <<'FAKE'
+#!/usr/bin/env bash
+printf 'findmnt %s\n' "$*" >>"$ENGINEOS_FAKE_INSTALL_LOG"
+exit 1
+FAKE
+  cat >"$fake_bin/wipefs" <<'FAKE'
+#!/usr/bin/env bash
+printf 'wipefs %s\n' "$*" >>"$ENGINEOS_FAKE_INSTALL_LOG"
+FAKE
+  cat >"$fake_bin/sfdisk" <<'FAKE'
+#!/usr/bin/env bash
+printf 'sfdisk %s\n' "$*" >>"$ENGINEOS_FAKE_INSTALL_LOG"
+cat >/dev/null
+FAKE
+  cat >"$fake_bin/udevadm" <<'FAKE'
+#!/usr/bin/env bash
+printf 'udevadm %s\n' "$*" >>"$ENGINEOS_FAKE_INSTALL_LOG"
+FAKE
+  cat >"$fake_bin/mkfs.fat" <<'FAKE'
+#!/usr/bin/env bash
+printf 'mkfs.fat %s\n' "$*" >>"$ENGINEOS_FAKE_INSTALL_LOG"
+FAKE
+  cat >"$fake_bin/mkfs.ext4" <<'FAKE'
+#!/usr/bin/env bash
+printf 'mkfs.ext4 %s\n' "$*" >>"$ENGINEOS_FAKE_INSTALL_LOG"
+FAKE
+  cat >"$fake_bin/mount" <<'FAKE'
+#!/usr/bin/env bash
+printf 'mount %s\n' "$*" >>"$ENGINEOS_FAKE_INSTALL_LOG"
+mkdir -p "${@: -1}"
+FAKE
+  cat >"$fake_bin/pacstrap" <<'FAKE'
+#!/usr/bin/env bash
+printf 'pacstrap %s\n' "$*" >>"$ENGINEOS_FAKE_INSTALL_LOG"
+target=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -C)
+      shift 2
+      ;;
+    -*)
+      shift
+      ;;
+    *)
+      target="$1"
+      break
+      ;;
+  esac
+done
+[[ -n "$target" ]] || exit 2
+mkdir -p "$target/etc/pacman.d" "$target/etc/sudoers.d" "$target/boot" "$target/srv"
+printf '[options]\n' >"$target/etc/pacman.conf"
+FAKE
+  cat >"$fake_bin/genfstab" <<'FAKE'
+#!/usr/bin/env bash
+printf 'genfstab %s\n' "$*" >>"$ENGINEOS_FAKE_INSTALL_LOG"
+printf 'UUID=fake-root / ext4 rw 0 1\n'
+FAKE
+  cat >"$fake_bin/arch-chroot" <<'FAKE'
+#!/usr/bin/env bash
+printf 'arch-chroot %s\n' "$*" >>"$ENGINEOS_FAKE_INSTALL_LOG"
+cat >/dev/null || true
+FAKE
+  cat >"$fake_bin/blkid" <<'FAKE'
+#!/usr/bin/env bash
+printf 'blkid %s\n' "$*" >>"$ENGINEOS_FAKE_INSTALL_LOG"
+printf '00000000-0000-4000-8000-000000000000\n'
+FAKE
+  cat >"$fake_bin/git" <<'FAKE'
+#!/usr/bin/env bash
+printf 'git %s\n' "$*" >>"$ENGINEOS_FAKE_INSTALL_LOG"
+FAKE
+  chmod +x "$fake_bin"/*
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_INSTALL_ALLOW_FAKE_DEVICE=true \
+    ENGINEOS_INSTALL_PACMAN_CONF="$pacman_conf" \
+    ENGINEOS_FAKE_INSTALL_LOG="$log" \
+    "$SCRIPT_DIR/install_dev.sh" dev \
+      --device /dev/engineos-test-disk \
+      --target "$target" \
+      --repo-url https://example.invalid/tang-os.git \
+      --repo-seed "$seed" \
+      --package-cache "$package_cache" \
+      --branch main \
+      --skip-codex \
+      --yes-i-understand-this-wipes-device >"$tmp_dir/install-real.txt"
+
+  grep -F 'EngineDev autoinstall completed' "$tmp_dir/install-real.txt" >/dev/null ||
+    die "install executor did not complete with fake commands"
+  grep -F 'wipefs --all /dev/engineos-test-disk' "$log" >/dev/null ||
+    die "install executor did not wipe target"
+  grep -F 'sfdisk /dev/engineos-test-disk' "$log" >/dev/null ||
+    die "install executor did not partition target"
+  grep -F 'pacstrap -c -C ' "$log" >/dev/null ||
+    die "install executor did not run pacstrap with cached host package mode"
+  grep -F "CacheDir = $package_cache" /tmp/engineos-install-pacman-*.conf >/dev/null ||
+    die "install executor did not generate cached pacman config"
+  grep -F 'cp -a '"$seed"'/. '"$target"'/tmp/tang-os-seed/' "$log" >/dev/null ||
+    die "install executor did not stage seed repo"
+  grep -F 'arch-chroot '"$target"' env GIT_TERMINAL_PROMPT=0 git clone file:///tmp/tang-os-seed /srv/engineos' "$log" >/dev/null ||
+    die "install executor did not clone seed repo in target"
+  grep -F 'arch-chroot '"$target"' /srv/engineos/tools/post-install-payload/scripts/setup_dev_environment.sh' "$log" >/dev/null ||
+    die "install executor did not run post-install payload"
+  grep -F 'Server = file:///srv/engineos/repo/$arch' "$target/etc/pacman.conf" >/dev/null ||
+    die "install executor did not configure installed local pacman repo"
+  [[ -f "$target/srv/ENGINEOS_INSTALL_HANDOFF.txt" ]] ||
+    die "install executor did not write handoff marker"
+
+  rm -rf "$target" "$log"
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_INSTALL_ALLOW_FAKE_DEVICE=true \
+    ENGINEOS_INSTALL_PACMAN_CONF="$pacman_conf" \
+    ENGINEOS_FAKE_INSTALL_LOG="$log" \
+    "$SCRIPT_DIR/install_dev.sh" dev \
+      --device /dev/engineos-test-disk \
+      --target "$target" \
+      --repo-url https://example.invalid/tang-os.git \
+      --repo-token-file "$token_file" \
+      --package-cache "$package_cache" \
+      --branch main \
+      --skip-codex \
+      --yes-i-understand-this-wipes-device >"$tmp_dir/install-private-repo.txt"
+
+  grep -F 'repo auth: token file supplied (redacted)' "$tmp_dir/install-private-repo.txt" >/dev/null ||
+    die "install executor did not report redacted repo token auth"
+  grep -F 'arch-chroot '"$target"' env GIT_ASKPASS=/tmp/engineos-git-askpass GIT_TERMINAL_PROMPT=0 git clone https://example.invalid/tang-os.git /srv/engineos' "$log" >/dev/null ||
+    die "install executor did not clone private repo with askpass"
+  if grep -F 'fake-token' "$tmp_dir/install-private-repo.txt" >/dev/null || grep -F 'fake-token' "$log" >/dev/null; then
+    die "install executor leaked repo token"
+  fi
+  [[ ! -e "$target/run/engineos/repo-token" ]] ||
+    die "install executor left repo token in target"
+  [[ ! -e "$target/tmp/engineos-git-askpass" ]] ||
+    die "install executor left git askpass helper in target"
+
+  rm -rf "$target" "$log" "$package_cache"
+  mkdir -p "$package_cache"
+  printf 'fake package\n' >"$package_cache/base-1-1-any.pkg.tar.zst"
+  if PATH="$fake_bin:$PATH" \
+    ENGINEOS_INSTALL_ALLOW_FAKE_DEVICE=true \
+    ENGINEOS_INSTALL_PACMAN_CONF="$pacman_conf" \
+    ENGINEOS_FAKE_INSTALL_LOG="$log" \
+    "$SCRIPT_DIR/install_dev.sh" dev \
+      --device /dev/engineos-test-disk \
+      --target "$target" \
+      --repo-url https://example.invalid/tang-os.git \
+      --repo-seed "$seed" \
+      --package-cache "$package_cache" \
+      --branch main \
+      --skip-codex \
+      --yes-i-understand-this-wipes-device >"$tmp_dir/install-partial-cache.txt" 2>"$tmp_dir/install-partial-cache.err"; then
+    die "install executor should reject an incomplete package cache"
+  fi
+  grep -F 'EngineDev install package cache is incomplete' "$tmp_dir/install-partial-cache.err" >/dev/null ||
+    die "install executor did not explain incomplete package cache"
+
+  if "$SCRIPT_DIR/install_dev.sh" dev --device /dev/engineos-test-disk >/dev/null 2>&1; then
+    die "install real mode should require explicit wipe acknowledgement"
+  fi
+
+  printf 'EngineDev installer dry-run test passed\n'
+}
+
 run_proof() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-proof-test-$$"
 
@@ -927,6 +1254,66 @@ run_proof() {
     die "shell-launch proof did not check renderer diagnostics"
   grep -F 'owner=engineos-shell' "$tmp_dir/shell-launch.txt" >/dev/null ||
     die "shell-launch proof did not check shell-owned launch markers"
+  ENGINEOS_LOG_DIR="$tmp_dir/logs" "$SCRIPT_DIR/proof.sh" launchpad --runtime --dry-run >"$tmp_dir/launchpad.txt"
+  grep -F 'Launchpad proof dry-run completed' "$tmp_dir/launchpad.txt" >/dev/null ||
+    die "launchpad proof dry-run did not complete"
+  grep -F 'engineos app status --json' "$tmp_dir/launchpad.txt" >/dev/null ||
+    die "launchpad proof did not check structured app status"
+  grep -F 'engineos app manifest validate' "$tmp_dir/launchpad.txt" >/dev/null ||
+    die "launchpad proof did not validate app manifest"
+  grep -F 'app=(terminal|cube|quake)' "$tmp_dir/launchpad.txt" >/dev/null ||
+    die "launchpad proof did not check all app ownership markers"
+
+  local launchpad_logs="$tmp_dir/launchpad-logs"
+  local launchpad_state="$tmp_dir/launchpad-state"
+  mkdir -p "$launchpad_logs" "$launchpad_state"
+  {
+    printf '[2026-01-01T00:00:00Z] engineos-shell mode=tty backend=drm,libinput wayland_display=wayland-1\n'
+    printf '[2026-01-01T00:00:01Z] bootstrap mode=launchpad\n'
+    printf '[2026-01-01T00:00:02Z] launchpad active slot=cube mode=terminal capture=none reason=bootstrap-launchpad\n'
+    printf '[2026-01-01T00:00:03Z] launch action label=bootstrap-terminal role=terminal pid=100 command=engineos app launch terminal\n'
+    printf '[2026-01-01T00:00:04Z] launch action label=bootstrap-cube role=cube pid=101 command=engineos app launch cube\n'
+    printf '[2026-01-01T00:00:05Z] launch action label=bootstrap-engine role=engine pid=102 command=engineos app launch quake\n'
+    printf '[2026-01-01T00:00:06Z] view mapped role=cube title=engineos-cube app_id=engineos-cube mapped_total=1\n'
+    printf '[2026-01-01T00:00:07Z] launch action exit label=bootstrap-engine role=engine pid=102 status=exited code=1 mapped=false command=engineos app launch quake\n'
+    printf '[2026-01-01T00:00:08Z] launchpad slot unavailable role=engine reason=process-exited-before-map status=exited code=1\n'
+  } >"$launchpad_logs/shell.log"
+  cat >"$launchpad_state/shell-state.json" <<'JSON'
+{
+  "schema": "engineos-shell-state-v0",
+  "pid": 999,
+  "mode": "tty",
+  "wayland_display": "wayland-1",
+  "bootstrap": "launchpad",
+  "active_slot": "cube",
+  "pending_slot": "unknown",
+  "input": {"mode": "terminal", "capture": false},
+  "counts": {"outputs": 1, "keyboards": 1, "pointers": 1, "views": 1},
+  "last_reason": "launch-exit",
+  "slots": {
+    "terminal": {"mapped": false, "visible": false, "title": "", "app_id": ""},
+    "cube": {"mapped": true, "visible": true, "title": "engineos-cube", "app_id": "engineos-cube"},
+    "engine": {"mapped": false, "visible": false, "title": "", "app_id": ""}
+  },
+  "launches": []
+}
+JSON
+  {
+    printf '[2026-01-01T00:00:03Z] app launch app=terminal owner=engineos-shell display=wayland-1\n'
+    printf '[2026-01-01T00:00:04Z] app launch app=cube owner=engineos-shell display=wayland-1 sdl=wayland args= log=%s/cube.log\n' "$launchpad_logs"
+    printf '[2026-01-01T00:00:05Z] app launch app=quake owner=engineos-shell display=wayland-1 sdl=wayland args=\n'
+  } >"$launchpad_logs/app.log"
+  {
+    printf 'EngineOS cube app\n'
+    printf 'gl_renderer=llvmpipe test renderer\n'
+    printf 'frames=8\n'
+    printf 'result=smoke-ok\n'
+  } >"$launchpad_logs/cube.log"
+  printf 'Quake assets missing: id1/pak0.pak was not found.\n' >"$launchpad_logs/engine.log"
+  ENGINEOS_LOG_DIR="$launchpad_logs" ENGINEOS_STATE_DIR="$launchpad_state" \
+    "$SCRIPT_DIR/proof.sh" launchpad --runtime >"$tmp_dir/launchpad-real.txt"
+  grep -F 'Launchpad proof runner completed' "$tmp_dir/launchpad-real.txt" >/dev/null ||
+    die "launchpad proof did not pass with fixture logs"
 
   if ! find "$tmp_dir/logs" -maxdepth 1 -type f -name 'proof-booted-iso-*.log' -size +0c -print -quit | grep -q .; then
     die "proof dry-run did not create non-empty proof logs"
@@ -958,10 +1345,16 @@ run_builder_handoff() {
   mkdir -p "$tmp_dir"
 
   "$SCRIPT_DIR/builder_handoff.sh" --dry-run --host dev@192.0.2.10 --dest /srv/engineos >"$out"
-  grep -F 'ssh dev@192.0.2.10' "$out" >/dev/null ||
+  grep -F 'dev@192.0.2.10' "$out" >/dev/null ||
     die "builder handoff dry-run did not include ssh target"
+  grep -F -- '-o BatchMode=yes' "$out" >/dev/null ||
+    die "builder handoff dry-run did not use non-interactive ssh"
+  grep -F -- '-o ConnectTimeout=' "$out" >/dev/null ||
+    die "builder handoff dry-run did not use ssh connect timeout"
   grep -F 'rsync -a' "$out" >/dev/null ||
     die "builder handoff dry-run did not include rsync"
+  grep -F -- '-e ssh\' "$out" >/dev/null ||
+    die "builder handoff dry-run did not route rsync through configured ssh"
   grep -F '/srv/engineos' "$out" >/dev/null ||
     die "builder handoff dry-run did not target /srv/engineos"
   grep -F './tools/engineos/engineos\ bootstrap\ builder' "$out" >/dev/null ||
@@ -1094,6 +1487,8 @@ run_post_first_deploy() {
     die "post-first-deploy dev shell service does not launch tmux"
   grep -F 'engineos-shell' "$ROOT/tools/post-install-payload/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not request engineos-shell"
+  grep -F 'engineos-cube' "$ROOT/tools/post-install-payload/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not request engineos-cube"
 
   printf 'post-first-deploy dry-run test passed\n'
 }
@@ -1122,6 +1517,8 @@ run_repo() {
     die "repo dry-run did not document forced package rebuilds"
   grep -F 'repo-add: after each package' "$out" >/dev/null ||
     die "repo dry-run did not document incremental repo-add"
+  grep -F 'latest package artifacts' "$out" >/dev/null ||
+    die "repo dry-run did not document latest-artifact selection"
   grep -F 'local deps: already-built engineos-* runtime dependencies' "$out" >/dev/null ||
     die "repo dry-run did not document local dependency handling"
   grep -F 'packages/engineos-quakespasm' "$out" >/dev/null ||
@@ -1139,6 +1536,7 @@ run_boot() {
   local fake_bin="$tmp_dir/bin"
   local log_dir="$tmp_dir/logs"
   local runtime_conf="$tmp_dir/runtime.conf"
+  local apps_manifest="$tmp_dir/apps.toml"
   local drm_sysfs="$tmp_dir/sys/class/drm"
   local dri_dir="$tmp_dir/dev/dri"
   local out="$tmp_dir/out.txt"
@@ -1150,7 +1548,45 @@ run_boot() {
   trap cleanup_boot RETURN
 
   mkdir -p "$fake_bin" "$log_dir" "$drm_sysfs/card0-HDMI-A-1" "$dri_dir"
-  printf 'ENGINEOS_RUNTIME_RECOVERY_TTY=tty2\nENGINEOS_TERMINAL_SESSION_CMD="tmux new -A -s engineos"\n' >"$runtime_conf"
+  {
+    printf 'ENGINEOS_SHELL_BOOTSTRAP=launchpad\n'
+    printf 'ENGINEOS_CUBE_CMD="engineos app launch cube"\n'
+    printf 'ENGINEOS_ENGINE_CMD="engineos app launch quake"\n'
+    printf 'ENGINEOS_RUNTIME_RECOVERY_TTY=tty2\n'
+    printf 'ENGINEOS_TERMINAL_SESSION_CMD="tmux new -A -s engineos"\n'
+  } >"$runtime_conf"
+  cat >"$apps_manifest" <<'EOF_MANIFEST'
+[apps.terminal]
+slot = "terminal"
+role = "terminal"
+command = "engineos app launch terminal"
+package = "foot"
+app_ids = ["foot"]
+log = "terminal.log"
+input = "normal"
+
+[apps.cube]
+slot = "cube"
+role = "cube"
+command = "engineos app launch cube"
+smoke_command = "engineos app launch cube --smoke"
+package = "engineos-cube"
+app_ids = ["engineos-cube"]
+log = "cube.log"
+health = "gl-renderer-and-frames"
+input = "normal"
+
+[apps.quake]
+slot = "engine"
+role = "engine"
+command = "engineos app launch quake"
+smoke_command = "engineos app launch quake --smoke"
+package = "engineos-quakespasm"
+app_ids = ["quakespasm"]
+log = "engine.log"
+assets = "quake"
+input = "game"
+EOF_MANIFEST
   {
     printf '[2026-01-01T00:00:00Z] starting EngineOS shell mode=--tty recovery=tty2\n'
     printf '[2026-01-01T00:00:01Z] EngineOS shell failed rc=77; recovery TTY should remain available\n'
@@ -1164,7 +1600,7 @@ run_boot() {
   cat >"$fake_bin/systemctl" <<'FAKE'
 #!/usr/bin/env bash
 case "$1" in
-  is-enabled|status)
+  is-enabled|is-active|status)
     exit 0
     ;;
   *)
@@ -1185,6 +1621,13 @@ FAKE
 
   cat >"$fake_bin/engineos" <<'FAKE'
 #!/usr/bin/env bash
+if [[ "$1" == "app" && "$2" == "manifest" && "$3" == "validate" ]]; then
+  printf 'EngineOS app manifest validation\n'
+  printf '  manifest: %s\n' "${ENGINEOS_APPS_MANIFEST:-missing}"
+  printf 'OK   cube.app_ids contains engineos-cube\n'
+  printf 'App manifest validation summary: 0 failure(s)\n'
+  exit 0
+fi
 printf 'fake engineos %s\n' "$*"
 FAKE
   chmod +x "$fake_bin/engineos"
@@ -1193,7 +1636,11 @@ FAKE
 #!/usr/bin/env bash
 exit 0
 FAKE
-  chmod +x "$fake_bin/quakespasm"
+  cat >"$fake_bin/engineos-cube" <<'FAKE'
+#!/usr/bin/env bash
+exit 0
+FAKE
+  chmod +x "$fake_bin/quakespasm" "$fake_bin/engineos-cube"
 
   cat >"$fake_bin/engineos-recovery-help" <<'FAKE'
 #!/usr/bin/env bash
@@ -1219,16 +1666,27 @@ FAKE
 
   PATH="$fake_bin:$PATH" \
     ENGINEOS_RUNTIME_CONF="$runtime_conf" \
+    ENGINEOS_APPS_MANIFEST="$apps_manifest" \
     ENGINEOS_LOG_DIR="$log_dir" \
     ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
     ENGINEOS_FAKE_DOCTOR_ARGS="$doctor_log" \
     "$SCRIPT_DIR/validate_boot.sh" --runtime >"$out"
+  grep -F "app manifest exists: $apps_manifest" "$out" >/dev/null ||
+    die "runtime boot validation did not require app manifest"
+  grep -F 'app manifest validates' "$out" >/dev/null ||
+    die "runtime boot validation did not validate app manifest"
   grep -F 'runtime recovery TTY configured: tty2' "$out" >/dev/null ||
     die "runtime boot validation did not read runtime recovery TTY fixture"
   grep -F 'package installed: engineos-shell' "$out" >/dev/null ||
     die "runtime boot validation did not require engineos-shell"
+  grep -F 'package installed: ttf-dejavu' "$out" >/dev/null ||
+    die "runtime boot validation did not require terminal fonts"
   grep -F 'command available: quakespasm' "$out" >/dev/null ||
     die "runtime boot validation did not check quakespasm command"
+  grep -F 'command available: engineos-cube' "$out" >/dev/null ||
+    die "runtime boot validation did not check engineos-cube command"
+  grep -F 'runtime shell bootstrap starts launchpad' "$out" >/dev/null ||
+    die "runtime boot validation did not check launchpad bootstrap"
   grep -F 'runtime autostart log records startup decision' "$out" >/dev/null ||
     die "runtime boot validation did not check autostart startup log"
   grep -F 'runtime autostart log records outcome' "$out" >/dev/null ||
@@ -1236,9 +1694,24 @@ FAKE
   grep -Fx -- '--vm' "$doctor_log" >/dev/null ||
     die "runtime boot validation did not call doctor in VM mode"
 
+  printf '[2026-01-01T00:00:00Z] starting EngineOS shell mode=--tty recovery=tty2\n' >"$log_dir/runtime-start.log"
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_RUNTIME_CONF="$runtime_conf" \
+    ENGINEOS_APPS_MANIFEST="$apps_manifest" \
+    ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
+    ENGINEOS_FAKE_DOCTOR_ARGS="$doctor_log" \
+    "$SCRIPT_DIR/validate_boot.sh" --runtime >"$out"
+  grep -F 'runtime shell service active: engineos-runtime.service' "$out" >/dev/null ||
+    die "runtime boot validation did not accept active runtime shell service"
+  if grep -F 'runtime autostart appears to still be running' "$out" >/dev/null; then
+    die "runtime boot validation warned for active runtime shell service"
+  fi
+
   : >"$doctor_log"
   PATH="$fake_bin:$PATH" \
     ENGINEOS_RUNTIME_CONF="$runtime_conf" \
+    ENGINEOS_APPS_MANIFEST="$apps_manifest" \
     ENGINEOS_LOG_DIR="$log_dir" \
     ENGINEOS_DRI_DIR="$dri_dir" \
     ENGINEOS_DRM_SYSFS="$drm_sysfs" \
@@ -1478,6 +1951,9 @@ case "$SCOPE" in
     ;;
   usb)
     run_usb
+    ;;
+  install)
+    run_install
     ;;
   proof)
     run_proof

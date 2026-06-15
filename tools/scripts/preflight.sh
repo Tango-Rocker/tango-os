@@ -193,6 +193,13 @@ check_package_inputs() {
       require_file "packages/engineos-config/files/etc/engineos/profile.conf"
       require_file "packages/engineos-config/files/etc/engineos/runtime.conf"
       require_file "packages/engineos-config/files/etc/engineos/quake.conf"
+      require_file "packages/engineos-config/files/etc/engineos/apps.toml"
+      if ENGINEOS_APPS_MANIFEST="$ROOT/packages/engineos-config/files/etc/engineos/apps.toml" \
+          "$ROOT/tools/scripts/app.sh" manifest validate >/dev/null; then
+        ok "engineos app manifest validates"
+      else
+        fail "engineos app manifest validation failed"
+      fi
       ;;
     engineos-cli)
       require_file "tools/engineos/engineos"
@@ -210,6 +217,7 @@ check_package_inputs() {
       require_file "tools/scripts/app.sh"
       require_file "tools/scripts/artifacts.sh"
       require_file "tools/scripts/release.sh"
+      require_file "tools/scripts/install_dev.sh"
       require_file "tools/scripts/terminal_launcher.sh"
       require_file "tools/scripts/capture_frame.sh"
       require_file "tools/scripts/doctor.sh"
@@ -255,6 +263,11 @@ check_package_inputs() {
       require_file "docs/agent-workflow.md"
       require_file ".agents/skills/code-navigation/SKILL.md"
       ;;
+    engineos-cube)
+      require_file "apps/cube/README.md"
+      require_file "apps/cube/meson.build"
+      require_file "apps/cube/src/engineos-cube.c"
+      ;;
     engineos-shell)
       require_file "shell/README.md"
       require_file "shell/meson.build"
@@ -267,7 +280,14 @@ check_package_inputs() {
       require_file "engine-runner/README.md"
       if grep -F 'LogsDirectory=engineos' "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null; then
         fail "engineos-engine-runner service lets systemd reset /var/log/engineos permissions"
-      elif grep -F 'ExecStartPre=/usr/bin/install -d -m 0775 -o root -g wheel /var/log/engineos /var/lib/engineos' \
+      elif grep -F 'RuntimeDirectory=engineos' "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null; then
+        fail "engineos-engine-runner service lets systemd reset /run/engineos permissions"
+      elif grep -F 'UMask=0002' "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null &&
+          grep -F 'ExecStartPre=/usr/bin/install -d -m 2775 -o root -g wheel /run/engineos /var/log/engineos /var/lib/engineos' \
+          "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null &&
+          grep -F 'ExecStartPre=/usr/bin/chown root:wheel /run/engineos /var/log/engineos /var/lib/engineos' \
+          "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null &&
+          grep -F 'ExecStartPre=/usr/bin/chmod 2775 /run/engineos /var/log/engineos /var/lib/engineos' \
           "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null; then
         ok "engineos-engine-runner service preserves EngineOS log/state permissions"
       else
@@ -301,6 +321,7 @@ check_installed_scripts() {
   require_abs_file "$INSTALLED_SCRIPT_DIR/logs.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/outputs.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/proof.sh"
+  require_abs_file "$INSTALLED_SCRIPT_DIR/install_dev.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/test_runner.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/validate_boot.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/crash_bundle.sh"
@@ -343,6 +364,7 @@ check_scripts() {
   require_file "tools/scripts/app.sh"
   require_file "tools/scripts/artifacts.sh"
   require_file "tools/scripts/release.sh"
+  require_file "tools/scripts/install_dev.sh"
   require_file "tools/scripts/terminal_launcher.sh"
   require_file "tools/scripts/capture_frame.sh"
   require_file "tools/scripts/doctor.sh"
@@ -392,6 +414,7 @@ check_scripts() {
   check_bash_syntax "tools/scripts/app.sh"
   check_bash_syntax "tools/scripts/artifacts.sh"
   check_bash_syntax "tools/scripts/release.sh"
+  check_bash_syntax "tools/scripts/install_dev.sh"
   check_bash_syntax "tools/scripts/terminal_launcher.sh"
   check_bash_syntax "tools/scripts/capture_frame.sh"
   check_bash_syntax "tools/scripts/doctor.sh"
@@ -482,6 +505,8 @@ check_iso() {
 
   if [[ "$PROFILE" == "enginedev" ]]; then
     require_profile_package "$profile_dir" "foot"
+    require_profile_package "$profile_dir" "ttf-dejavu"
+    require_profile_package "$profile_dir" "engineos-cube"
     require_profile_package "$profile_dir" "engineos-shell"
     require_profile_package "$profile_dir" "engineos-engine-runner"
     require_profile_package "$profile_dir" "engineos-quakespasm"
@@ -545,7 +570,7 @@ check_iso() {
       fail "$profile_dir does not write EngineOS version/profile/login banner"
     fi
     if grep -F 'chown root:wheel /var/log/engineos /var/lib/engineos' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null &&
-        grep -F 'chmod 0775 /var/log/engineos /var/lib/engineos' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null; then
+        grep -F 'chmod 2775 /var/log/engineos /var/lib/engineos' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null; then
       ok "$profile_dir live setup repairs EngineOS state/log permissions"
     else
       fail "$profile_dir live setup does not repair EngineOS state/log permissions"
@@ -558,6 +583,8 @@ check_iso() {
     fi
   elif [[ "$PROFILE" == "engineruntime" ]]; then
     require_profile_package "$profile_dir" "foot"
+    require_profile_package "$profile_dir" "ttf-dejavu"
+    require_profile_package "$profile_dir" "engineos-cube"
     require_profile_package "$profile_dir" "engineos-shell"
     require_profile_package "$profile_dir" "engineos-engine-runner"
     require_profile_package "$profile_dir" "engineos-quakespasm"
@@ -616,7 +643,7 @@ check_iso() {
       fail "$profile_dir does not write EngineOS version/profile/login banner"
     fi
     if grep -F 'chown root:wheel /var/log/engineos /var/lib/engineos' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null &&
-        grep -F 'chmod 0775 /var/log/engineos /var/lib/engineos' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null; then
+        grep -F 'chmod 2775 /var/log/engineos /var/lib/engineos' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null; then
       ok "$profile_dir live setup repairs EngineOS state/log permissions"
     else
       fail "$profile_dir live setup does not repair EngineOS state/log permissions"
@@ -629,7 +656,7 @@ check_iso() {
     fi
     if grep -Fx 'User=engineos' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-runtime.service" >/dev/null &&
         grep -Fx 'PAMName=login' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-runtime.service" >/dev/null &&
-        grep -Fx 'SupplementaryGroups=input audio video render' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-runtime.service" >/dev/null; then
+        grep -Fx 'SupplementaryGroups=wheel input audio video render' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-runtime.service" >/dev/null; then
       ok "$profile_dir runtime service runs in engineos login session with device groups"
     else
       fail "$profile_dir runtime service is not configured for the engineos user seat"
@@ -639,10 +666,11 @@ check_iso() {
     else
       fail "$profile_dir live setup ordering can block runtime services"
     fi
-    if grep -F 'ENGINEOS_ENGINE_SOCKET=/run/engineos/engine-runner.sock' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-runtime.service" >/dev/null; then
-      fail "$profile_dir runtime service forces the root engine runner socket"
+    if ! grep -F 'ENGINEOS_STATE_DIR=/run/engineos' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-runtime.service" >/dev/null &&
+        grep -F 'ENGINEOS_ENGINE_SOCKET=/run/engineos/engine-runner.sock' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-runtime.service" >/dev/null; then
+      ok "$profile_dir runtime service separates app state from shared engine runner socket"
     else
-      ok "$profile_dir runtime service leaves engine runner socket per-user"
+      fail "$profile_dir runtime service couples app state to the shared engine runner socket"
     fi
     if grep -F 'systemctl enable getty@tty2.service' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null; then
       ok "$profile_dir enables recovery getty@tty2.service"

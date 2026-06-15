@@ -12,10 +12,11 @@ CLEAN=false
 ARCHIVE_EXISTING=false
 TMPFS_SIZE="${ENGINEOS_BUILD_TMPFS_SIZE:-8G}"
 COMPRESSION="${ENGINEOS_ISO_COMPRESSION:-profile}"
+INSTALL_CACHE="${ENGINEOS_ISO_INSTALL_CACHE:-auto}"
 
 usage() {
   cat <<'HELP'
-Usage: build_iso.sh [profile] [--dry-run] [--clean] [--archive-existing] [--fast|--compression profile|fast]
+Usage: build_iso.sh [profile] [--dry-run] [--clean] [--archive-existing] [--fast|--compression profile|fast] [--install-cache|--no-install-cache]
 
 Build an EngineOS archiso profile.
 
@@ -57,6 +58,12 @@ while [[ $# -gt 0 ]]; do
       [[ -n "$COMPRESSION" ]] || die "--compression requires profile or fast"
       shift
       ;;
+    --install-cache)
+      INSTALL_CACHE="true"
+      ;;
+    --no-install-cache)
+      INSTALL_CACHE="false"
+      ;;
     *)
       die "unknown build_iso option: $1"
       ;;
@@ -72,12 +79,35 @@ case "$COMPRESSION" in
     ;;
 esac
 
+case "$INSTALL_CACHE" in
+  auto|true|false)
+    ;;
+  *)
+    die "unknown ISO install cache mode: $INSTALL_CACHE"
+    ;;
+esac
+
+install_cache_enabled() {
+  case "$INSTALL_CACHE" in
+    true)
+      return 0
+      ;;
+    false)
+      return 1
+      ;;
+    auto)
+      [[ "$PROFILE" == "enginedev" ]]
+      ;;
+  esac
+}
+
 PROFILE_DIR="$ROOT/archiso/$PROFILE"
 PROFILE_BUILD_DIR="$PROFILE_DIR"
-FAST_PROFILE_DIR="$ROOT/work/generated-profiles/$PROFILE-fast"
+GENERATED_PROFILE_DIR="$ROOT/work/generated-profiles/$PROFILE-build"
 WORK_DIR="${ENGINEOS_WORK_DIR:-$ROOT/work/$PROFILE}"
 OUT_DIR="${ENGINEOS_OUT_DIR:-$ROOT/out}"
 TMP_DIR="${ENGINEOS_TMP_DIR:-$ROOT/tmp}"
+INSTALL_CACHE_DIR="/opt/engineos/install-cache/pkg"
 
 "$SCRIPT_DIR/preflight.sh" iso --profile "$PROFILE"
 
@@ -91,10 +121,18 @@ if [[ "$DRY_RUN" == true ]]; then
   printf '  clean:   %s\n' "$CLEAN"
   printf '  archive: %s\n' "$ARCHIVE_EXISTING"
   printf '  compression: %s\n' "$COMPRESSION"
+  if install_cache_enabled; then
+    printf '  install cache: enabled at %s inside the live ISO\n' "$INSTALL_CACHE_DIR"
+  else
+    printf '  install cache: disabled\n'
+  fi
   printf '  tmpfs:   remount /tmp to at least %s when /tmp is tmpfs\n' "$TMPFS_SIZE"
   if [[ "$COMPRESSION" == "fast" ]]; then
-    printf '  profile copy: %s with SquashFS zstd level 3\n' "$FAST_PROFILE_DIR"
-    PROFILE_BUILD_DIR="$FAST_PROFILE_DIR"
+    printf '  profile copy: %s with SquashFS zstd level 3\n' "$GENERATED_PROFILE_DIR"
+    PROFILE_BUILD_DIR="$GENERATED_PROFILE_DIR"
+  elif install_cache_enabled; then
+    printf '  profile copy: %s with embedded install package cache\n' "$GENERATED_PROFILE_DIR"
+    PROFILE_BUILD_DIR="$GENERATED_PROFILE_DIR"
   fi
   if [[ "$ARCHIVE_EXISTING" == true ]]; then
     printf '  archive command: move existing %s ISO artifacts under %s/archive/<stamp>/\n' "$PROFILE" "$OUT_DIR"
@@ -175,19 +213,24 @@ clean_work_dir() {
 }
 
 prepare_profile_build_dir() {
-  [[ "$COMPRESSION" == "fast" ]] || return 0
+  if [[ "$COMPRESSION" != "fast" ]] && ! install_cache_enabled; then
+    return 0
+  fi
 
   local generated_parent generated_profile
   generated_parent="$ROOT/work/generated-profiles"
-  generated_profile="$FAST_PROFILE_DIR"
+  generated_profile="$GENERATED_PROFILE_DIR"
 
   mkdir -p "$generated_parent"
   sudo -n rm -rf "$generated_profile" ||
     die "could not clean generated profile: $generated_profile"
   cp -a "$PROFILE_DIR" "$generated_profile"
-  have_cmd python3 || die "python3 is required to generate fast ISO profile"
+  PROFILE_BUILD_DIR="$generated_profile"
 
-  python3 - "$generated_profile/profiledef.sh" <<'PY'
+  if [[ "$COMPRESSION" == "fast" ]]; then
+    have_cmd python3 || die "python3 is required to generate fast ISO profile"
+
+    python3 - "$generated_profile/profiledef.sh" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -201,8 +244,42 @@ if count != 1:
 path.write_text(text)
 PY
 
-  PROFILE_BUILD_DIR="$generated_profile"
-  printf 'Using fast ISO compression profile: %s\n' "$PROFILE_BUILD_DIR"
+    printf 'Using fast ISO compression profile: %s\n' "$PROFILE_BUILD_DIR"
+  fi
+}
+
+populate_install_cache() {
+  install_cache_enabled || return 0
+
+  local profile_dir="$1"
+  local cache_dir="$profile_dir/airootfs$INSTALL_CACHE_DIR"
+  local manifest_dir="$profile_dir/airootfs/opt/engineos/install-cache"
+  local db_dir="$ROOT/work/install-cache-db/$PROFILE"
+  local log_file="$ROOT/work/install-cache-$PROFILE.log"
+  local packages=()
+
+  have_cmd pacman || die "pacman is required to populate the EngineDev install cache"
+  mapfile -t packages < <(engineos_install_packages)
+
+  printf 'Populating EngineDev install package cache: %s\n' "$cache_dir"
+  sudo -n rm -rf "$cache_dir" "$db_dir" ||
+    die "could not clean install cache staging directories"
+  sudo -n install -d -m 0755 "$cache_dir" "$db_dir" ||
+    die "could not create install cache staging directories"
+  sudo -n pacman \
+    --config "$PROFILE_DIR/pacman.conf" \
+    --cachedir "$cache_dir" \
+    --dbpath "$db_dir" \
+    --logfile "$log_file" \
+    -Syw --noconfirm --needed "${packages[@]}" ||
+    die "could not populate EngineDev install package cache"
+
+  sudo -n install -d -m 0755 "$manifest_dir" ||
+    die "could not create install cache manifest directory"
+  printf '%s\n' "${packages[@]}" | sudo -n tee "$manifest_dir/packages.txt" >/dev/null
+  find "$cache_dir" -maxdepth 1 -type f -name '*.pkg.tar*' -printf '%f\n' 2>/dev/null |
+    sort | sudo -n tee "$manifest_dir/artifacts.txt" >/dev/null
+  printf 'EngineDev install package cache staged: %s\n' "$INSTALL_CACHE_DIR"
 }
 
 mkdir -p "$OUT_DIR" "$TMP_DIR" "$ROOT/work"
@@ -215,5 +292,6 @@ if [[ "$CLEAN" == true ]]; then
 fi
 mkdir -p "$WORK_DIR"
 prepare_profile_build_dir
+populate_install_cache "$PROFILE_BUILD_DIR"
 sudo env TMPDIR="$TMP_DIR" mkarchiso -v -w "$WORK_DIR" -o "$OUT_DIR" "$PROFILE_BUILD_DIR"
 "$SCRIPT_DIR/artifacts.sh" checksum "$OUT_DIR"

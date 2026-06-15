@@ -9,12 +9,14 @@ StartLimitIntervalSec=60
 [Service]
 Type=simple
 User=engineos
-SupplementaryGroups=input audio video render
+SupplementaryGroups=wheel input audio video render
 PAMName=login
 WorkingDirectory=/home/engineos
 Environment=ENGINEOS_LOG_DIR=/var/log/engineos
+Environment=ENGINEOS_ENGINE_SOCKET=/run/engineos/engine-runner.sock
 Environment=XDG_SESSION_TYPE=wayland
 Environment=ENGINEOS_TERMINAL_REQUIRE_WAYLAND=true
+UMask=0002
 ExecStart=/usr/local/bin/engineos-runtime-start
 Restart=on-failure
 RestartSec=3

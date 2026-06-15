@@ -18,6 +18,36 @@ The target dev instance should have:
 Codex authentication is intentionally manual. After setup, run `codex` once in
 the guest and sign in with the intended account.
 
+## GitHub Repositories
+
+Use the `Tango-Rocker` account for the EngineOS follow-on repositories:
+
+- `Tango-Rocker/tango-os` for this EngineOS checkout
+- `Tango-Rocker/quake-generator` for Quake generation work
+- `Tango-Rocker/post-scripts-install-config-setup` for reusable post-install configuration scripts
+
+EngineDev autoinstall defaults to cloning:
+
+```bash
+https://github.com/Tango-Rocker/tango-os.git
+```
+
+For a private repo, do not bake a PAT into the ISO or post-install payload.
+Create a fine-grained read-only token scoped to `Tango-Rocker/tango-os` with
+Contents read permission only, place it on the live guest outside the repo, and
+pass it at install time:
+
+```bash
+sudo engineos install dev \
+  --device /dev/sdX \
+  --repo-token-file /run/engineos-secrets/tango-os-readonly.token \
+  --branch main \
+  --yes-i-understand-this-wipes-device
+```
+
+The installer uses the token through a temporary `GIT_ASKPASS` helper and
+removes the token copy from the target immediately after clone.
+
 ## Command
 
 From the Arch builder after `engineos vm boot enginedev --display none

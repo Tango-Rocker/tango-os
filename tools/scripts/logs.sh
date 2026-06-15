@@ -15,7 +15,7 @@ SOURCE="auto"
 
 usage() {
   cat <<'HELP'
-Usage: logs.sh shell|engine|runtime|live-setup|doctor|boot|all [--last N] [--files|--journal]
+Usage: logs.sh shell|app|engine|runtime|live-setup|doctor|boot|all [--last N] [--files|--journal]
 
 Show EngineOS logs from the local log directory and, when available, systemd journal.
 HELP
@@ -24,6 +24,11 @@ HELP
 target_files() {
   case "$1" in
     shell) printf '%s\n' "$LOG_DIR/shell.log" ;;
+    app)
+      printf '%s\n' \
+        "$LOG_DIR/app.log" \
+        "$LOG_DIR/cube.log"
+      ;;
     engine) printf '%s\n' "$LOG_DIR/engine.log" ;;
     runtime) printf '%s\n' "$LOG_DIR/runtime-start.log" ;;
     live-setup) printf '%s\n' "$LOG_DIR/live-setup.log" ;;
@@ -34,6 +39,8 @@ target_files() {
         "$LOG_DIR/doctor-firstboot.log" \
         "$LOG_DIR/runtime-start.log" \
         "$LOG_DIR/shell.log" \
+        "$LOG_DIR/app.log" \
+        "$LOG_DIR/cube.log" \
         "$LOG_DIR/engine.log"
       ;;
   esac
@@ -129,7 +136,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$TARGET" in
-  shell|engine|runtime|live-setup|doctor|boot|all)
+  shell|app|engine|runtime|live-setup|doctor|boot|all)
     ;;
   *)
     die "unknown logs target: $TARGET"

@@ -14,13 +14,16 @@ fi
 
 if engineos_is_source_root "$ROOT"; then
   LOG_DIR="${ENGINEOS_LOG_DIR:-$(engineos_default_log_dir "$ROOT")}"
+  STATE_DIR="${ENGINEOS_STATE_DIR:-$(engineos_default_state_dir "$ROOT")}"
 else
   LOG_DIR="${ENGINEOS_LOG_DIR:-$(engineos_default_log_dir "$ROOT")}"
+  STATE_DIR="${ENGINEOS_STATE_DIR:-$(engineos_default_state_dir "$ROOT")}"
 fi
 
 MODE="${1:-help}"
 SHELL_BIN="${ENGINEOS_SHELL_BIN:-engineos-shell}"
 LOG_FILE="$LOG_DIR/shell.log"
+export ENGINEOS_STATE_DIR="$STATE_DIR"
 
 engineos_cmd_string() {
   if [[ -x "$ROOT/tools/engineos/engineos" ]]; then
@@ -31,8 +34,28 @@ engineos_cmd_string() {
 }
 
 ENGINEOS_CMD_STRING="$(engineos_cmd_string)"
-DEFAULT_TERMINAL="${ENGINEOS_TERMINAL_CMD:-$ENGINEOS_CMD_STRING terminal}"
-DEFAULT_ENGINE="${ENGINEOS_ENGINE_CMD:-$ENGINEOS_CMD_STRING app launch quake --smoke}"
+APPS_MANIFEST="$(engineos_apps_manifest "$ROOT")"
+
+manifest_command_or_default() {
+  local app="$1"
+  local fallback="$2"
+  local command=""
+
+  command="$(engineos_app_manifest_value "$APPS_MANIFEST" "$app" command || true)"
+  if [[ -z "$command" ]]; then
+    printf '%s\n' "$fallback"
+    return
+  fi
+  if [[ "$command" == engineos\ * ]]; then
+    printf '%s%s\n' "$ENGINEOS_CMD_STRING" "${command#engineos}"
+  else
+    printf '%s\n' "$command"
+  fi
+}
+
+DEFAULT_TERMINAL="${ENGINEOS_TERMINAL_SLOT_CMD:-$(manifest_command_or_default terminal "$ENGINEOS_CMD_STRING app launch terminal")}"
+DEFAULT_CUBE="${ENGINEOS_CUBE_CMD:-$(manifest_command_or_default cube "$ENGINEOS_CMD_STRING app launch cube")}"
+DEFAULT_ENGINE="${ENGINEOS_ENGINE_CMD:-$(manifest_command_or_default quake "$ENGINEOS_CMD_STRING app launch quake")}"
 
 usage() {
   cat <<'HELP'
@@ -41,7 +64,7 @@ Usage: shell_runner.sh --headless
        shell_runner.sh --tty
 
 Run the EngineOS shell path. Headless and nested can smoke locally. TTY is
-the Runtime graphical entry point and bootstraps terminal plus engine by
+the Runtime graphical entry point and bootstraps the launchpad slots by
 default when the real shell binary is installed.
 HELP
 }
@@ -49,6 +72,11 @@ HELP
 log_line() {
   mkdir -p "$LOG_DIR"
   printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" | tee -a "$LOG_FILE"
+}
+
+tee_shell_output() {
+  mkdir -p "$LOG_DIR"
+  exec > >(tee -a "$LOG_FILE") 2>&1
 }
 
 run_real_shell_if_available() {
@@ -61,6 +89,7 @@ run_real_shell_if_available() {
     smoke_args+=(--smoke)
   fi
   launch_args+=(--terminal "$DEFAULT_TERMINAL")
+  launch_args+=(--cube "$DEFAULT_CUBE")
   launch_args+=(--engine "$DEFAULT_ENGINE")
   if [[ -n "${ENGINEOS_SHELL_STARTUP:-}" ]]; then
     startup_args+=(--startup "$ENGINEOS_SHELL_STARTUP")
@@ -70,11 +99,12 @@ run_real_shell_if_available() {
   if [[ -n "${ENGINEOS_SHELL_BOOTSTRAP:-}" ]]; then
     bootstrap_args+=(--bootstrap "$ENGINEOS_SHELL_BOOTSTRAP")
   elif [[ "$mode" == "tty" ]]; then
-    bootstrap_args+=(--bootstrap all)
+    bootstrap_args+=(--bootstrap launchpad)
   fi
 
   if command -v "$SHELL_BIN" >/dev/null 2>&1; then
     log_line "shell binary found: $SHELL_BIN mode=$mode"
+    tee_shell_output
     case "$mode" in
       headless)
         WLR_BACKENDS="${WLR_BACKENDS:-headless}" WLR_HEADLESS_OUTPUTS="${WLR_HEADLESS_OUTPUTS:-1}" exec "$SHELL_BIN" --headless "${smoke_args[@]}" "${startup_args[@]}" "${launch_args[@]}" "${bootstrap_args[@]}"

@@ -94,13 +94,31 @@ check_local_runtime_deps_ready() {
 }
 
 repo_add_current_artifacts() {
+  local artifact
+  local name
+  local version
+  local current_version
   local artifacts=()
+  declare -A latest_artifact=()
+  declare -A latest_version=()
 
   while IFS= read -r artifact; do
-    artifacts+=("$artifact")
+    read -r name version < <(pacman -Qp "$artifact" 2>/dev/null || true)
+    [[ -n "${name:-}" && -n "${version:-}" ]] || continue
+
+    current_version="${latest_version[$name]:-}"
+    if [[ -z "$current_version" ]] || [[ "$(vercmp "$version" "$current_version")" -gt 0 ]]; then
+      latest_artifact[$name]="$artifact"
+      latest_version[$name]="$version"
+    fi
   done < <(find "$REPO_DIR" -maxdepth 1 -type f \
     \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' -o -name '*.pkg.tar.gz' \) \
     -print | sort)
+
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    artifacts+=("${latest_artifact[$name]}")
+  done < <(printf '%s\n' "${!latest_artifact[@]}" | sort)
 
   [[ ${#artifacts[@]} -gt 0 ]] || die "no package artifacts found in $REPO_DIR"
   repo-add "$REPO_DIR/$REPO_NAME.db.tar.gz" "${artifacts[@]}"
@@ -176,7 +194,7 @@ if [[ "$DRY_RUN" == true ]]; then
     printf '    - %s/packages/%s\n' "$ROOT" "$pkg"
   done
   printf '  makepkg: rebuild existing package artifacts with -f\n'
-  printf '  repo-add: after each package, refresh %s/%s.db.tar.gz from %s/*.pkg.tar.*\n' "$REPO_DIR" "$REPO_NAME" "$REPO_DIR"
+  printf '  repo-add: after each package, refresh %s/%s.db.tar.gz from latest package artifacts in %s\n' "$REPO_DIR" "$REPO_NAME" "$REPO_DIR"
   printf '  local deps: already-built engineos-* runtime dependencies are satisfied from %s\n' "$REPO_DIR"
   exit 0
 fi
@@ -185,6 +203,7 @@ is_arch_linux || die "real package builds must run on Arch Linux"
 have_cmd makepkg || die "makepkg is missing; install base-devel"
 have_cmd repo-add || die "repo-add is missing; install pacman"
 have_cmd pacman || die "pacman is missing"
+have_cmd vercmp || die "vercmp is missing; install pacman"
 
 mkdir -p "$REPO_DIR"
 REAL_PACMAN="$(command -v pacman)"

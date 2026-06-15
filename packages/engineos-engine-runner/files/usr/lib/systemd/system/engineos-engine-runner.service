@@ -9,9 +9,10 @@ Environment=ENGINEOS_ROOT=/
 Environment=ENGINEOS_STATE_DIR=/run/engineos
 Environment=ENGINEOS_LOG_DIR=/var/log/engineos
 Environment=ENGINEOS_ENGINE_SOCKET=/run/engineos/engine-runner.sock
-RuntimeDirectory=engineos
-RuntimeDirectoryMode=0755
-ExecStartPre=/usr/bin/install -d -m 0775 -o root -g wheel /var/log/engineos /var/lib/engineos
+UMask=0002
+ExecStartPre=/usr/bin/install -d -m 2775 -o root -g wheel /run/engineos /var/log/engineos /var/lib/engineos
+ExecStartPre=/usr/bin/chown root:wheel /run/engineos /var/log/engineos /var/lib/engineos
+ExecStartPre=/usr/bin/chmod 2775 /run/engineos /var/log/engineos /var/lib/engineos
 ExecStart=/usr/bin/python3 /usr/lib/engineos/scripts/engine_runner_daemon.py --daemon --socket /run/engineos/engine-runner.sock
 Restart=on-failure
 RestartSec=2

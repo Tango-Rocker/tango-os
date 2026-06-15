@@ -34,12 +34,16 @@ cd /srv/engineos
 ./tools/engineos/engineos build iso engineruntime --fast --clean --archive-existing
 ./tools/engineos/engineos vm boot engineruntime --display none --background --ssh-port 2223 --audio hda
 sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'engineos proof booted-iso --runtime'
+sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'engineos app manifest validate'
+sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'engineos proof launchpad --runtime'
 ```
 
 Inside EngineRuntime recovery TTY/session:
 
 ```bash
 engineos proof booted-iso --runtime
+engineos app manifest validate
+engineos proof launchpad --runtime
 engineos logs runtime --last 200
 engineos logs engine --last 200
 engineos crash-bundle --runtime
@@ -71,7 +75,7 @@ not a real audible-output proof.
 
 - Sprint 7: wlroots headless shell
 - Sprint 8: nested shell with one client
-- Sprint 9: shell launches terminal and engine
+- Sprint 9: shell launches terminal and app slots
 - Sprint 10: minimal surface model
 - PoC 2: shell proof
 
@@ -107,6 +111,6 @@ engineos proof booted-iso --bare-metal
 - multi-monitor static layout
 - build hygiene
 
-EngineRuntime has a generated ISO and packaged runtime path. Runtime autostart, DRM/libinput shell startup, crash-bundle recovery, and emulated VM audio-device plumbing are proven; interactive Quake with user assets and audible hardware audio still need live proof.
+EngineRuntime has a generated ISO and packaged launchpad runtime path. Runtime autostart, DRM/libinput shell startup, crash-bundle recovery, terminal/cube launchpad mapping, Quake missing-asset handling, shell state JSON, and emulated VM audio-device plumbing are proven in builder-hosted QEMU; interactive Quake with user assets, visible hardware rendering, and audible hardware audio still need live proof.
 
 Polish is important, but it should not block the first usable MVP.

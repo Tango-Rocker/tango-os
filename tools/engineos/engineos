@@ -58,8 +58,10 @@ engineos commands:
   assets check|explain|path|prepare quake
   artifacts list|checksum|export
   release checklist [--dry-run] [--out-dir <dir>] [--export-dir <dir>]
-  app launch terminal|quake [args...]
-  app status
+  install dev --dry-run --device <block-device> [--repo-url <url>]
+  app launch terminal|cube|quake [args...]
+  app status [--json]
+  app manifest path|show|validate
   terminal [--dry-run|--print-command]
   outputs list|validate --single|--dual-static
   proof build-lab [--dry-run]
@@ -67,6 +69,7 @@ engineos commands:
   proof hardware-ready [--dry-run] [--profile enginedev|engineruntime] [--device <block-device>]
   proof booted-iso [--vm|--runtime|--bare-metal] [--dry-run]
   proof shell-launch [--vm|--runtime|--bare-metal] [--dry-run]
+  proof launchpad [--vm|--runtime|--bare-metal] [--dry-run]
   vm boot [enginedev|engineruntime] [--dry-run] [--audio none|hda]
   usb list|write --iso <path> --device <block-device> [--dry-run]
   capture frame --target shell
@@ -79,9 +82,9 @@ engineos commands:
   validate boot [--vm|--runtime|--bare-metal]
   run quake [--smoke]
   run shell --headless|--nested|--tty
-  logs shell|engine|runtime|live-setup|doctor|boot|all [--last N] [--files|--journal]
+  logs shell|app|engine|runtime|live-setup|doctor|boot|all [--last N] [--files|--journal]
   crash-bundle [--vm|--runtime|--bare-metal]
-  test [smoke|all|compositor|shell-actions|engine-runner-env|app|assets|reliability|logs|artifacts|terminal|vm|usb|proof|builder-handoff|builder-doctor|post-first-deploy|builder|bootstrap|repo|boot|engine|shell|input|render|outputs]
+  test [smoke|all|compositor|shell-actions|engine-runner-env|app|assets|reliability|logs|artifacts|terminal|vm|usb|install|proof|builder-handoff|builder-doctor|post-first-deploy|builder|bootstrap|repo|boot|engine|shell|input|render|outputs]
 HELP
 }
 
@@ -240,6 +243,10 @@ cmd_artifacts() {
 
 cmd_release() {
   exec "$ENGINEOS_SCRIPT_DIR/release.sh" "$@"
+}
+
+cmd_install() {
+  exec "$ENGINEOS_SCRIPT_DIR/install_dev.sh" "$@"
 }
 
 cmd_app() {
@@ -415,6 +422,9 @@ main() {
       ;;
     release)
       cmd_release "$@"
+      ;;
+    install)
+      cmd_install "$@"
       ;;
     app)
       cmd_app "$@"

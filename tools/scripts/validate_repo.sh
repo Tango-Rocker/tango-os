@@ -40,11 +40,93 @@ repo_db_exists() {
   [[ -e "$REPO_DIR/$REPO_NAME.db" || -e "$REPO_DIR/$REPO_NAME.db.tar.gz" || -e "$REPO_DIR/$REPO_NAME.db.tar.zst" ]]
 }
 
+repo_db_file() {
+  local candidate
+  for candidate in "$REPO_DIR/$REPO_NAME.db" "$REPO_DIR/$REPO_NAME.db.tar.gz" "$REPO_DIR/$REPO_NAME.db.tar.zst"; do
+    if [[ -e "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 package_artifact_exists() {
   local pkg="$1"
-  find "$REPO_DIR" -maxdepth 1 -type f \
+  local artifact
+  local name
+  local version
+
+  if ! have_cmd pacman; then
+    find "$REPO_DIR" -maxdepth 1 -type f \
+      \( -name "$pkg-*.pkg.tar.zst" -o -name "$pkg-*.pkg.tar.xz" -o -name "$pkg-*.pkg.tar.gz" \) \
+      -print -quit 2>/dev/null | grep -q .
+    return
+  fi
+
+  while IFS= read -r artifact; do
+    read -r name version < <(pacman -Qp "$artifact" 2>/dev/null || true)
+    if [[ "$name" == "$pkg" && -n "${version:-}" ]]; then
+      return 0
+    fi
+  done < <(find "$REPO_DIR" -maxdepth 1 -type f \
     \( -name "$pkg-*.pkg.tar.zst" -o -name "$pkg-*.pkg.tar.xz" -o -name "$pkg-*.pkg.tar.gz" \) \
-    -print -quit 2>/dev/null | grep -q .
+    -print 2>/dev/null)
+
+  return 1
+}
+
+latest_artifact_version() {
+  local pkg="$1"
+  local artifact
+  local name
+  local version
+  local latest=""
+
+  while IFS= read -r artifact; do
+    read -r name version < <(pacman -Qp "$artifact" 2>/dev/null || true)
+    [[ "$name" == "$pkg" && -n "${version:-}" ]] || continue
+    if [[ -z "$latest" ]] || [[ "$(vercmp "$version" "$latest")" -gt 0 ]]; then
+      latest="$version"
+    fi
+  done < <(find "$REPO_DIR" -maxdepth 1 -type f \
+    \( -name "$pkg-*.pkg.tar.zst" -o -name "$pkg-*.pkg.tar.xz" -o -name "$pkg-*.pkg.tar.gz" \) \
+    -print 2>/dev/null)
+
+  [[ -n "$latest" ]] || return 1
+  printf '%s\n' "$latest"
+}
+
+pkgbuild_expected_version() {
+  local pkg="$1"
+  local pkg_dir="$ROOT/packages/$pkg"
+
+  (
+    set +u
+    cd "$pkg_dir"
+    # shellcheck disable=SC1091
+    source PKGBUILD
+    printf '%s-%s\n' "$pkgver" "$pkgrel"
+  )
+}
+
+repo_db_package_version() {
+  local pkg="$1"
+  local db="$2"
+
+  bsdtar -xOf "$db" '*/desc' 2>/dev/null | awk -v target="$pkg" '
+    $0 == "%NAME%" {
+      getline name
+      next
+    }
+    $0 == "%VERSION%" {
+      getline version
+      if (name == target) {
+        print version
+        exit
+      }
+    }
+  '
 }
 
 profile_uses_engineos_repo() {
@@ -142,6 +224,32 @@ while IFS= read -r pkg; do
     fail "package artifact missing: $pkg"
   fi
 done < <(engineos_packages)
+
+if repo_db_exists && have_cmd pacman && have_cmd vercmp && have_cmd bsdtar; then
+  db_file="$(repo_db_file)"
+  while IFS= read -r pkg; do
+    artifact_version="$(latest_artifact_version "$pkg" || true)"
+    db_version="$(repo_db_package_version "$pkg" "$db_file" || true)"
+    if [[ -z "$artifact_version" ]]; then
+      continue
+    fi
+    expected_version="$(pkgbuild_expected_version "$pkg" || true)"
+    if [[ -n "$expected_version" && "$artifact_version" == "$expected_version" ]]; then
+      ok "package artifact matches PKGBUILD: $pkg $artifact_version"
+    elif [[ -n "$expected_version" ]]; then
+      fail "package artifact is stale versus PKGBUILD: $pkg artifact=$artifact_version expected=$expected_version"
+    fi
+    if [[ -z "$db_version" ]]; then
+      fail "repo database missing package entry: $pkg"
+    elif [[ "$db_version" == "$artifact_version" ]]; then
+      ok "repo database uses latest artifact: $pkg $db_version"
+    else
+      fail "repo database has stale package entry: $pkg db=$db_version latest=$artifact_version"
+    fi
+  done < <(engineos_packages)
+else
+  warn "cannot compare repo database versions; pacman/vercmp/bsdtar unavailable"
+fi
 
 profile_uses_engineos_repo enginedev
 profile_uses_engineos_repo engineruntime

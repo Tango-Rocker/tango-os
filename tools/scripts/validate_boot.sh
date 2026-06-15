@@ -9,10 +9,12 @@ MODE="vm"
 FAILURES=0
 WARNINGS=0
 RUNTIME_CONF="${ENGINEOS_RUNTIME_CONF:-/etc/engineos/runtime.conf}"
+APPS_MANIFEST="${ENGINEOS_APPS_MANIFEST:-$(engineos_apps_manifest "$(engineos_root)")}"
 LOG_DIR="${ENGINEOS_LOG_DIR:-/var/log/engineos}"
 DRI_DIR="${ENGINEOS_DRI_DIR:-/dev/dri}"
 DRM_SYSFS="${ENGINEOS_DRM_SYSFS:-/sys/class/drm}"
 DOCTOR_CMD="${ENGINEOS_DOCTOR_CMD:-$SCRIPT_DIR/doctor.sh}"
+APP_MANIFEST_OUT="${ENGINEOS_APP_MANIFEST_OUT:-/tmp/engineos-app-manifest-validate.txt}"
 VALIDATE_DOCTOR_OUT="${ENGINEOS_VALIDATE_DOCTOR_OUT:-/tmp/engineos-validate-doctor.txt}"
 VALIDATE_OUTPUTS_OUT="${ENGINEOS_VALIDATE_OUTPUTS_OUT:-/tmp/engineos-validate-outputs.txt}"
 
@@ -92,6 +94,32 @@ command_check() {
   fi
 }
 
+app_manifest_check() {
+  local engineos_cmd
+
+  if [[ -r "$APPS_MANIFEST" ]]; then
+    ok "app manifest exists: $APPS_MANIFEST"
+  else
+    fail "app manifest missing: $APPS_MANIFEST"
+    return
+  fi
+
+  if have_cmd engineos; then
+    engineos_cmd="engineos"
+  elif [[ -x "$(engineos_root)/tools/engineos/engineos" ]]; then
+    engineos_cmd="$(engineos_root)/tools/engineos/engineos"
+  else
+    fail "engineos command unavailable for app manifest validation"
+    return
+  fi
+
+  if ENGINEOS_APPS_MANIFEST="$APPS_MANIFEST" "$engineos_cmd" app manifest validate >"$APP_MANIFEST_OUT" 2>&1; then
+    ok "app manifest validates"
+  else
+    fail "app manifest validation failed; see $APP_MANIFEST_OUT"
+  fi
+}
+
 opengl_check() {
   if grep -Eiq 'OpenGL (core profile )?renderer( string)?:' "$VALIDATE_DOCTOR_OUT"; then
     ok "OpenGL renderer available"
@@ -101,6 +129,9 @@ opengl_check() {
 }
 
 runtime_config_check() {
+  local bootstrap=""
+  local cube_cmd=""
+  local engine_cmd=""
   local recovery_tty=""
   local terminal_session=""
 
@@ -108,6 +139,9 @@ runtime_config_check() {
     ok "$RUNTIME_CONF exists"
     # shellcheck disable=SC1090
     source "$RUNTIME_CONF"
+    bootstrap="${ENGINEOS_SHELL_BOOTSTRAP:-}"
+    cube_cmd="${ENGINEOS_CUBE_CMD:-}"
+    engine_cmd="${ENGINEOS_ENGINE_CMD:-}"
     recovery_tty="${ENGINEOS_RUNTIME_RECOVERY_TTY:-}"
     terminal_session="${ENGINEOS_TERMINAL_SESSION_CMD:-}"
     if [[ -n "$recovery_tty" ]]; then
@@ -133,6 +167,24 @@ runtime_config_check() {
     ok "runtime terminal session starts tmux engineos"
   else
     fail "runtime terminal session must start tmux engineos"
+  fi
+
+  if [[ "$bootstrap" == "launchpad" ]]; then
+    ok "runtime shell bootstrap starts launchpad"
+  else
+    fail "runtime shell bootstrap must be launchpad"
+  fi
+
+  if [[ "$cube_cmd" == *"engineos app launch cube"* ]]; then
+    ok "runtime cube command uses app launcher"
+  else
+    fail "runtime cube command must use engineos app launch cube"
+  fi
+
+  if [[ "$engine_cmd" == *"engineos app launch quake"* ]]; then
+    ok "runtime engine command uses app launcher"
+  else
+    fail "runtime engine command must use engineos app launch quake"
   fi
 
   enabled_service_check "getty@${recovery_tty}.service"
@@ -179,11 +231,13 @@ runtime_autostart_log_check() {
     fail "runtime autostart log does not record startup decision"
   fi
 
-  if grep -Eq 'EngineOS shell (exited cleanly|failed rc=)|runtime autostart disabled' "$runtime_log"; then
-    ok "runtime autostart log records outcome"
-  else
-    warn "runtime autostart appears to still be running; no final outcome in $runtime_log"
-  fi
+	if grep -Eq 'EngineOS shell (exited cleanly|failed rc=)|runtime autostart disabled' "$runtime_log"; then
+		ok "runtime autostart log records outcome"
+	elif have_cmd systemctl && systemctl is-active --quiet engineos-runtime.service; then
+		ok "runtime shell service active: engineos-runtime.service"
+	else
+		warn "runtime autostart appears to still be running; no final outcome in $runtime_log"
+	fi
 }
 
 bare_metal_graphics_check() {
@@ -282,6 +336,8 @@ fi
 package_check engineos-config
 package_check engineos-cli
 package_check engineos-agent-tools
+package_check ttf-dejavu
+package_check engineos-cube
 package_check engineos-engine-runner
 package_check engineos-quakespasm
 package_check engineos-quake-template
@@ -289,6 +345,11 @@ if package_installed engineos-quakespasm; then
   command_check quakespasm
 else
   warn "engineos-quakespasm not confirmed installed; skipping quakespasm command check"
+fi
+if package_installed engineos-cube; then
+  command_check engineos-cube
+else
+  warn "engineos-cube not confirmed installed; skipping cube command check"
 fi
 if [[ "$MODE" == "runtime" || "$MODE" == "bare-metal" ]]; then
   package_check engineos-shell
@@ -301,6 +362,7 @@ else
 fi
 
 if [[ "$MODE" == "runtime" || "$MODE" == "bare-metal" ]]; then
+  app_manifest_check
   runtime_config_check
   runtime_recovery_help_check
   runtime_autostart_log_check
