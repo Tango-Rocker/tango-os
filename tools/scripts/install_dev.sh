@@ -454,15 +454,15 @@ run_installer() {
   if [[ -n "$branch" ]]; then
     run_step "checkout Tang-OS branch" arch-chroot "$target" git -C /srv/engineos checkout "$branch"
   fi
-  run_step "build installed local package repo" arch-chroot "$target" /srv/engineos/tools/engineos/engineos build repo
+  run_step "build installed local package repo" arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos build repo
 
   post_install_args=(--payload /srv/engineos/tools/post-install-payload --user "$user" --force-config)
   if [[ "$skip_codex" == true ]]; then
     post_install_args+=(--skip-codex)
   fi
   run_step "run installed post-install payload" arch-chroot "$target" /srv/engineos/tools/post-install-payload/scripts/setup_dev_environment.sh "${post_install_args[@]}"
-  run_step "validate installed builder shape" arch-chroot "$target" /srv/engineos/tools/engineos/engineos validate builder --mock
-  run_step "validate installed local repo" arch-chroot "$target" /srv/engineos/tools/engineos/engineos validate repo
+  run_step "validate installed builder shape" arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos validate builder --mock
+  run_step "validate installed local repo" arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos validate repo
 
   cat <<EOF | sudo tee "$target/srv/ENGINEOS_INSTALL_HANDOFF.txt" >/dev/null
 EngineDev autoinstall completed at $(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -567,10 +567,10 @@ print_dev_plan() {
   if [[ -n "$branch" ]]; then
     quote_line arch-chroot "$target" git -C /srv/engineos checkout "$branch"
   fi
-  quote_line arch-chroot "$target" /srv/engineos/tools/engineos/engineos build repo
+  quote_line arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos build repo
   quote_line arch-chroot "$target" /srv/engineos/tools/post-install-payload/scripts/setup_dev_environment.sh --payload /srv/engineos/tools/post-install-payload --user "$user"
-  quote_line arch-chroot "$target" /srv/engineos/tools/engineos/engineos validate builder --mock
-  quote_line arch-chroot "$target" /srv/engineos/tools/engineos/engineos validate repo
+  quote_line arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos validate builder --mock
+  quote_line arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos validate repo
 
   printf '\nFirst boot handoff:\n'
   printf '  Login as %s, authenticate Codex manually, then run:\n' "$user"

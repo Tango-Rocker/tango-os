@@ -1016,6 +1016,8 @@ EOF_PACMAN
     die "install dry-run missing official repo clone"
   grep -F 'setup_dev_environment.sh --payload /srv/engineos/tools/post-install-payload --user dev' "$out" >/dev/null ||
     die "install dry-run missing post-install payload handoff"
+  grep -F 'env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos build repo' "$out" >/dev/null ||
+    die "install dry-run did not clear inherited EngineOS wrapper env for source repo build"
   grep -F 'proof booted-iso --bare-metal' "$out" >/dev/null ||
     die "install dry-run missing bare-metal handoff proof"
 
@@ -1147,6 +1149,8 @@ FAKE
     die "install executor did not stage seed repo"
   grep -F 'arch-chroot '"$target"' env GIT_TERMINAL_PROMPT=0 git clone file:///tmp/tang-os-seed /srv/engineos' "$log" >/dev/null ||
     die "install executor did not clone seed repo in target"
+  grep -F 'arch-chroot '"$target"' env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/engineos build repo' "$log" >/dev/null ||
+    die "install executor did not clear inherited EngineOS wrapper env for source repo build"
   grep -F 'arch-chroot '"$target"' /srv/engineos/tools/post-install-payload/scripts/setup_dev_environment.sh' "$log" >/dev/null ||
     die "install executor did not run post-install payload"
   grep -F 'Server = file:///srv/engineos/repo/$arch' "$target/etc/pacman.conf" >/dev/null ||
