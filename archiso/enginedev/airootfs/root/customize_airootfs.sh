@@ -48,6 +48,7 @@ chmod 0440 /etc/sudoers.d/10-engineos-wheel
 systemctl enable NetworkManager.service
 systemctl enable sshd.service
 systemctl enable engineos-live-setup.service
+systemctl enable engineos-live-codex-setup.service
 systemctl enable engineos-dev-shell.service
 systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service || true
 loginctl enable-linger dev || true

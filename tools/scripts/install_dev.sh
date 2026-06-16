@@ -520,7 +520,7 @@ run_installer() {
   else
     run_step "install Arch base and dev packages" sudo pacstrap -c "$target" "${packages[@]}"
   fi
-  run_step "write fstab" bash -c "genfstab -U '$target' | sudo tee -a '$target/etc/fstab' >/dev/null"
+  run_step "write fstab" bash -c "sudo genfstab -U '$target' | sudo tee '$target/etc/fstab' >/dev/null"
   write_installed_identity "$target" "$hostname"
   write_pacman_engineos_repo "$target"
   write_bootloader_entry "$target" "$root_part"

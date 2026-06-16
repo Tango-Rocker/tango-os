@@ -13,6 +13,7 @@ ARCHIVE_EXISTING=false
 TMPFS_SIZE="${ENGINEOS_BUILD_TMPFS_SIZE:-8G}"
 COMPRESSION="${ENGINEOS_ISO_COMPRESSION:-profile}"
 INSTALL_CACHE="${ENGINEOS_ISO_INSTALL_CACHE:-auto}"
+RESUME_INSTALL_CACHE="${ENGINEOS_RESUME_INSTALL_CACHE:-false}"
 
 usage() {
   cat <<'HELP'
@@ -84,6 +85,18 @@ case "$INSTALL_CACHE" in
     ;;
   *)
     die "unknown ISO install cache mode: $INSTALL_CACHE"
+    ;;
+esac
+
+case "$RESUME_INSTALL_CACHE" in
+  true|1|yes)
+    RESUME_INSTALL_CACHE=true
+    ;;
+  false|0|no)
+    RESUME_INSTALL_CACHE=false
+    ;;
+  *)
+    die "unknown ENGINEOS_RESUME_INSTALL_CACHE value: $RESUME_INSTALL_CACHE"
     ;;
 esac
 
@@ -218,14 +231,33 @@ prepare_profile_build_dir() {
   fi
 
   local generated_parent generated_profile
+  local resume_cache=""
   generated_parent="$ROOT/work/generated-profiles"
   generated_profile="$GENERATED_PROFILE_DIR"
 
   mkdir -p "$generated_parent"
+  if [[ "$RESUME_INSTALL_CACHE" == true ]] && install_cache_enabled &&
+      [[ -d "$generated_profile/airootfs$INSTALL_CACHE_DIR" ]]; then
+    resume_cache="$ROOT/work/install-cache-resume/$PROFILE/pkg"
+    printf 'Preserving interrupted EngineDev install package cache: %s\n' "$resume_cache"
+    sudo -n rm -rf "$resume_cache" ||
+      die "could not clean install cache resume directory"
+    mkdir -p "$resume_cache"
+    sudo -n cp -a "$generated_profile/airootfs$INSTALL_CACHE_DIR/." "$resume_cache/" ||
+      die "could not preserve interrupted install cache"
+  fi
+
   sudo -n rm -rf "$generated_profile" ||
     die "could not clean generated profile: $generated_profile"
   cp -a "$PROFILE_DIR" "$generated_profile"
   PROFILE_BUILD_DIR="$generated_profile"
+
+  if [[ -n "$resume_cache" ]]; then
+    sudo -n install -d -m 0755 "$generated_profile/airootfs$INSTALL_CACHE_DIR" ||
+      die "could not recreate install cache directory"
+    sudo -n cp -a "$resume_cache/." "$generated_profile/airootfs$INSTALL_CACHE_DIR/" ||
+      die "could not restore interrupted install cache"
+  fi
 
   if [[ "$COMPRESSION" == "fast" ]]; then
     have_cmd python3 || die "python3 is required to generate fast ISO profile"
@@ -262,8 +294,14 @@ populate_install_cache() {
   mapfile -t packages < <(engineos_install_packages)
 
   printf 'Populating EngineDev install package cache: %s\n' "$cache_dir"
-  sudo -n rm -rf "$cache_dir" "$db_dir" ||
-    die "could not clean install cache staging directories"
+  if [[ "$RESUME_INSTALL_CACHE" == true ]]; then
+    printf 'Resuming EngineDev install package cache when possible\n'
+    sudo -n rm -rf "$db_dir" ||
+      die "could not clean install cache database directory"
+  else
+    sudo -n rm -rf "$cache_dir" "$db_dir" ||
+      die "could not clean install cache staging directories"
+  fi
   sudo -n install -d -m 0755 "$cache_dir" "$db_dir" ||
     die "could not create install cache staging directories"
   sudo -n pacman \

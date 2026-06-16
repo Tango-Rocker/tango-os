@@ -26,6 +26,8 @@ Usage: test_runner.sh [smoke|all]
        test_runner.sh terminal
        test_runner.sh vm
        test_runner.sh usb
+       test_runner.sh secure-boot
+       test_runner.sh installation-guide
        test_runner.sh install
        test_runner.sh proof
        test_runner.sh installed-preflight
@@ -71,6 +73,8 @@ run_all() {
   run_all_step terminal
   run_all_step vm
   run_all_step usb
+  run_all_step secure-boot
+  run_all_step installation-guide
   run_all_step install
   run_all_step proof
   run_all_step installed-preflight
@@ -1051,6 +1055,84 @@ run_usb() {
   fi
 
   printf 'usb write dry-run test passed\n'
+}
+
+run_secure_boot() {
+  local tmp_dir="${TMPDIR:-/tmp}/engineos-secure-boot-test-$$"
+  local key_dir="$tmp_dir/keys"
+  local iso="$tmp_dir/out/EngineRuntimeOS-test-x86_64.iso"
+  local out="$tmp_dir/out.txt"
+
+  cleanup_secure_boot() {
+    rm -rf "$tmp_dir"
+  }
+  trap cleanup_secure_boot RETURN
+
+  mkdir -p "$(dirname "$iso")"
+  printf 'fake iso payload\n' >"$iso"
+
+  "$SCRIPT_DIR/secure_boot.sh" keys create --out-dir "$key_dir" --dry-run >"$out"
+  grep -F 'EngineOS Secure Boot key creation' "$out" >/dev/null ||
+    die "secure-boot key dry-run missing header"
+  grep -F 'openssl req' "$out" >/dev/null ||
+    die "secure-boot key dry-run missing openssl command"
+
+  mkdir -p "$key_dir"
+  printf 'fake key\n' >"$key_dir/db.key"
+  printf 'fake cert\n' >"$key_dir/db.crt"
+  printf 'fake der cert\n' >"$key_dir/db.cer"
+
+  "$SCRIPT_DIR/secure_boot.sh" keys status --key-dir "$key_dir" >"$out"
+  grep -F 'status: ready' "$out" >/dev/null ||
+    die "secure-boot key status did not report ready"
+
+  "$SCRIPT_DIR/secure_boot.sh" sign-iso --iso "$iso" --key-dir "$key_dir" --dry-run >"$out"
+  grep -F '/EFI/BOOT/BOOTx64.EFI' "$out" >/dev/null ||
+    die "secure-boot sign dry-run did not mention bootloader signing"
+  grep -F '/arch/boot/x86_64/vmlinuz-linux' "$out" >/dev/null ||
+    die "secure-boot sign dry-run did not mention kernel signing"
+
+  "$SCRIPT_DIR/secure_boot.sh" enroll-handoff --key-dir "$key_dir" >"$out"
+  grep -F 'Do not clear existing Microsoft keys' "$out" >/dev/null ||
+    die "secure-boot enrollment handoff does not protect Windows keys"
+
+  printf 'secure-boot dry-run test passed\n'
+}
+
+run_installation_guide() {
+  local tmp_dir="${TMPDIR:-/tmp}/engineos-installation-guide-test-$$"
+  local out="$tmp_dir/guide.txt"
+
+  cleanup_installation_guide() {
+    rm -rf "$tmp_dir"
+  }
+  trap cleanup_installation_guide RETURN
+
+  mkdir -p "$tmp_dir"
+  "$SCRIPT_DIR/installation_guide.sh" >"$out"
+  grep -F 'EngineDev installation guide' "$out" >/dev/null ||
+    die "installation guide missing header"
+  grep -F 'codex --version' "$out" >/dev/null ||
+    die "installation guide does not tell the live user to validate Codex"
+  grep -F -- '--repo-token-file /run/engineos-secrets/tango-os-readonly.token' "$out" >/dev/null ||
+    die "installation guide missing private repo token path"
+  grep -F 'prompts are disabled' "$out" >/dev/null ||
+    die "installation guide does not explain the git prompt failure"
+  grep -F 'sudo genfstab -U /mnt/engineos' "$out" >/dev/null ||
+    die "installation guide missing fstab recovery command"
+
+  "$ROOT/tools/engineos/engineos" installation-guide >"$out"
+  grep -F 'EngineDev installation guide' "$out" >/dev/null ||
+    die "engineos installation-guide did not dispatch to guide script"
+
+  grep -F '/usr/local/bin/engineos-live-codex-setup' "$ROOT/archiso/enginedev/profiledef.sh" >/dev/null ||
+    die "EngineDev profile does not mark live Codex setup executable"
+  grep -F 'systemctl enable engineos-live-codex-setup.service' "$ROOT/archiso/enginedev/airootfs/root/customize_airootfs.sh" >/dev/null ||
+    die "EngineDev profile does not enable live Codex setup"
+  grep -F 'console=ttyS0' "$ROOT/archiso/enginedev/efiboot/loader/entries/01-enginedev-linux.conf" >/dev/null &&
+    die "EngineDev boot entry still redirects bare-metal boot to serial"
+
+  printf 'installation guide smoke test passed\n'
 }
 
 run_install() {
@@ -2118,6 +2200,12 @@ case "$SCOPE" in
     ;;
   usb)
     run_usb
+    ;;
+  secure-boot)
+    run_secure_boot
+    ;;
+  installation-guide)
+    run_installation_guide
     ;;
   install)
     run_install

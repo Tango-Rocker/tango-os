@@ -218,6 +218,7 @@ check_package_inputs() {
       require_file "tools/scripts/artifacts.sh"
       require_file "tools/scripts/release.sh"
       require_file "tools/scripts/install_dev.sh"
+      require_file "tools/scripts/installation_guide.sh"
       require_file "tools/scripts/terminal_launcher.sh"
       require_file "tools/scripts/capture_frame.sh"
       require_file "tools/scripts/doctor.sh"
@@ -229,6 +230,7 @@ check_package_inputs() {
       require_file "tools/scripts/proof.sh"
       require_file "tools/scripts/vm.sh"
       require_file "tools/scripts/usb.sh"
+      require_file "tools/scripts/secure_boot.sh"
       require_file "tools/scripts/test_runner.sh"
       require_file "tools/scripts/validate_builder.sh"
       require_file "tools/scripts/validate_repo.sh"
@@ -341,6 +343,8 @@ check_installed_scripts() {
   require_abs_file "$INSTALLED_SCRIPT_DIR/outputs.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/proof.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/install_dev.sh"
+  require_abs_file "$INSTALLED_SCRIPT_DIR/installation_guide.sh"
+  require_abs_file "$INSTALLED_SCRIPT_DIR/secure_boot.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/test_runner.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/validate_boot.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/crash_bundle.sh"
@@ -384,6 +388,7 @@ check_scripts() {
   require_file "tools/scripts/artifacts.sh"
   require_file "tools/scripts/release.sh"
   require_file "tools/scripts/install_dev.sh"
+  require_file "tools/scripts/installation_guide.sh"
   require_file "tools/scripts/terminal_launcher.sh"
   require_file "tools/scripts/capture_frame.sh"
   require_file "tools/scripts/doctor.sh"
@@ -397,6 +402,7 @@ check_scripts() {
   require_file "tools/scripts/proof.sh"
   require_file "tools/scripts/vm.sh"
   require_file "tools/scripts/usb.sh"
+  require_file "tools/scripts/secure_boot.sh"
   require_file "tools/scripts/test_runner.sh"
   require_file "tools/scripts/validate_builder.sh"
   require_file "tools/scripts/validate_repo.sh"
@@ -434,6 +440,7 @@ check_scripts() {
   check_bash_syntax "tools/scripts/artifacts.sh"
   check_bash_syntax "tools/scripts/release.sh"
   check_bash_syntax "tools/scripts/install_dev.sh"
+  check_bash_syntax "tools/scripts/installation_guide.sh"
   check_bash_syntax "tools/scripts/terminal_launcher.sh"
   check_bash_syntax "tools/scripts/capture_frame.sh"
   check_bash_syntax "tools/scripts/doctor.sh"
@@ -447,6 +454,7 @@ check_scripts() {
   check_bash_syntax "tools/scripts/proof.sh"
   check_bash_syntax "tools/scripts/vm.sh"
   check_bash_syntax "tools/scripts/usb.sh"
+  check_bash_syntax "tools/scripts/secure_boot.sh"
   check_bash_syntax "tools/scripts/test_runner.sh"
   check_bash_syntax "tools/scripts/validate_builder.sh"
   check_bash_syntax "tools/scripts/validate_repo.sh"
@@ -516,7 +524,15 @@ check_iso() {
   else
     fail "$profile_dir live boot entry does not set cow_spacesize=50%"
   fi
-  if grep -F 'systemd.mask=serial-getty@ttyS0.service' "$ROOT/$profile_dir/efiboot/loader/entries/01-$PROFILE-linux.conf" >/dev/null; then
+  if [[ "$PROFILE" == "enginedev" ]]; then
+    if grep -F 'console=tty0' "$ROOT/$profile_dir/efiboot/loader/entries/01-$PROFILE-linux.conf" >/dev/null &&
+        ! grep -F 'console=ttyS0' "$ROOT/$profile_dir/efiboot/loader/entries/01-$PROFILE-linux.conf" >/dev/null &&
+        ! grep -F 'serial-getty@ttyS0.service' "$ROOT/$profile_dir/efiboot/loader/entries/01-$PROFILE-linux.conf" >/dev/null; then
+      ok "$profile_dir keeps bare-metal boot output on tty0"
+    else
+      fail "$profile_dir boot entry should avoid serial console redirection for bare-metal installs"
+    fi
+  elif grep -F 'systemd.mask=serial-getty@ttyS0.service' "$ROOT/$profile_dir/efiboot/loader/entries/01-$PROFILE-linux.conf" >/dev/null; then
     ok "$profile_dir masks serial getty while keeping serial console output"
   else
     fail "$profile_dir does not mask serial-getty@ttyS0.service"
@@ -535,12 +551,17 @@ check_iso() {
     require_file "$profile_dir/airootfs/etc/skel/.bash_profile"
     require_file "$profile_dir/airootfs/root/customize_airootfs.sh"
     require_file "$profile_dir/airootfs/etc/systemd/system/engineos-live-setup.service"
+    require_file "$profile_dir/airootfs/etc/systemd/system/engineos-live-codex-setup.service"
     require_file "$profile_dir/airootfs/etc/systemd/system/engineos-dev-shell.service"
     require_file "$profile_dir/airootfs/usr/local/bin/engineos-firstboot"
     require_file "$profile_dir/airootfs/usr/local/bin/engineos-live-setup"
+    require_file "$profile_dir/airootfs/usr/local/bin/engineos-live-codex-setup"
+    require_file "$profile_dir/airootfs/usr/local/bin/codex"
     require_file "$profile_dir/airootfs/usr/local/bin/engineos-dev-shell-start"
     check_bash_syntax "$profile_dir/airootfs/root/customize_airootfs.sh"
     check_bash_syntax "$profile_dir/airootfs/usr/local/bin/engineos-live-setup"
+    check_bash_syntax "$profile_dir/airootfs/usr/local/bin/engineos-live-codex-setup"
+    check_bash_syntax "$profile_dir/airootfs/usr/local/bin/codex"
     check_bash_syntax "$profile_dir/airootfs/usr/local/bin/engineos-dev-shell-start"
     if grep -F 'wheel,input,audio,video,render' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null; then
       ok "$profile_dir live user gets input/audio/video/render groups"
@@ -571,6 +592,15 @@ check_iso() {
       ok "$profile_dir dev shell autostarts tmux on shell-owned Wayland"
     else
       fail "$profile_dir dev shell autostart is not configured for shell-owned tmux"
+    fi
+    if grep -F 'systemctl enable engineos-live-codex-setup.service' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
+        grep -F 'https://chatgpt.com/codex/install.sh' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-codex-setup" >/dev/null &&
+        grep -F 'chmod 0755 "$EMBEDDED_CODEX"' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-codex-setup" >/dev/null &&
+        grep -F '/home/dev/.codex/packages/standalone/releases/0.140.0-x86_64-unknown-linux-musl/bin/codex"]="1000:1000:755' "$ROOT/$profile_dir/profiledef.sh" >/dev/null &&
+        grep -F 'CODEX_BIN="$TARGET_HOME/.local/bin/codex"' "$ROOT/$profile_dir/airootfs/usr/local/bin/codex" >/dev/null; then
+      ok "$profile_dir live ISO has Codex on-demand setup"
+    else
+      fail "$profile_dir live ISO does not provide Codex on-demand setup"
     fi
     if grep -F "printf 'LANG=C.UTF-8\\n' >/etc/locale.conf" "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
         grep -F "printf 'KEYMAP=us\\n' >/etc/vconsole.conf" "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&

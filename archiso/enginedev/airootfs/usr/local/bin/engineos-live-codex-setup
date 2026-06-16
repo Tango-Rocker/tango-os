@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+TARGET_USER="${ENGINEOS_CODEX_USER:-dev}"
+TARGET_HOME="${ENGINEOS_CODEX_HOME:-/home/$TARGET_USER}"
+CODEX_BIN="$TARGET_HOME/.local/bin/codex"
+LOG_DIR="/var/log/engineos"
+LOG="$LOG_DIR/live-codex-setup.log"
+
+log() {
+  printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" | tee -a "$LOG"
+}
+
+install -d -m 2775 -o root -g wheel "$LOG_DIR" 2>/dev/null || true
+touch "$LOG" 2>/dev/null || LOG="/tmp/engineos-live-codex-setup.log"
+
+if [[ -x "$CODEX_BIN" ]]; then
+  chown -R "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.codex" "$TARGET_HOME/.local" 2>/dev/null || true
+  log "codex already installed: $CODEX_BIN"
+  "$CODEX_BIN" --version | tee -a "$LOG" || true
+  exit 0
+fi
+
+EMBEDDED_CODEX="$TARGET_HOME/.codex/packages/standalone/current/bin/codex"
+if [[ -f "$EMBEDDED_CODEX" ]]; then
+  chmod 0755 "$EMBEDDED_CODEX" 2>/dev/null || true
+  chown -R "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.codex" "$TARGET_HOME/.local" 2>/dev/null || true
+  if [[ -x "$CODEX_BIN" ]]; then
+    log "codex repaired from embedded payload: $CODEX_BIN"
+    "$CODEX_BIN" --version | tee -a "$LOG" || true
+    exit 0
+  fi
+fi
+
+if ! id "$TARGET_USER" >/dev/null 2>&1; then
+  log "ERROR target user missing: $TARGET_USER"
+  exit 1
+fi
+
+if ! command -v curl >/dev/null 2>&1; then
+  log "ERROR curl is required to install Codex CLI"
+  exit 1
+fi
+
+install -d -m 0755 -o "$TARGET_USER" -g "$TARGET_USER" "$TARGET_HOME/.local/bin"
+log "installing Codex CLI for $TARGET_USER with official standalone installer"
+runuser -u "$TARGET_USER" -- env HOME="$TARGET_HOME" CODEX_NON_INTERACTIVE=1 \
+  sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | sh' 2>&1 | tee -a "$LOG"
+
+if [[ ! -x "$CODEX_BIN" ]]; then
+  log "ERROR installer completed but Codex CLI is missing: $CODEX_BIN"
+  exit 1
+fi
+
+log "codex installed: $CODEX_BIN"
+"$CODEX_BIN" --version | tee -a "$LOG"

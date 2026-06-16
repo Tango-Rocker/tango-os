@@ -1,0 +1,14 @@
+[Unit]
+Description=Install Codex CLI for the EngineDev live user
+After=NetworkManager.service
+StartLimitBurst=3
+StartLimitIntervalSec=180s
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/engineos-live-codex-setup
+Restart=on-failure
+RestartSec=20s
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,6 @@
 pkgname=engineos-cli
 pkgver=0.1.0
-pkgrel=17
+pkgrel=19
 pkgdesc="EngineOS command-line control surface"
 arch=('any')
 url="https://example.invalid/engineos"
@@ -29,6 +29,7 @@ package() {
   install -Dm755 "$_engineos_root/tools/scripts/artifacts.sh" "$pkgdir/usr/lib/engineos/scripts/artifacts.sh"
   install -Dm755 "$_engineos_root/tools/scripts/release.sh" "$pkgdir/usr/lib/engineos/scripts/release.sh"
   install -Dm755 "$_engineos_root/tools/scripts/install_dev.sh" "$pkgdir/usr/lib/engineos/scripts/install_dev.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/installation_guide.sh" "$pkgdir/usr/lib/engineos/scripts/installation_guide.sh"
   install -Dm755 "$_engineos_root/tools/scripts/terminal_launcher.sh" "$pkgdir/usr/lib/engineos/scripts/terminal_launcher.sh"
   install -Dm755 "$_engineos_root/tools/scripts/capture_frame.sh" "$pkgdir/usr/lib/engineos/scripts/capture_frame.sh"
   install -Dm755 "$_engineos_root/tools/scripts/doctor.sh" "$pkgdir/usr/lib/engineos/scripts/doctor.sh"
@@ -40,6 +41,7 @@ package() {
   install -Dm755 "$_engineos_root/tools/scripts/proof.sh" "$pkgdir/usr/lib/engineos/scripts/proof.sh"
   install -Dm755 "$_engineos_root/tools/scripts/vm.sh" "$pkgdir/usr/lib/engineos/scripts/vm.sh"
   install -Dm755 "$_engineos_root/tools/scripts/usb.sh" "$pkgdir/usr/lib/engineos/scripts/usb.sh"
+  install -Dm755 "$_engineos_root/tools/scripts/secure_boot.sh" "$pkgdir/usr/lib/engineos/scripts/secure_boot.sh"
   install -Dm755 "$_engineos_root/tools/scripts/test_runner.sh" "$pkgdir/usr/lib/engineos/scripts/test_runner.sh"
   install -Dm755 "$_engineos_root/tools/scripts/validate_builder.sh" "$pkgdir/usr/lib/engineos/scripts/validate_builder.sh"
   install -Dm755 "$_engineos_root/tools/scripts/validate_repo.sh" "$pkgdir/usr/lib/engineos/scripts/validate_repo.sh"

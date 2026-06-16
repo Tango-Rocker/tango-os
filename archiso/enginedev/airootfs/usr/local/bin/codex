@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+TARGET_USER="${ENGINEOS_CODEX_USER:-dev}"
+TARGET_HOME="${ENGINEOS_CODEX_HOME:-/home/$TARGET_USER}"
+CODEX_BIN="$TARGET_HOME/.local/bin/codex"
+SETUP="/usr/local/bin/engineos-live-codex-setup"
+LOG="/var/log/engineos/live-codex-setup.log"
+
+if [[ -x "$CODEX_BIN" ]]; then
+  if [[ ! -w "$TARGET_HOME/.codex" || ! -w "$TARGET_HOME/.local" ]]; then
+    if [[ "$EUID" -eq 0 ]]; then
+      "$SETUP" >/dev/null 2>&1 || true
+    elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+      sudo "$SETUP" >/dev/null 2>&1 || true
+    fi
+  fi
+  exec "$CODEX_BIN" "$@"
+fi
+
+if [[ ! -x "$SETUP" ]]; then
+  printf 'Codex CLI is not installed and setup helper is missing: %s\n' "$SETUP" >&2
+  exit 127
+fi
+
+printf 'Codex CLI is not installed yet; running EngineOS live Codex setup.\n' >&2
+if [[ "$EUID" -eq 0 ]]; then
+  "$SETUP"
+elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+  sudo "$SETUP"
+else
+  "$SETUP"
+fi
+
+if [[ -x "$CODEX_BIN" ]]; then
+  exec "$CODEX_BIN" "$@"
+fi
+
+printf 'Codex CLI setup did not produce %s\n' "$CODEX_BIN" >&2
+printf 'Check %s and network connectivity, then retry codex --version.\n' "$LOG" >&2
+exit 127

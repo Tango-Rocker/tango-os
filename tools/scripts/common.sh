@@ -172,6 +172,10 @@ engineos_builder_packages() {
     rsync \
     github-cli \
     git-lfs \
+    sbsigntools \
+    libisoburn \
+    mtools \
+    efitools \
     lazygit \
     btop \
     bat \

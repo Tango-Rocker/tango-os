@@ -19,5 +19,8 @@ file_permissions=(
   ["/root/customize_airootfs.sh"]="0:0:755"
   ["/usr/local/bin/engineos-firstboot"]="0:0:755"
   ["/usr/local/bin/engineos-live-setup"]="0:0:755"
+  ["/usr/local/bin/engineos-live-codex-setup"]="0:0:755"
+  ["/usr/local/bin/codex"]="0:0:755"
+  ["/home/dev/.codex/packages/standalone/releases/0.140.0-x86_64-unknown-linux-musl/bin/codex"]="1000:1000:755"
   ["/usr/local/bin/engineos-dev-shell-start"]="0:0:755"
 )

@@ -51,6 +51,10 @@ engineos commands:
   build iso [enginedev|engineruntime] [--dry-run] [--fast]
   build engine quake [--dry-run] [--fetch]
   build shell [--dry-run]
+  secure-boot keys create|status
+  secure-boot sign-iso --iso <path> [--out <path>] [--dry-run]
+  secure-boot enroll-handoff
+  installation-guide
   package <name> [--dry-run]
   lint packages [--package <name>]
   preflight [all|repo|iso|scripts]
@@ -84,7 +88,7 @@ engineos commands:
   run shell --headless|--nested|--tty
   logs shell|app|engine|runtime|live-setup|doctor|boot|all [--last N] [--files|--journal]
   crash-bundle [--vm|--runtime|--bare-metal]
-  test [smoke|all|agent|mcp|compositor|shell-actions|engine-runner-env|app|assets|reliability|logs|artifacts|terminal|vm|usb|install|proof|builder-handoff|builder-doctor|post-first-deploy|builder|bootstrap|repo|boot|engine|shell|input|render|outputs]
+  test [smoke|all|agent|mcp|compositor|shell-actions|engine-runner-env|app|assets|reliability|logs|artifacts|terminal|vm|usb|secure-boot|install|proof|builder-handoff|builder-doctor|post-first-deploy|builder|bootstrap|repo|boot|engine|shell|input|render|outputs]
 HELP
 }
 
@@ -273,6 +277,14 @@ cmd_usb() {
   exec "$ENGINEOS_SCRIPT_DIR/usb.sh" "$@"
 }
 
+cmd_secure_boot() {
+  exec "$ENGINEOS_SCRIPT_DIR/secure_boot.sh" "$@"
+}
+
+cmd_installation_guide() {
+  exec "$ENGINEOS_SCRIPT_DIR/installation_guide.sh" "$@"
+}
+
 cmd_capture() {
   local target="${1:-}"
   shift || true
@@ -443,6 +455,12 @@ main() {
       ;;
     usb)
       cmd_usb "$@"
+      ;;
+    secure-boot)
+      cmd_secure_boot "$@"
+      ;;
+    installation-guide|install-guide)
+      cmd_installation_guide "$@"
       ;;
     capture)
       cmd_capture "$@"

@@ -6,11 +6,11 @@ PoC 0 build-lab acceptance is complete for EngineDev. The Arch builder can repea
 
 ## Current Artifacts
 
-- Arch builder VM: `dev@172.22.52.109`
+- Arch builder VM: `dev@172.23.74.185`
 - Builder repo path: `/srv/engineos`
 - Local package repo: `/srv/engineos/repo/x86_64`
-- EngineDev ISO: `out/EngineDevOS-2026.06.15-x86_64.iso` on the builder
-- EngineDev checksum: `out/EngineDevOS-2026.06.15-x86_64.iso.sha256`
+- EngineDev ISO: `out/EngineDevOS-2026.06.16-x86_64.iso` on the builder, copied locally to `E:\dev\Tang-OS\out\EngineDevOS-2026.06.16-x86_64.iso`
+- EngineDev checksum: `out/EngineDevOS-2026.06.16-x86_64.iso.sha256`
 - EngineRuntime ISO: `out/EngineRuntimeOS-2026.06.15-x86_64.iso`
 - EngineRuntime checksum: `out/EngineRuntimeOS-2026.06.15-x86_64.iso.sha256`
 
@@ -18,13 +18,19 @@ The latest EngineDev ISO checksum passed on the builder with:
 
 ```bash
 cd out
-sha256sum -c EngineDevOS-2026.06.15-x86_64.iso.sha256
+sha256sum -c EngineDevOS-2026.06.16-x86_64.iso.sha256
 ```
 
 Current EngineDev checksum after the cached-package autoinstall rebuild:
 
 ```text
-EngineDevOS-2026.06.15-x86_64.iso: OK
+EngineDevOS-2026.06.16-x86_64.iso: OK
+
+Current EngineDev checksum after the live Codex/install-guide rebuild:
+
+```text
+e37bc00857743df534444b22bcdb113769a88f82e957d2ae5d2463830becd85c  EngineDevOS-2026.06.16-x86_64.iso
+```
 ```
 
 Current EngineRuntime checksum after the launchpad MVP proof rebuild:
@@ -36,6 +42,14 @@ e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeO
 ## Working
 
 - `engineos` is the control surface for builder setup, package builds, ISO builds, VM boot helpers, USB dry-runs, diagnostics, proofs, logs, assets, shell launches, engine launches, and tests.
+- `engineos secure-boot` now has a repo-owned custom-key path for Secure Boot experiments: create an EngineOS db signing key, sign a generated ISO's UEFI fallback bootloader plus `vmlinuz-linux`, print firmware enrollment guidance, and run local dry-run tests. The builder package set now includes `sbsigntools`, `libisoburn`, `mtools`, and `efitools` for this workflow.
+- The local Windows/WSL host repacked and signed `out/EngineDevOS-2026.06.15-x86_64-secureboot.iso` with the EngineOS Secure Boot key under `artifacts/secure-boot/keys`. `sbverify --list` shows `/EFI/BOOT/BOOTx64.EFI` and `/arch/boot/x86_64/vmlinuz-linux` signed by `CN=EngineOS Secure Boot`, and `sha256sum -c EngineDevOS-2026.06.15-x86_64-secureboot.iso.sha256` passes.
+- The current USB is Windows Disk 4, `USB DISK 2.0`, 31 GB, with Ventoy-style partitions `I:` and `H:`. `EngineOS-SecureBoot-db.cer` was staged to both partitions, and `EngineDevOS-2026.06.15-x86_64-secureboot.iso` reached full size on `I:`. The USB's `H:`/`VTOYEFI` partition did not show `EFI\BOOT\BOOTX64.EFI`, explaining the firmware bounce when selecting the UEFI partition. The current Codex/PowerShell session is not elevated, so it cannot raw-write the signed ISO to the physical USB disk.
+- For the bare-metal USB console hang, `out/EngineDevOS-2026.06.15-x86_64-secureboot-baremetal.iso` was repacked from the signed enrollable image with the EngineDev boot entry reduced to `console=tty0`; `console=ttyS0,115200n8` and `systemd.mask=serial-getty@ttyS0.service` were removed from both the ISO-root and EFI-image loader entries. `sbverify` still reports EngineOS Secure Boot signatures on `BOOTx64.EFI` and `vmlinuz-linux`, and the new checksum passes.
+- The checked-in EngineDev boot entry now uses `console=tty0` without serial-console redirection, so the next rebuilt EngineDev ISO should not need the one-off bare-metal repack to keep boot output on the monitor.
+- EngineDev live ISO source now includes a Codex-on-demand path: `/usr/local/bin/codex` delegates to `/home/dev/.local/bin/codex` when present and otherwise runs `/usr/local/bin/engineos-live-codex-setup`, which installs the official Codex CLI for the live `dev` user and logs to `/var/log/engineos/live-codex-setup.log`. The live profile enables `engineos-live-codex-setup.service` as a best-effort boot-time install attempt, with the wrapper still available for manual retry.
+- `engineos installation-guide` is now packaged by `engineos-cli` and prints the live ISO install flow, including Codex validation, private GitHub token setup for `--repo-token-file`, the destructive install command, clone-failure recovery for `prompts are disabled`, and fstab recovery commands.
+- The rebuilt EngineDev ISO `EngineDevOS-2026.06.16-x86_64.iso` contains `engineos-cli 0.1.0-19`, the embedded live Codex CLI `codex-cli 0.140.0` with executable permissions, the `engineos installation-guide` command, the fstab `sudo genfstab ... | sudo tee ...` fix, the live Codex setup service enabled, and the checked-in `console=tty0` boot entry. Builder checksum verification and local Windows SHA-256 verification both passed.
 - The Arch builder VM has the repo at `/srv/engineos`, validates cleanly, builds EngineOS packages, validates the local repo, and builds EngineDev/EngineRuntime ISOs.
 - `engineos proof build-lab` completed on the Arch builder after rebuilding existing package artifacts with `makepkg -f`.
 - A clean EngineDev ISO rebuild was forced by archiving the previous same-day artifact and removing `work/enginedev`; the fresh ISO was written at `2026-06-13 22:13 UTC`.
@@ -50,7 +64,7 @@ e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeO
 - `engineos vm boot` can boot headlessly with `--display none --background`, writing pid, QEMU, and serial logs under the EngineOS state/log directories.
 - The latest EngineDev ISO was rebuilt with `cow_spacesize=50%` and copied from the builder to the Windows host at `E:\dev\Tang-OS\out\EngineDevOS-2026.06.14-cowspace-x86_64.iso`, checksum `2cb8450fe6a4f520b1255ea6493d25250e7b5c0c27f9113de69e987ef57345fa`.
 - `tools/scripts/create_iso_test_vm_hyperv.ps1` creates a separate Hyper-V ISO test VM, dry-run by default, for direct EngineDev/EngineRuntime validation outside the builder-hosted QEMU path.
-- EngineDev and EngineRuntime UEFI boot entries set `cow_spacesize=50%`; on the 4 GiB Hyper-V test VM this raises the live writable overlay from archiso's 256 MiB default to 2.0 GiB. The checked-in boot entries also mask `serial-getty@ttyS0.service` to stop the Hyper-V serial-console restart loop, and `engineos preflight iso` enforces the EngineDev boot-entry settings.
+- EngineDev and EngineRuntime UEFI boot entries set `cow_spacesize=50%`; on the 4 GiB Hyper-V test VM this raises the live writable overlay from archiso's 256 MiB default to 2.0 GiB. EngineRuntime still masks `serial-getty@ttyS0.service` for the serial VM path, while EngineDev now keeps bare-metal boot output on `tty0`; `engineos preflight iso` enforces the EngineDev boot-entry settings.
 - Hyper-V test VM `EngineOS-EngineDev-Test` was recreated from the cowspace-rebuilt June 14 EngineDev ISO and booted on the Default Switch at `172.22.49.144`; `engineos proof booted-iso --vm` passed there.
 - `engineos deploy first` stages a repo-owned post-install payload into a booted EngineDev guest and runs first-time dev setup for tmux, zsh/oh-my-zsh, Docker, and Codex CLI.
 - EngineDev first-deploy and installed-target package sets include the late dev convenience layer: Neovim/Vim, fzf, zoxide, wl-clipboard, bash completion, GitHub CLI, Git LFS, lazygit, btop, bat, eza, tldr, man-db, and man-pages.
@@ -62,6 +76,7 @@ e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeO
 - EngineDev self-host rehearsal passed in the Hyper-V test VM using the separate 32 GiB VHD: `/dev/sda` was partitioned/formatted as `ENGINEOS_DEV_SRV`, mounted at `/srv`, seeded with `/srv/engineos`, and survived reboot with the repo checkout plus local package repo artifacts intact. The live ISO root reverted package installs after reboot, as expected, while reinstalling `engineos-cli` from `/srv/engineos/repo/x86_64` restored the rebuilt package.
 - `engineos install dev --dry-run` now prints the safe EngineDev autoinstall plan. On the current Windows lab it defaults to the disk that is currently `F:` via `/dev/disk/by-id/ata-WDC_WD10EZEX-00WN4A0_WD-WCC6Y1ZP5EAX`, creates a GPT layout with EFI, root, `/var`, and persistent `/srv`, mounts the existing NTFS `E:` volume labeled `Tango` at `/home`, uses the optional ISO package cache, clones the official Tang-OS repo, builds the local repo, runs the post-install payload, and records first-boot handoff proof.
 - `engineos install dev --yes-i-understand-this-wipes-device` now has a guarded executor for the VM/bare-metal path. It wipes and partitions the target, installs Arch/EngineDev packages, configures systemd-boot, creates the `dev` user, enables NetworkManager/sshd/Docker, mounts optional NTFS `/home`, clones Tang-OS into `/srv/engineos`, builds the local package repo, runs the post-install payload, and writes `/srv/ENGINEOS_INSTALL_HANDOFF.txt`.
+- `engineos install dev` now rewrites the target fstab through `sudo genfstab ... | sudo tee ...` instead of appending through a partially privileged pipeline, addressing the bare-metal failure mode where fstab update failed due to permissions.
 - EngineDev ISO builds now default to staging an installer package cache into generated EngineDev profiles at `/opt/engineos/install-cache/pkg`; `engineos install dev` validates that requested install package artifacts are present, uses the cache through a generated pacman config and `pacstrap -c -C ...`, falls back to normal pacman cache/mirrors when the cache is absent, and rejects incomplete caches with an explicit rebuild/`--no-package-cache` handoff.
 - EngineDev autoinstall now defaults the source checkout to `https://github.com/Tango-Rocker/tango-os.git`, runs Git clones non-interactively, and supports private repo access through `--repo-token-file` / `ENGINEOS_REPO_TOKEN_FILE`. The token is copied only into the target runtime under root-only transient storage, used through a temporary `GIT_ASKPASS` helper, redacted from installer output, and removed immediately after clone.
 - A full EngineDev autoinstall VM proof passed on June 15, 2026 using the rebuilt ISO `out/EngineDevOS-2026.06.15-x86_64.iso`, a disposable qcow2 target disk exposed as `/dev/vda`, and the private `Tango-Rocker/tango-os` repo on branch `main`. The live ISO package cache contained 1008 package artifacts under `/opt/engineos/install-cache/pkg`, `pacstrap` installed the cached 501-package transaction, `/srv/engineos` cloned to commit `23b8ebb`, and the installed target built 13 local package artifacts.
@@ -116,6 +131,7 @@ e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeO
 - Visible hardware/frame-capture proof of the Runtime shell is still missing; the current Runtime proof is headless QEMU evidence from logs, state JSON, and app renderer/frame logs.
 - Runtime launchpad with user-provided Quake assets is not proven yet, so the engine slot has not mapped as a live Quake surface in Runtime.
 - Real USB writing to removable media.
+- Secure Boot signed-ISO boot with an enrolled EngineOS db certificate. The signed ISO artifact exists and verifies locally, but target firmware enrollment and a real USB boot have not been executed yet.
 - Bare-metal AMD boot, DRM/KMS validation, and hardware GL shell startup proof.
 - Hyper-V CPU/RAM settings are not changed from this repo; raising them requires elevated Windows PowerShell.
 
@@ -162,10 +178,54 @@ EngineDev autoinstall planner proof:
 ./tools/engineos/engineos preflight repo --package engineos-cli
 ```
 
+Rebuild the EngineDev ISO with the live Codex/install-guide fixes baked in:
+
+```bash
+cd /srv/engineos
+./tools/engineos/engineos build repo
+./tools/engineos/engineos build iso enginedev --fast --clean --archive-existing
+```
+
+After booting the rebuilt live ISO on the bare-metal lab target:
+
+```bash
+engineos doctor --bare-metal
+engineos installation-guide
+codex --version
+sudo install -d -m 0700 /run/engineos-secrets
+sudo tee /run/engineos-secrets/tango-os-readonly.token >/dev/null
+sudo chmod 0600 /run/engineos-secrets/tango-os-readonly.token
+engineos install dev --dry-run --repo-url https://github.com/Tango-Rocker/tango-os.git --branch main --repo-token-file /run/engineos-secrets/tango-os-readonly.token
+sudo engineos install dev --repo-url https://github.com/Tango-Rocker/tango-os.git --branch main --repo-token-file /run/engineos-secrets/tango-os-readonly.token --yes-i-understand-this-wipes-device
+```
+
 For the current bare-metal lab target, inspect the default plan before the real destructive install:
 
 ```bash
 engineos install dev --dry-run --repo-url https://github.com/Tango-Rocker/tango-os.git --branch main
+```
+
+Secure Boot custom-key path for the current USB boot failure:
+
+```bash
+cd /srv/engineos
+./tools/engineos/engineos bootstrap builder
+./tools/engineos/engineos secure-boot keys create
+./tools/engineos/engineos secure-boot sign-iso --iso out/EngineDevOS-2026.06.15-x86_64.iso
+./tools/engineos/engineos secure-boot enroll-handoff
+./tools/engineos/engineos usb write --iso out/EngineDevOS-2026.06.15-x86_64-secureboot.iso --device /dev/sdX --dry-run
+```
+
+Enroll `artifacts/secure-boot/keys/db.cer` into firmware Secure Boot `db` as an appended allowed certificate. Do not clear or replace Microsoft keys on a Windows dual-boot machine.
+
+Current locally signed artifact:
+
+```bash
+out/EngineDevOS-2026.06.15-x86_64-secureboot.iso
+out/EngineDevOS-2026.06.15-x86_64-secureboot.iso.sha256
+out/EngineDevOS-2026.06.15-x86_64-secureboot-baremetal.iso
+out/EngineDevOS-2026.06.15-x86_64-secureboot-baremetal.iso.sha256
+artifacts/secure-boot/keys/db.cer
 ```
 
 Re-run the completed EngineDev autoinstall VM proof if needed:
