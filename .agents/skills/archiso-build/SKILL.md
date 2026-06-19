@@ -8,13 +8,13 @@ description: Use when changing archiso profiles, package lists, pacman config, l
 ## Scope
 
 Use this skill for files under `archiso/`, local package definitions under
-`packages/`, and build wrappers that affect `engineos build repo` or
-`engineos build iso`.
+`packages/`, and build wrappers that affect `eos-build repo` or
+`eos-build iso`.
 
 ## Rules
 
 - Do not edit generated `work/` or `out/` artifacts as source.
-- Prefer `./tools/engineos/engineos build iso ...` over direct `mkarchiso`.
+- Prefer `./tools/engineos/eos-build iso ...` over direct `mkarchiso`.
 - Keep EngineDev and EngineRuntime profile differences explicit.
 - Real package and ISO builds belong on the Arch builder VM at `/srv/engineos`.
 - Keep commercial game assets out of packages and ISO profiles.
@@ -24,20 +24,20 @@ Use this skill for files under `archiso/`, local package definitions under
 Local dry-runs:
 
 ```bash
-./tools/engineos/engineos lint packages
-./tools/engineos/engineos preflight repo
-./tools/engineos/engineos build repo --dry-run
-./tools/engineos/engineos build iso enginedev --dry-run
-./tools/engineos/engineos build iso engineruntime --dry-run
+./tools/engineos/eos-lint packages
+./tools/engineos/eos-preflight repo
+./tools/engineos/eos-build repo --dry-run
+./tools/engineos/eos-build iso enginedev --dry-run
+./tools/engineos/eos-build iso engineruntime --dry-run
 ```
 
 Builder VM proof:
 
 ```bash
 cd /srv/engineos
-./tools/engineos/engineos build repo
-./tools/engineos/engineos build iso enginedev --fast --clean --archive-existing
-./tools/engineos/engineos build iso engineruntime --fast --clean --archive-existing
+./tools/engineos/eos-build repo
+./tools/engineos/eos-build iso enginedev --fast --clean --archive-existing
+./tools/engineos/eos-build iso engineruntime --fast --clean --archive-existing
 ```
 
 ## Files

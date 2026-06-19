@@ -22,7 +22,9 @@ fi
 
 SOCKET_FILE="${ENGINEOS_ENGINE_SOCKET:-$STATE_DIR/engine-runner.sock}"
 DAEMON_PID_FILE="$STATE_DIR/engine-runner.pid"
-DAEMON_SCRIPT="$SCRIPT_DIR/engine_runner_daemon.py"
+DAEMON_BIN="${ENGINEOS_ENGINE_RUNNER_DAEMON:-/usr/lib/engineos/bin/engine-runner-daemon}"
+SOURCE_GO_DIR="$ROOT/tools/go"
+LEGACY_DAEMON_SCRIPT="$SCRIPT_DIR/engine_runner_daemon.py"
 
 usage() {
   cat <<'HELP'
@@ -54,15 +56,40 @@ python_bin() {
   fi
 }
 
+go_bin() {
+  command -v go >/dev/null 2>&1 || return 1
+  command -v go
+}
+
 daemon_running() {
   [[ -S "$SOCKET_FILE" ]]
 }
 
-start_daemon() {
-  local py
-  py="$(python_bin)" || die "python3 is required for engine-runner socket mode"
-  [[ -f "$DAEMON_SCRIPT" ]] || die "engine runner daemon missing: $DAEMON_SCRIPT"
+run_daemon_client() {
+  local mode="$1"
+  shift || true
 
+  if [[ -x "$DAEMON_BIN" ]]; then
+    "$DAEMON_BIN" "$mode" --socket "$SOCKET_FILE" "$@"
+    return
+  fi
+
+  if [[ -d "$SOURCE_GO_DIR" ]] && go_bin >/dev/null 2>&1; then
+    (cd "$SOURCE_GO_DIR" && go run ./cmd/engine-runner-daemon "$mode" --socket "$SOCKET_FILE" "$@")
+    return
+  fi
+
+  if [[ "${ENGINEOS_ENGINE_RUNNER_ALLOW_PYTHON_FALLBACK:-true}" == "true" && -f "$LEGACY_DAEMON_SCRIPT" ]]; then
+    local py
+    py="$(python_bin)" || die "Go engine-runner daemon unavailable and python3 fallback is unavailable"
+    "$py" "$LEGACY_DAEMON_SCRIPT" "$mode" --socket "$SOCKET_FILE" "$@"
+    return
+  fi
+
+  die "Go engine-runner daemon unavailable; build tools/go/cmd/engine-runner-daemon or set ENGINEOS_ENGINE_RUNNER_DAEMON"
+}
+
+start_daemon() {
   ensure_dirs
   if daemon_running; then
     return 0
@@ -71,7 +98,7 @@ start_daemon() {
   ENGINEOS_ROOT="$ROOT" \
   ENGINEOS_STATE_DIR="$STATE_DIR" \
   ENGINEOS_LOG_DIR="$LOG_DIR" \
-    "$py" "$DAEMON_SCRIPT" --daemon --socket "$SOCKET_FILE" >>"$LOG_DIR/engine-runner.log" 2>&1 &
+    run_daemon_client --daemon >>"$LOG_DIR/engine-runner.log" 2>&1 &
   printf '%s\n' "$!" >"$DAEMON_PID_FILE"
 
   for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -85,13 +112,11 @@ start_daemon() {
 request() {
   local method="$1"
   shift || true
-  local py
-  py="$(python_bin)" || die "python3 is required for engine-runner socket mode"
   start_daemon
   ENGINEOS_ROOT="$ROOT" \
   ENGINEOS_STATE_DIR="$STATE_DIR" \
   ENGINEOS_LOG_DIR="$LOG_DIR" \
-    "$py" "$DAEMON_SCRIPT" --client --socket "$SOCKET_FILE" "$method" "$@"
+    run_daemon_client --client "$method" "$@"
 }
 
 ACTION="${1:-help}"

@@ -192,6 +192,28 @@ lint_pkgbuild() {
   fi
 
   case "$pkg" in
+    engineos-tools)
+      if ! grep -q 'tools/engineos/eos' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: eos dispatcher is not installed"
+        return
+      fi
+      if ! grep -q 'engineos_eos_commands' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: eos wrappers are not generated from the command list"
+        return
+      fi
+      if ! grep -q 'agent_metadata.sh.*write' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: generated agent metadata is not installed"
+        return
+      fi
+      if ! grep -q 'engineos-agent-dispatcher@.service' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: agent dispatcher service template is not installed"
+        return
+      fi
+      if ! grep -q 'engineos-observe-exporter.service' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: observability exporter service is not installed"
+        return
+      fi
+      ;;
     engineos-config)
       if ! grep -q 'runtime.conf' "$pkg_dir/PKGBUILD"; then
         fail "$pkg: runtime.conf is not installed"
@@ -207,112 +229,16 @@ lint_pkgbuild() {
       fi
       ;;
     engineos-engine-runner)
-      if ! grep -q 'engine_runner_daemon.py' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: engine runner daemon is not installed"
+      if grep -q 'engine_runner_daemon.py' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: Python engine runner daemon must not be packaged"
+        return
+      fi
+      if ! grep -q 'engine-runner-daemon' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: Go engine runner daemon is not installed"
         return
       fi
       if ! grep -q 'engineos-engine-runner.service' "$pkg_dir/PKGBUILD"; then
         fail "$pkg: systemd service is not installed"
-        return
-      fi
-      ;;
-    engineos-cli)
-      if ! grep -q 'builder_handoff.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: builder handoff helper is not installed"
-        return
-      fi
-      if ! grep -q 'builder_doctor_proof.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: builder doctor proof helper is not installed"
-        return
-      fi
-      if ! grep -q 'bootstrap_builder.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: builder bootstrap helper is not installed"
-        return
-      fi
-      if grep -q 'engine_runner_daemon.py' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: engine runner daemon belongs to engineos-engine-runner"
-        return
-      fi
-      if grep -q 'engine_runner.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: engine runner wrapper belongs to engineos-engine-runner"
-        return
-      fi
-      if ! grep -q 'build_shell.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: shell build helper is not installed"
-        return
-      fi
-      if ! grep -q 'artifacts.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: artifact helper is not installed"
-        return
-      fi
-      if ! grep -q 'app.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: app launcher helper is not installed"
-        return
-      fi
-      if ! grep -q 'release.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: release helper is not installed"
-        return
-      fi
-      if ! grep -q 'install_dev.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: EngineDev installer helper is not installed"
-        return
-      fi
-      if ! grep -q 'terminal_launcher.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: terminal launcher helper is not installed"
-        return
-      fi
-      if ! grep -q 'logs.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: logs helper is not installed"
-        return
-      fi
-      if ! grep -q 'outputs.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: outputs helper is not installed"
-        return
-      fi
-      if ! grep -q 'proof.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: proof helper is not installed"
-        return
-      fi
-      if ! grep -q 'vm.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: VM helper is not installed"
-        return
-      fi
-      if ! grep -q 'usb.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: USB helper is not installed"
-        return
-      fi
-      if ! grep -q 'validate_builder.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: builder validator is not installed"
-        return
-      fi
-      if ! grep -q 'validate_repo.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: repo validator is not installed"
-        return
-      fi
-      if ! grep -q 'validate_engine.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: engine validator is not installed"
-        return
-      fi
-      if ! grep -q 'validate_shell.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: shell validator is not installed"
-        return
-      fi
-      ;;
-    engineos-agent-tools)
-      if ! grep -q 'engineos_mcp_server.py' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: MCP server is not installed"
-        return
-      fi
-      if ! grep -q 'tools/hooks/session_start.py' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: Codex hooks are not installed"
-        return
-      fi
-      if ! grep -q '.codex/config.toml' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: Codex config is not installed"
-        return
-      fi
-      if ! grep -q '.agents/skills/engineos/SKILL.md' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: root EngineOS skill is not installed"
         return
       fi
       ;;
@@ -322,7 +248,7 @@ lint_pkgbuild() {
         return
       fi
       if grep -q 'shell_runner.sh' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: shell runner wrapper belongs to engineos-cli"
+        fail "$pkg: shell runner wrapper belongs to engineos-tools"
         return
       fi
       if ! grep -q 'wlroots0.19' "$pkg_dir/PKGBUILD"; then

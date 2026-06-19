@@ -159,7 +159,7 @@ check_builder_resources() {
     if [[ -n "$tmp_size" && "$tmp_size" -ge 8589934592 ]]; then
       ok "/tmp build space: at least 8 GiB"
     elif [[ -n "$tmp_size" ]]; then
-      warn "/tmp build space is below 8 GiB; engineos build iso will try sudo remount,size=8G"
+      warn "/tmp build space is below 8 GiB; eos-build iso will try sudo remount,size=8G"
     else
       warn "could not determine /tmp size"
     fi
@@ -220,13 +220,13 @@ check_pkg_config_module wlroots-0.19
 check_pkg_config_module wayland-server
 check_pkg_config_module xkbcommon
 
-optional_cmd qemu-system-x86_64 "needed only for engineos vm boot"
+optional_cmd qemu-system-x86_64 "needed only for eos-vm boot"
 check_ovmf
 
-if [[ -x "$ROOT/tools/engineos/engineos" ]]; then
-  ok "source-tree engineos command exists"
+if [[ -x "$ROOT/tools/engineos/eos" && -x "$ROOT/tools/engineos/eos-build" && -x "$ROOT/tools/engineos/eos-test" ]]; then
+  ok "source-tree eos command family exists"
 else
-  fail "source-tree engineos command missing"
+  fail "source-tree eos command family missing"
 fi
 
 printf 'Builder validation summary: %s failure(s), %s warning(s)\n' "$FAILURES" "$WARNINGS"

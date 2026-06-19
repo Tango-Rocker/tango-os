@@ -76,7 +76,7 @@ check_quake() {
 
   printf 'Quake assets missing: id1/pak0.pak was not found.\n' >&2
   printf 'Copy your legitimate Quake pak files to: %s\n' "$(preferred_quake_id1_path)" >&2
-  printf 'Run: engineos assets explain quake\n' >&2
+  printf 'Run: eos-assets explain quake\n' >&2
   return 1
 }
 
@@ -114,7 +114,7 @@ Copy your legitimate Quake files here:
   $dir/pak1.pak  optional, registered Quake
 
 Then run:
-  engineos assets check quake
+  eos-assets check quake
 HELP
 }
 
@@ -130,7 +130,7 @@ HELP
   cat <<'HELP'
 
 Environment override:
-  ENGINEOS_QUAKE_ID1=/path/to/id1 engineos run quake
+  ENGINEOS_QUAKE_ID1=/path/to/id1 eos-runtime quake
 
 Config files:
   /etc/engineos/quake.conf
@@ -143,7 +143,7 @@ Expected file:
   <id1 path>/pak0.pak
 
 Prepare the default user directory:
-  engineos assets prepare quake
+  eos-assets prepare quake
 HELP
 }
 

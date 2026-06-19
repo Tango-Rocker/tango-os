@@ -147,7 +147,7 @@ FAKE
   elif [[ -d "$upstream" ]]; then
     warn "upstream directory exists but is not a git checkout: $upstream"
   else
-    warn "upstream source not fetched yet; run engineos build engine quake --fetch on EngineDev"
+    warn "upstream source not fetched yet; run eos-build engine quake --fetch on EngineDev"
   fi
 
   if [[ -d "$build_dir" ]]; then

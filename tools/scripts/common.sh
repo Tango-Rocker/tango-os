@@ -125,16 +125,47 @@ have_cmd() {
 
 engineos_packages() {
   printf '%s\n' \
+    engineos-tools \
     engineos-config \
-    engineos-cli \
+    engineos-engine-runner \
     engineos-oh-my-zsh \
     engineos-tmux-plugins \
-    engineos-agent-tools \
     engineos-cube \
     engineos-shell \
-    engineos-engine-runner \
     engineos-quakespasm \
     engineos-quake-template
+}
+
+engineos_eos_commands() {
+  printf '%s\n' \
+    eos-agent \
+    eos-app \
+    eos-artifacts \
+    eos-assets \
+    eos-build \
+    eos-builder \
+    eos-capture \
+    eos-crash-bundle \
+    eos-deploy \
+    eos-doctor \
+    eos-input \
+    eos-install \
+    eos-lint \
+    eos-logs \
+    eos-observe \
+    eos-outputs \
+    eos-package \
+    eos-preflight \
+    eos-proof \
+    eos-release \
+    eos-runtime \
+    eos-secureboot \
+    eos-terminal \
+    eos-test \
+    eos-update \
+    eos-usb \
+    eos-validate \
+    eos-vm
 }
 
 engineos_profiles() {
@@ -197,6 +228,7 @@ engineos_builder_packages() {
     meson \
     ninja \
     pkgconf \
+    go \
     clang \
     lld \
     gcc \
@@ -267,12 +299,6 @@ engineos_builder_packages() {
     luarocks \
     fmt \
     spdlog \
-    nlohmann-json \
-    yaml-cpp \
-    tomlplusplus \
-    catch2 \
-    gtest \
-    benchmark \
     enet \
     imagemagick \
     ffmpeg \

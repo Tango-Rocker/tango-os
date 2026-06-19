@@ -38,7 +38,7 @@ cat >/etc/issue <<EOF
 EngineDev OS $(date -u +%Y.%m.%d) \r (\l)
 Profile: enginedev
 
-Run: engineos doctor --vm
+Run: eos-doctor --vm
 SSH: dev / dev
 EOF
 
@@ -47,9 +47,11 @@ chmod 0440 /etc/sudoers.d/10-engineos-wheel
 
 systemctl enable NetworkManager.service
 systemctl enable sshd.service
+systemctl enable docker.service
 systemctl enable engineos-live-setup.service
 systemctl enable engineos-live-codex-setup.service
 systemctl enable engineos-dev-shell.service
+systemctl enable engineos-observe-exporter.service
 systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service || true
 loginctl enable-linger dev || true
 

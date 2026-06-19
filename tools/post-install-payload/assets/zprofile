@@ -1,6 +1,15 @@
 if [[ -o interactive ]]; then
   printf 'EngineDev OS\n'
-  printf 'Try: engineos doctor --vm\n'
+  printf 'Try: eos-doctor --vm\n'
+  if command -v eos-observe >/dev/null 2>&1; then
+    eos-observe prompt-login --shell zsh || true
+    eval "$(eos-observe hook zsh 2>/dev/null)" || true
+  fi
+  if [[ -r "$HOME/Tang-OS/tools/scripts/update_check.sh" ]]; then
+    bash "$HOME/Tang-OS/tools/scripts/update_check.sh" --init || true
+  elif command -v eos-update >/dev/null 2>&1; then
+    eos-update check --init || true
+  fi
   if [[ -z "${TMUX:-}" && "${ENGINEOS_AUTO_TMUX:-1}" == "1" ]] &&
       command -v tmux >/dev/null 2>&1; then
     exec tmux new-session -A -s engineos

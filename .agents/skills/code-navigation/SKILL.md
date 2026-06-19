@@ -34,9 +34,9 @@ See `docs/agent-lsp.md` for the exact tool names and current limitations.
 ## Local Checks
 
 ```bash
-bash -n tools/engineos/engineos tools/scripts/*.sh engines/quakespasm/engineos/*.sh tests/smoke.sh archiso/enginedev/profiledef.sh archiso/engineruntime/profiledef.sh
-./tools/engineos/engineos build shell --dry-run
-./tools/engineos/engineos package engineos-shell --dry-run
+bash -n tools/engineos/engineos tools/scripts/*.sh tools/eos/*/*.sh engines/quakespasm/engineos/*.sh tests/smoke.sh archiso/enginedev/profiledef.sh archiso/engineruntime/profiledef.sh
+./tools/engineos/eos-build shell --dry-run
+./tools/engineos/eos-package engineos-shell --dry-run
 ```
 
 Compiler truth for wlroots/C compatibility belongs on the Arch builder VM.

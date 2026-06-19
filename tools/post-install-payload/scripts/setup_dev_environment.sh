@@ -126,7 +126,7 @@ install_managed_zprofile() {
       return
     fi
     if grep -F 'EngineDev OS' "$dest" >/dev/null 2>&1 ||
-        grep -F 'Try: engineos doctor --vm' "$dest" >/dev/null 2>&1; then
+        grep -F 'Try: eos-doctor --vm' "$dest" >/dev/null 2>&1; then
       as_root cp "$dest" "$dest.engineos-legacy.bak"
       log "backup legacy zprofile: $dest.engineos-legacy.bak"
     else
@@ -190,8 +190,7 @@ install_packages() {
     man-db
     man-pages
     base-devel
-    engineos-cli
-    engineos-agent-tools
+    engineos-tools
     engineos-oh-my-zsh
     engineos-tmux-plugins
     engineos-cube
@@ -294,10 +293,12 @@ configure_docker() {
 
   if have_cmd systemctl; then
     as_root systemctl enable docker.service >/dev/null 2>&1 || true
+    as_root systemctl enable engineos-observe-exporter.service >/dev/null 2>&1 || true
     if [[ -d /run/systemd/system ]]; then
       as_root systemctl restart docker.service
+      as_root systemctl restart engineos-observe-exporter.service >/dev/null 2>&1 || true
     else
-      log "systemd is not running; docker.service enabled for next boot"
+      log "systemd is not running; docker and observability services enabled for next boot"
     fi
   fi
 }

@@ -35,5 +35,5 @@ fi
 } >/var/log/engineos/live-setup.log
 
 if command -v engineos >/dev/null 2>&1; then
-  engineos doctor >/var/log/engineos/doctor-firstboot.log 2>&1 || true
+  eos-doctor >/var/log/engineos/doctor-firstboot.log 2>&1 || true
 fi

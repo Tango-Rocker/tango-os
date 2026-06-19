@@ -1,0 +1,11 @@
+[Unit]
+Description=EngineOS agent dispatcher drain for %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=%i
+WorkingDirectory=/srv/engineos
+Environment=ENGINEOS_AGENT_DISPATCHER_SERVICE=1
+ExecStart=/usr/bin/eos-agent dispatch drain --execute --limit 1

@@ -37,19 +37,19 @@ allowed_in_iso = false
 ## Current Commands
 
 ```bash
-engineos assets explain quake
-engineos assets prepare quake
-engineos assets check quake
-engineos assets path quake
+eos-assets explain quake
+eos-assets prepare quake
+eos-assets check quake
+eos-assets path quake
 ```
 
-`engineos assets prepare quake` creates the default user directory:
+`eos-assets prepare quake` creates the default user directory:
 
 ```text
 ~/.local/share/engineos/quake/id1
 ```
 
-`engineos assets check quake` looks for `id1/pak0.pak` in the documented user-provided paths or in `ENGINEOS_QUAKE_ID1`. `engineos assets path quake` prints the resolved `id1` directory when assets are present.
+`eos-assets check quake` looks for `id1/pak0.pak` in the documented user-provided paths or in `ENGINEOS_QUAKE_ID1`. `eos-assets path quake` prints the resolved `id1` directory when assets are present.
 
 System-local assets may be placed under:
 

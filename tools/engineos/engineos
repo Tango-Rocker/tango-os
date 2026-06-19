@@ -1,496 +1,166 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEFAULT_ENGINEOS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-if [[ "$DEFAULT_ENGINEOS_ROOT" == "/" && -d /usr/lib/engineos/scripts ]]; then
-  DEFAULT_ENGINEOS_ROOT="/usr"
-fi
-ENGINEOS_ROOT="${ENGINEOS_ROOT:-$DEFAULT_ENGINEOS_ROOT}"
-ENGINEOS_LOG_DIR_OVERRIDE="${ENGINEOS_LOG_DIR-}"
-ENGINEOS_SCRIPT_DIR_OVERRIDE="${ENGINEOS_SCRIPT_DIR-}"
-
-if [[ -r /etc/engineos/profile.conf ]]; then
-  # shellcheck disable=SC1091
-  source /etc/engineos/profile.conf
-fi
-if [[ -n "$ENGINEOS_LOG_DIR_OVERRIDE" ]]; then
-  ENGINEOS_LOG_DIR="$ENGINEOS_LOG_DIR_OVERRIDE"
-fi
-if [[ -n "$ENGINEOS_SCRIPT_DIR_OVERRIDE" ]]; then
-  ENGINEOS_SCRIPT_DIR="$ENGINEOS_SCRIPT_DIR_OVERRIDE"
-fi
-
-is_installed_root() {
-  [[ "$ENGINEOS_ROOT" == /usr || "$ENGINEOS_ROOT" == /usr/* ]] && return 0
-  [[ -d "$ENGINEOS_ROOT/lib/engineos/scripts" && -x "$ENGINEOS_ROOT/bin/engineos" ]]
-}
-
-if is_installed_root; then
-  ENGINEOS_SCRIPT_DIR="${ENGINEOS_SCRIPT_DIR:-/usr/lib/engineos/scripts}"
-  ENGINEOS_LOG_DIR="${ENGINEOS_LOG_DIR:-/var/log/engineos}"
-elif [[ -d "$ENGINEOS_ROOT/tools/scripts" ]]; then
-  ENGINEOS_SCRIPT_DIR="$ENGINEOS_ROOT/tools/scripts"
-  ENGINEOS_LOG_DIR="${ENGINEOS_LOG_DIR:-$ENGINEOS_ROOT/artifacts/logs}"
-else
-  ENGINEOS_SCRIPT_DIR="${ENGINEOS_SCRIPT_DIR:-/usr/lib/engineos/scripts}"
-  ENGINEOS_LOG_DIR="${ENGINEOS_LOG_DIR:-/var/log/engineos}"
-fi
-
-export ENGINEOS_ROOT ENGINEOS_SCRIPT_DIR ENGINEOS_LOG_DIR
-
 usage() {
   cat <<'HELP'
-engineos commands:
-  doctor [--vm|--bare-metal|--mock]
-  builder handoff [--dry-run] [--host user@host] [--dest /srv/engineos] [--skip-bootstrap] [--run-proof]
-  builder doctor-proof [--dry-run] --host user@host [--guest-port 2222]
-  deploy first [--dry-run] [--host dev@127.0.0.1] [--port 2222]
-  bootstrap builder [--dry-run|--print-packages]
-  fetch engine quake [--dry-run|--status]
-  build repo [--dry-run]
-  build iso [enginedev|engineruntime] [--dry-run] [--fast]
-  build engine quake [--dry-run] [--fetch]
-  build shell [--dry-run]
-  secure-boot keys create|status
-  secure-boot sign-iso --iso <path> [--out <path>] [--dry-run]
-  secure-boot enroll-handoff
-  installation-guide
-  package <name> [--dry-run]
-  lint packages [--package <name>]
-  preflight [all|repo|iso|scripts]
-  engine status|launch|quit|restart
-  assets check|explain|path|prepare quake
-  artifacts list|checksum|export
-  release checklist [--dry-run] [--out-dir <dir>] [--export-dir <dir>]
-  install dev --dry-run [--device <block-device>] [--repo-url <url>]
-  app launch terminal|cube|quake [args...]
-  app status [--json]
-  app manifest path|show|validate
-  terminal [--dry-run|--print-command]
-  outputs list|validate --single|--dual-static
-  proof build-lab [--dry-run]
-  proof release-candidate [--dry-run] [--out-dir <dir>] [--export-dir <dir>]
-  proof hardware-ready [--dry-run] [--profile enginedev|engineruntime] [--device <block-device>]
-  proof booted-iso [--vm|--runtime|--bare-metal] [--dry-run]
-  proof shell-launch [--vm|--runtime|--bare-metal] [--dry-run]
-  proof launchpad [--vm|--runtime|--bare-metal] [--dry-run]
-  vm boot [enginedev|engineruntime] [--dry-run] [--gl] [--audio none|hda]
-  usb list|write --iso <path> --device <block-device> [--dry-run]
-  capture frame --target shell
-  record input <trace.json>
-  replay input <trace.json>
-  validate builder [--mock]
-  validate repo [--dry-run|--mock]
-  validate engine quake [--mock]
-  validate shell [--mock]
-  validate boot [--vm|--runtime|--bare-metal]
-  run quake [--smoke]
-  run shell --headless|--nested|--tty
-  logs shell|app|engine|runtime|live-setup|doctor|boot|all [--last N] [--files|--journal]
-  crash-bundle [--vm|--runtime|--bare-metal]
-  test [smoke|all|agent|mcp|compositor|shell-actions|engine-runner-env|app|assets|reliability|logs|artifacts|terminal|vm|usb|secure-boot|install|proof|builder-handoff|builder-doctor|post-first-deploy|builder|bootstrap|repo|boot|engine|shell|input|render|outputs]
+engineos has been split into Unix-style eos-* commands.
+
+Common replacements:
+  engineos doctor ...              -> eos-doctor ...
+  engineos logs ...                -> eos-logs ...
+  engineos crash-bundle ...        -> eos-crash-bundle ...
+  engineos build iso ...           -> eos-build iso ...
+  engineos build repo ...          -> eos-build repo ...
+  engineos package <name> ...      -> eos-package <name> ...
+  engineos lint packages ...       -> eos-lint packages ...
+  engineos preflight ...           -> eos-preflight ...
+  engineos release checklist ...   -> eos-release checklist ...
+  engineos builder handoff ...     -> eos-builder handoff ...
+  engineos deploy first ...        -> eos-deploy first ...
+  engineos install dev ...         -> eos-install dev ...
+  engineos installation-guide      -> eos-install guide
+  engineos update check ...        -> eos-update check ...
+  engineos app ...                 -> eos-app ...
+  engineos terminal ...            -> eos-terminal ...
+  engineos outputs ...             -> eos-outputs ...
+  engineos run quake ...           -> eos-runtime quake ...
+  engineos run shell ...           -> eos-runtime shell ...
+  engineos engine ...              -> eos-runtime engine ...
+  engineos assets ...              -> eos-assets ...
+  engineos capture frame ...       -> eos-capture frame ...
+  engineos record input ...        -> eos-input record ...
+  engineos replay input ...        -> eos-input replay ...
+  engineos proof ...               -> eos-proof ...
+  engineos validate ...            -> eos-validate ...
+  engineos vm ...                  -> eos-vm ...
+  engineos usb ...                 -> eos-usb ...
+  engineos secure-boot ...         -> eos-secureboot ...
+  engineos agent ...               -> eos-agent ...
+  engineos observability ...       -> eos-observe ...
+  engineos test ...                -> eos-test ...
+
+Run an eos-* command with --help for domain-specific usage.
 HELP
 }
 
-cmd_doctor() {
-  exec "$ENGINEOS_SCRIPT_DIR/doctor.sh" "$@"
-}
-
-cmd_build() {
-  local target="${1:-}"
-  [[ -n "$target" ]] || target="help"
-
-  case "$target" in
-    repo)
-      shift || true
-      exec "$ENGINEOS_SCRIPT_DIR/build_repo.sh" "$@"
-      ;;
-    iso)
-      shift || true
-      exec "$ENGINEOS_SCRIPT_DIR/build_iso.sh" "$@"
-      ;;
-    engine)
-      shift || true
-      exec "$ENGINEOS_SCRIPT_DIR/build_engine.sh" "$@"
-      ;;
-    shell)
-      shift || true
-      exec "$ENGINEOS_SCRIPT_DIR/build_shell.sh" "$@"
-      ;;
-    help|--help|-h)
-      cat <<'HELP'
-engineos build commands:
-  build repo [--dry-run]
-  build iso [enginedev|engineruntime] [--dry-run] [--fast]
-  build engine quake [--dry-run] [--fetch]
-  build shell [--dry-run]
-HELP
-      ;;
-    *)
-      printf 'engineos build: unknown target: %s\n' "$target" >&2
-      return 2
-      ;;
-  esac
-}
-
-cmd_fetch() {
-  local target="${1:-}"
-  shift || true
-  case "$target" in
-    engine)
-      local engine="${1:-}"
-      shift || true
-      case "$engine" in
-        quake)
-          if [[ -x "$ENGINEOS_ROOT/engines/quakespasm/engineos/fetch.sh" ]]; then
-            exec "$ENGINEOS_ROOT/engines/quakespasm/engineos/fetch.sh" "$@"
-          fi
-          exec /usr/share/engineos/quake/fetch.sh "$@"
-          ;;
-        *)
-          printf 'engineos fetch engine: unknown engine: %s\n' "$engine" >&2
-          return 2
-          ;;
-      esac
-      ;;
-    *)
-      printf 'engineos fetch: unknown target: %s\n' "$target" >&2
-      return 2
-      ;;
-  esac
-}
-
-cmd_bootstrap() {
-  local target="${1:-}"
-  shift || true
-  case "$target" in
-    builder)
-      exec "$ENGINEOS_SCRIPT_DIR/bootstrap_builder.sh" "$@"
-      ;;
-    *)
-      printf 'engineos bootstrap: unknown target: %s\n' "$target" >&2
-      return 2
-      ;;
-  esac
-}
-
-cmd_builder() {
-  local target="${1:-}"
-  shift || true
-  case "$target" in
-    handoff)
-      exec "$ENGINEOS_SCRIPT_DIR/builder_handoff.sh" "$@"
-      ;;
-    doctor-proof)
-      exec "$ENGINEOS_SCRIPT_DIR/builder_doctor_proof.sh" "$@"
-      ;;
-    *)
-      printf 'engineos builder: unknown target: %s\n' "$target" >&2
-      return 2
-      ;;
-  esac
-}
-
-cmd_deploy() {
-  local target="${1:-}"
-  shift || true
-  case "$target" in
-    first)
-      exec "$ENGINEOS_SCRIPT_DIR/post_first_deploy.sh" "$@"
-      ;;
-    *)
-      printf 'engineos deploy: unknown target: %s\n' "$target" >&2
-      return 2
-      ;;
-  esac
-}
-
-cmd_package() {
-  local pkg="${1:-}"
-  [[ -n "$pkg" ]] || {
-    printf 'engineos package: package name required\n' >&2
-    return 2
-  }
-  shift || true
-  exec "$ENGINEOS_SCRIPT_DIR/build_repo.sh" --package "$pkg" "$@"
-}
-
-cmd_preflight() {
-  exec "$ENGINEOS_SCRIPT_DIR/preflight.sh" "$@"
-}
-
-cmd_lint() {
-  local target="${1:-}"
-  shift || true
-  case "$target" in
-    packages)
-      exec "$ENGINEOS_SCRIPT_DIR/package_lint.sh" "$@"
-      ;;
-    *)
-      printf 'engineos lint: unknown target: %s\n' "$target" >&2
-      return 2
-      ;;
-  esac
-}
-
-cmd_engine() {
-  exec "$ENGINEOS_SCRIPT_DIR/engine_runner.sh" "$@"
-}
-
-cmd_assets() {
-  exec "$ENGINEOS_SCRIPT_DIR/assets.sh" "$@"
-}
-
-cmd_artifacts() {
-  exec "$ENGINEOS_SCRIPT_DIR/artifacts.sh" "$@"
-}
-
-cmd_release() {
-  exec "$ENGINEOS_SCRIPT_DIR/release.sh" "$@"
-}
-
-cmd_install() {
-  exec "$ENGINEOS_SCRIPT_DIR/install_dev.sh" "$@"
-}
-
-cmd_app() {
-  exec "$ENGINEOS_SCRIPT_DIR/app.sh" "$@"
-}
-
-cmd_terminal() {
-  exec "$ENGINEOS_SCRIPT_DIR/terminal_launcher.sh" "$@"
-}
-
-cmd_outputs() {
-  exec "$ENGINEOS_SCRIPT_DIR/outputs.sh" "$@"
-}
-
-cmd_proof() {
-  exec "$ENGINEOS_SCRIPT_DIR/proof.sh" "$@"
-}
-
-cmd_vm() {
-  exec "$ENGINEOS_SCRIPT_DIR/vm.sh" "$@"
-}
-
-cmd_usb() {
-  exec "$ENGINEOS_SCRIPT_DIR/usb.sh" "$@"
-}
-
-cmd_secure_boot() {
-  exec "$ENGINEOS_SCRIPT_DIR/secure_boot.sh" "$@"
-}
-
-cmd_installation_guide() {
-  exec "$ENGINEOS_SCRIPT_DIR/installation_guide.sh" "$@"
-}
-
-cmd_capture() {
-  local target="${1:-}"
-  shift || true
-  case "$target" in
-    frame)
-      exec "$ENGINEOS_SCRIPT_DIR/capture_frame.sh" "$@"
-      ;;
-    *)
-      printf 'engineos capture: unknown target: %s\n' "$target" >&2
-      return 2
-      ;;
-  esac
-}
-
-cmd_record() {
-  local target="${1:-}"
-  shift || true
-  case "$target" in
-    input)
-      exec "$ENGINEOS_SCRIPT_DIR/input_trace.sh" record "$@"
-      ;;
-    *)
-      printf 'engineos record: unknown target: %s\n' "$target" >&2
-      return 2
-      ;;
-  esac
-}
-
-cmd_replay() {
-  local target="${1:-}"
-  shift || true
-  case "$target" in
-    input)
-      exec "$ENGINEOS_SCRIPT_DIR/input_trace.sh" replay "$@"
-      ;;
-    *)
-      printf 'engineos replay: unknown target: %s\n' "$target" >&2
-      return 2
-      ;;
-  esac
-}
-
-cmd_validate() {
-  local target="${1:-}"
-  shift || true
-  case "$target" in
-    builder)
-      exec "$ENGINEOS_SCRIPT_DIR/validate_builder.sh" "$@"
-      ;;
-    repo)
-      exec "$ENGINEOS_SCRIPT_DIR/validate_repo.sh" "$@"
-      ;;
-    engine)
-      exec "$ENGINEOS_SCRIPT_DIR/validate_engine.sh" "$@"
-      ;;
-    shell)
-      exec "$ENGINEOS_SCRIPT_DIR/validate_shell.sh" "$@"
-      ;;
-    boot)
-      exec "$ENGINEOS_SCRIPT_DIR/validate_boot.sh" "$@"
-      ;;
-    *)
-      printf 'engineos validate: unknown target: %s\n' "$target" >&2
-      return 2
-      ;;
-  esac
-}
-
-cmd_run() {
-  local target="${1:-}"
-  [[ -n "$target" ]] || {
-    printf 'engineos run: target required\n' >&2
-    return 2
-  }
-  shift || true
-
-  mkdir -p "$ENGINEOS_LOG_DIR"
-
-  case "$target" in
-    quake)
-      if [[ "$ENGINEOS_ROOT" != /usr && "$ENGINEOS_ROOT" != /usr/* && -x "$ENGINEOS_ROOT/engines/quakespasm/engineos/run.sh" ]]; then
-        exec "$ENGINEOS_ROOT/engines/quakespasm/engineos/run.sh" "$@"
-      fi
-      exec /usr/share/engineos/quake/run.sh "$@"
-      ;;
-    shell)
-      exec "$ENGINEOS_SCRIPT_DIR/shell_runner.sh" "$@"
-      ;;
-    *)
-      printf 'engineos run: unknown target: %s\n' "$target" >&2
-      return 2
-      ;;
-  esac
-}
-
-cmd_logs() {
-  exec "$ENGINEOS_SCRIPT_DIR/logs.sh" "$@"
-}
-
-cmd_test() {
-  exec "$ENGINEOS_SCRIPT_DIR/test_runner.sh" "$@"
-}
-
-main() {
+replacement_for() {
   local cmd="${1:-help}"
-  shift || true
+  local next="${2:-}"
 
   case "$cmd" in
     help|--help|-h)
       usage
+      return 0
       ;;
-    doctor)
-      cmd_doctor "$@"
-      ;;
-    builder)
-      cmd_builder "$@"
-      ;;
-    deploy)
-      cmd_deploy "$@"
-      ;;
+    doctor) printf 'eos-doctor' ;;
+    logs) printf 'eos-logs' ;;
+    crash-bundle) printf 'eos-crash-bundle' ;;
+    build) printf 'eos-build' ;;
+    package) printf 'eos-package' ;;
+    lint) printf 'eos-lint' ;;
+    preflight) printf 'eos-preflight' ;;
+    release) printf 'eos-release' ;;
+    artifacts) printf 'eos-artifacts' ;;
+    builder) printf 'eos-builder' ;;
     bootstrap)
-      cmd_bootstrap "$@"
+      if [[ "$next" == "builder" ]]; then
+        printf 'eos-builder bootstrap'
+      else
+        printf 'eos-builder'
+      fi
       ;;
+    deploy) printf 'eos-deploy' ;;
+    install) printf 'eos-install' ;;
+    installation-guide|install-guide) printf 'eos-install guide' ;;
+    update) printf 'eos-update' ;;
+    app) printf 'eos-app' ;;
+    terminal) printf 'eos-terminal' ;;
+    outputs) printf 'eos-outputs' ;;
+    run) printf 'eos-runtime' ;;
+    engine) printf 'eos-runtime engine' ;;
     fetch)
-      cmd_fetch "$@"
+      if [[ "$next" == "engine" ]]; then
+        printf 'eos-build fetch'
+      else
+        printf 'eos-build'
+      fi
       ;;
-    build)
-      cmd_build "$@"
-      ;;
-    package)
-      cmd_package "$@"
-      ;;
-    lint)
-      cmd_lint "$@"
-      ;;
-    preflight)
-      cmd_preflight "$@"
-      ;;
-    engine)
-      cmd_engine "$@"
-      ;;
-    assets)
-      cmd_assets "$@"
-      ;;
-    artifacts)
-      cmd_artifacts "$@"
-      ;;
-    release)
-      cmd_release "$@"
-      ;;
-    install)
-      cmd_install "$@"
-      ;;
-    app)
-      cmd_app "$@"
-      ;;
-    terminal)
-      cmd_terminal "$@"
-      ;;
-    outputs)
-      cmd_outputs "$@"
-      ;;
-    proof)
-      cmd_proof "$@"
-      ;;
-    vm)
-      cmd_vm "$@"
-      ;;
-    usb)
-      cmd_usb "$@"
-      ;;
-    secure-boot)
-      cmd_secure_boot "$@"
-      ;;
-    installation-guide|install-guide)
-      cmd_installation_guide "$@"
-      ;;
-    capture)
-      cmd_capture "$@"
-      ;;
-    record)
-      cmd_record "$@"
-      ;;
-    replay)
-      cmd_replay "$@"
-      ;;
-    validate)
-      cmd_validate "$@"
-      ;;
-    run)
-      cmd_run "$@"
-      ;;
-    logs)
-      cmd_logs "$@"
-      ;;
-    crash-bundle)
-      exec "$ENGINEOS_SCRIPT_DIR/crash_bundle.sh" "$@"
-      ;;
-    test)
-      cmd_test "$@"
-      ;;
+    assets) printf 'eos-assets' ;;
+    capture) printf 'eos-capture' ;;
+    record|replay) printf 'eos-input' ;;
+    proof) printf 'eos-proof' ;;
+    validate) printf 'eos-validate' ;;
+    vm) printf 'eos-vm' ;;
+    usb) printf 'eos-usb' ;;
+    secure-boot) printf 'eos-secureboot' ;;
+    agent) printf 'eos-agent' ;;
+    observability) printf 'eos-observe' ;;
+    test) printf 'eos-test' ;;
     *)
-      printf 'engineos: unknown command: %s\n' "$cmd" >&2
-      return 2
+      printf ''
+      return 1
       ;;
   esac
+}
+
+main() {
+  local replacement
+  if [[ $# -eq 0 || "${1:-}" == "help" || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    usage
+    return 0
+  fi
+
+  replacement="$(replacement_for "${1:-}" "${2:-}")" || {
+    printf 'engineos: unknown legacy command: %s\n\n' "${1:-}" >&2
+    usage >&2
+    return 2
+  }
+
+  printf 'engineos no longer executes subcommands.\n' >&2
+  printf 'Use: %s' "$replacement" >&2
+
+  case "${1:-}" in
+    bootstrap)
+      if [[ "${2:-}" == "builder" ]]; then
+        shift 2 || true
+      else
+        shift || true
+      fi
+      ;;
+    installation-guide|install-guide)
+      shift || true
+      ;;
+    engine)
+      shift || true
+      ;;
+    fetch)
+      shift || true
+      ;;
+    record|replay)
+      local action="$1"
+      shift || true
+      if [[ "${1:-}" == "input" ]]; then
+        shift || true
+      fi
+      set -- "$action" "$@"
+      ;;
+    run)
+      shift || true
+      ;;
+    observability)
+      shift || true
+      ;;
+    *)
+      shift || true
+      ;;
+  esac
+
+  if [[ $# -gt 0 ]]; then
+    printf ' ' >&2
+    printf '%q ' "$@" >&2
+  fi
+  printf '\n' >&2
+  return 2
 }
 
 main "$@"

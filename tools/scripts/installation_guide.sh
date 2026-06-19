@@ -19,8 +19,8 @@ EngineDev installation guide
 
 1. Prove the live ISO is healthy
 
-   engineos doctor --bare-metal
-   engineos installation-guide
+   eos-doctor --bare-metal
+   eos-install guide
    codex --version
 
    On the live EngineDev ISO, the codex command installs the official Codex CLI
@@ -48,7 +48,7 @@ EngineDev installation guide
 
 3. Check the destructive install plan
 
-   engineos install dev --dry-run \
+   eos-install dev --dry-run \
      --repo-url https://github.com/Tango-Rocker/tango-os.git \
      --branch main \
      --repo-token-file /run/engineos-secrets/tango-os-readonly.token
@@ -57,7 +57,7 @@ EngineDev installation guide
 
 4. Run the install
 
-   sudo engineos install dev \
+   sudo eos-install dev \
      --repo-url https://github.com/Tango-Rocker/tango-os.git \
      --branch main \
      --repo-token-file /run/engineos-secrets/tango-os-readonly.token \
@@ -91,7 +91,7 @@ EngineDev installation guide
 7. After first boot from the installed disk
 
    cd /srv/engineos
-   engineos doctor --bare-metal
+   eos-doctor --bare-metal
    tmux -V
    docker info
    codex --version

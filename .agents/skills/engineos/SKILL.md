@@ -1,13 +1,13 @@
 ---
 name: engineos
-description: Use for general Tang-OS / EngineOS work involving the engineos CLI, agent workflow, builder VM, archiso profiles, packages, runtime proofs, shell launchpad, Quake path, logs, crash bundles, or MCP tools.
+description: Use for general Tang-OS / EngineOS work involving eos-* CLI tools, agent workflow, builder VM, archiso profiles, packages, runtime proofs, shell launchpad, Quake path, logs, crash bundles, observability, or role routing.
 ---
 
 # EngineOS Orchestrator Skill
 
 EngineOS is a hobby OS lab. Build the Arch-based EngineDev lab first, then the
 smaller EngineRuntime appliance. Keep the next proof small and use
-`./tools/engineos/engineos` as the control surface.
+`./tools/engineos/eos-*` tools as the control surface.
 
 ## First Read
 
@@ -34,12 +34,16 @@ Read only the context the task needs:
 Prefer these outside the Arch builder VM:
 
 ```bash
-./tools/engineos/engineos doctor --mock
-./tools/engineos/engineos test agent
-./tools/engineos/engineos preflight all
-./tools/engineos/engineos build repo --dry-run
-./tools/engineos/engineos build iso --dry-run
-./tools/engineos/engineos proof launchpad --runtime --dry-run
+./tools/engineos/eos-doctor --mock
+./tools/engineos/eos-test agent
+./tools/engineos/eos-agent hygiene check
+./tools/engineos/eos-agent dispatch status
+./tools/engineos/eos-observe metrics
+./tools/engineos/eos-observe tui --once
+./tools/engineos/eos-preflight all
+./tools/engineos/eos-build repo --dry-run
+./tools/engineos/eos-build iso --dry-run
+./tools/engineos/eos-proof launchpad --runtime --dry-run
 ```
 
 Use real package/ISO builds only from `/srv/engineos` on the Arch builder VM.
@@ -52,19 +56,27 @@ Codex-specific files are part of the product:
 AGENTS.md
 .codex/config.toml
 .codex/hooks.example.json
+.agents/index.toml
+.agents/roles/*/AGENTS.md
+.agents/profiles/*.profile.toml
 .agents/skills/*/SKILL.md
 tools/hooks/*.py
-tools/mcp/engineos_mcp_server.py
 docs/agent-harness.md
 docs/agent-workflow.md
 docs/agent-lsp.md
+docs/agent-roles.md
+docs/agent-profiles.md
 ```
 
-The MCP server is read-only orientation glue. Use direct `engineos` CLI commands
-for local builds, tests, proofs, logs, and runtime actions. Do not add MCP tools
-just to mirror local commands, and never expose arbitrary shell, raw sudo,
-package removal, recursive deletion, secret reads, or direct editing of
-generated `work/` or `out/` artifacts.
+Use direct `eos-*` CLI commands for local builds, tests, proofs, logs,
+runtime actions, observability, and route checks. Use skills for repeatable
+workflow judgment. Use `eos-agent hygiene check` for agent-pack drift and
+`eos-agent dispatch ...` for manual local queue/ledger work. The old
+project-status/docs MCP server is removed; future EngineOS MCP work is reserved
+for read-only live runtime state and must not
+mirror local commands or expose arbitrary shell, raw sudo, package removal,
+recursive deletion, secret reads, or direct editing of generated `work/` or
+`out/` artifacts.
 
 ## Hard Boundaries
 

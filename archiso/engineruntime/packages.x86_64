@@ -42,10 +42,9 @@ alsa-utils
 sdl2
 openal
 engineos-config
-engineos-cli
+engineos-tools
 engineos-oh-my-zsh
 engineos-tmux-plugins
-engineos-agent-tools
 engineos-cube
 engineos-shell
 engineos-engine-runner

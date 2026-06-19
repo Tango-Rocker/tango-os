@@ -31,3 +31,7 @@ Thumbs.db
 __pycache__/
 *.py[cod]
 /engines/quakespasm/upstream/
+
+# Generated local command wrappers
+/tools/engineos/eos-*
+!/tools/engineos/eos-wrapper

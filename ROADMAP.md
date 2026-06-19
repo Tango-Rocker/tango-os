@@ -16,11 +16,11 @@ PoC 0 is complete:
 - the local package repo builds
 - EngineDev ISO builds
 - EngineDev ISO boots in a clean test VM
-- `engineos proof booted-iso --vm` passes inside the ISO
+- `eos-proof booted-iso --vm` passes inside the ISO
 
 Follow-on dev-instance proof is complete:
 
-- `engineos deploy first` copies the post-install payload to the booted EngineDev guest
+- `eos-deploy first` copies the post-install payload to the booted EngineDev guest
 - the guest has Codex CLI, tmux defaults, and Docker available
 - Docker is enabled/started and `dev` is in the `docker` group
 - the setup log is captured at `/var/log/engineos/post-first-deploy.log`
@@ -31,22 +31,22 @@ Current runtime proof command:
 
 ```bash
 cd /srv/engineos
-./tools/engineos/engineos build iso engineruntime --fast --clean --archive-existing
-./tools/engineos/engineos vm boot engineruntime --display none --background --ssh-port 2223 --audio hda
-sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'engineos proof booted-iso --runtime'
-sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'engineos app manifest validate'
-sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'engineos proof launchpad --runtime'
+./tools/engineos/eos-build iso engineruntime --fast --clean --archive-existing
+./tools/engineos/eos-vm boot engineruntime --display none --background --ssh-port 2223 --audio hda
+sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'eos-proof booted-iso --runtime'
+sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'eos-app manifest validate'
+sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'eos-proof launchpad --runtime'
 ```
 
 Inside EngineRuntime recovery TTY/session:
 
 ```bash
-engineos proof booted-iso --runtime
-engineos app manifest validate
-engineos proof launchpad --runtime
-engineos logs runtime --last 200
-engineos logs engine --last 200
-engineos crash-bundle --runtime
+eos-proof booted-iso --runtime
+eos-app manifest validate
+eos-proof launchpad --runtime
+eos-logs runtime --last 200
+eos-logs engine --last 200
+eos-crash-bundle --runtime
 ```
 
 For VM audio plumbing proof, boot with `--audio hda`. This exposes a QEMU
@@ -99,8 +99,8 @@ MVP is complete when EngineRuntime boots on the AMD machine, starts the shell, l
 Bare-metal handoff command:
 
 ```bash
-./tools/engineos/engineos proof hardware-ready --profile engineruntime --device /dev/sdX
-engineos proof booted-iso --bare-metal
+./tools/engineos/eos-proof hardware-ready --profile engineruntime --device /dev/sdX
+eos-proof booted-iso --bare-metal
 ```
 
 ### Phase 5: Polish After MVP
@@ -113,8 +113,8 @@ engineos proof booted-iso --bare-metal
 
 EngineRuntime has a generated ISO and packaged launchpad runtime path. Runtime autostart, DRM/libinput shell startup, crash-bundle recovery, terminal/cube launchpad mapping, Quake missing-asset handling, shell state JSON, and emulated VM audio-device plumbing are proven in builder-hosted QEMU; interactive Quake with user assets, visible hardware rendering, and audible hardware audio still need live proof.
 
-The next hardware gate is explicit: `engineos validate boot --bare-metal` and
-`engineos proof shell-launch --bare-metal` must reject pixman/llvmpipe/software
+The next hardware gate is explicit: `eos-validate boot --bare-metal` and
+`eos-proof shell-launch --bare-metal` must reject pixman/llvmpipe/software
 shell rendering and require GL-capable renderer evidence from the startup shell
 log before later tiling or overlay shell work counts as progress.
 

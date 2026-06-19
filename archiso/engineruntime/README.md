@@ -7,22 +7,22 @@ Hyper-V basic console testing is useful for boot, recovery, service logs, input 
 Dry-run:
 
 ```bash
-../../tools/engineos/engineos build iso engineruntime --dry-run
+../../tools/engineos/eos-build iso engineruntime --dry-run
 ```
 
 Real build and VM boot on the Arch builder VM:
 
 ```bash
-../../tools/engineos/engineos build iso engineruntime --fast --clean --archive-existing
-../../tools/engineos/engineos vm boot engineruntime --dry-run
-../../tools/engineos/engineos vm boot engineruntime --display none --background --ssh-port 2223
+../../tools/engineos/eos-build iso engineruntime --fast --clean --archive-existing
+../../tools/engineos/eos-vm boot engineruntime --dry-run
+../../tools/engineos/eos-vm boot engineruntime --display none --background --ssh-port 2223
 ```
 
 After booting a runtime ISO:
 
 ```bash
 ssh -p 2223 engineos@127.0.0.1   # password: engineos
-engineos proof booted-iso --runtime
+eos-proof booted-iso --runtime
 ```
 
 The profile creates an `engineos` user in the `wheel` group with the validation password `engineos`, enables NetworkManager and SSH for VM proofs, runs `engineos-live-setup.service` once at boot before runtime services, starts `engineos-engine-runner.service`, enables `engineos-runtime.service` for guarded shell autostart on `tty1`, enables `getty@tty2.service` as the recovery TTY, and installs `engineos-recovery-help` for the recovery login path.
@@ -39,6 +39,6 @@ From the recovery TTY, start with:
 
 ```bash
 engineos-recovery-help
-engineos logs runtime --last 200
-engineos crash-bundle
+eos-logs runtime --last 200
+eos-crash-bundle
 ```

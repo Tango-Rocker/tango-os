@@ -58,3 +58,7 @@ fi
 
 alias lg='lazygit'
 alias engineos-tmux='tmux new -A -s engineos'
+
+if command -v eos-observe >/dev/null 2>&1; then
+  eval "$(eos-observe hook zsh 2>/dev/null)" || true
+fi

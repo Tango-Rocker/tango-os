@@ -294,7 +294,7 @@ else
   print_kv "/sys/class/drm" "unavailable"
 fi
 if [[ -x "$SCRIPT_DIR/outputs.sh" ]]; then
-  printf '\n# engineos outputs\n'
+  printf '\n# eos-outputs\n'
   "$SCRIPT_DIR/outputs.sh" list 2>&1 || true
 fi
 
@@ -365,16 +365,16 @@ print_kv "profile" "${ENGINEOS_PROFILE:-unknown}"
 
 if have_cmd pacman; then
   printf '\n# package versions\n'
-  pacman -Q archiso mesa wlroots wayland pipewire wireplumber engineos-config engineos-cli engineos-agent-tools engineos-cube engineos-shell engineos-engine-runner engineos-quakespasm engineos-quake-template 2>/dev/null || true
+  pacman -Q 2>/dev/null | awk '$1 ~ /^(archiso|mesa|wlroots|wayland|pipewire|wireplumber)$/ || $1 ~ /^engineos-/ {print}' || true
 else
   print_kv "pacman" "unavailable"
 fi
 
 section "Command Surface"
-if [[ -x "$ROOT/tools/engineos/engineos" ]]; then
-  "$ROOT/tools/engineos/engineos" --help || true
-elif have_cmd engineos; then
-  engineos --help || true
+if [[ -x "$ROOT/tools/engineos/eos" ]]; then
+  "$ROOT/tools/engineos/eos" --help || true
+elif have_cmd eos; then
+  eos --help || true
 else
-  print_kv "engineos" "unavailable"
+  print_kv "eos" "unavailable"
 fi

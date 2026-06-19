@@ -107,27 +107,42 @@ if [[ -x "$SCRIPT_DIR/doctor.sh" ]]; then
 fi
 
 if command -v pacman >/dev/null 2>&1; then
-  write_command "$BUNDLE_DIR/pacman-engineos.txt" pacman -Q archiso mesa wlroots wayland pipewire wireplumber engineos-config engineos-cli engineos-agent-tools engineos-cube engineos-shell engineos-engine-runner engineos-quakespasm engineos-quake-template
+  write_command "$BUNDLE_DIR/pacman-engineos.txt" bash -lc "pacman -Q | awk '\$1 ~ /^(archiso|mesa|wlroots|wayland|pipewire|wireplumber)$/ || \$1 ~ /^engineos-/ {print}'"
   write_command "$BUNDLE_DIR/pacman-local-repo.txt" pacman -Sl engineos
 fi
 
-if [[ -x "$ROOT/tools/engineos/engineos" ]]; then
-  ENGINEOS="$ROOT/tools/engineos/engineos"
-elif command -v engineos >/dev/null 2>&1; then
-  ENGINEOS="$(command -v engineos)"
-else
-  ENGINEOS=""
-fi
+eos_tool_path() {
+  local tool="$1"
+  if [[ -x "$ROOT/tools/engineos/$tool" ]]; then
+    printf '%s\n' "$ROOT/tools/engineos/$tool"
+    return 0
+  fi
+  command -v "$tool" 2>/dev/null
+}
 
-if [[ -n "$ENGINEOS" ]]; then
-  write_command "$BUNDLE_DIR/app-status.json" "$ENGINEOS" app status --json
-  write_command "$BUNDLE_DIR/app-manifest-validate.txt" "$ENGINEOS" app manifest validate
-  write_command "$BUNDLE_DIR/engine-status.txt" "$ENGINEOS" engine status
-  write_command "$BUNDLE_DIR/outputs.txt" "$ENGINEOS" outputs list
-  write_command "$BUNDLE_DIR/assets-quake.txt" "$ENGINEOS" assets check quake
-  write_command "$BUNDLE_DIR/assets-quake-explain.txt" "$ENGINEOS" assets explain quake
-  write_command "$BUNDLE_DIR/assets-quake-path.txt" "$ENGINEOS" assets path quake
-  write_command "$BUNDLE_DIR/preflight-scripts.txt" "$ENGINEOS" preflight scripts
+EOS_APP="$(eos_tool_path eos-app || true)"
+EOS_RUNTIME="$(eos_tool_path eos-runtime || true)"
+EOS_OUTPUTS="$(eos_tool_path eos-outputs || true)"
+EOS_ASSETS="$(eos_tool_path eos-assets || true)"
+EOS_PREFLIGHT="$(eos_tool_path eos-preflight || true)"
+
+if [[ -n "$EOS_APP" ]]; then
+  write_command "$BUNDLE_DIR/app-status.json" "$EOS_APP" status --json
+  write_command "$BUNDLE_DIR/app-manifest-validate.txt" "$EOS_APP" manifest validate
+fi
+if [[ -n "$EOS_RUNTIME" ]]; then
+  write_command "$BUNDLE_DIR/engine-status.txt" "$EOS_RUNTIME" engine status
+fi
+if [[ -n "$EOS_OUTPUTS" ]]; then
+  write_command "$BUNDLE_DIR/outputs.txt" "$EOS_OUTPUTS" list
+fi
+if [[ -n "$EOS_ASSETS" ]]; then
+  write_command "$BUNDLE_DIR/assets-quake.txt" "$EOS_ASSETS" check quake
+  write_command "$BUNDLE_DIR/assets-quake-explain.txt" "$EOS_ASSETS" explain quake
+  write_command "$BUNDLE_DIR/assets-quake-path.txt" "$EOS_ASSETS" path quake
+fi
+if [[ -n "$EOS_PREFLIGHT" ]]; then
+  write_command "$BUNDLE_DIR/preflight-scripts.txt" "$EOS_PREFLIGHT" scripts
 fi
 
 mkdir -p "$BUNDLE_DIR/state"

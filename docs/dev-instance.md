@@ -53,7 +53,7 @@ Contents read permission only, place it on the live guest outside the repo, and
 pass it at install time:
 
 ```bash
-sudo engineos install dev \
+sudo eos-install dev \
   --repo-token-file /run/engineos-secrets/tango-os-readonly.token \
   --branch main \
   --yes-i-understand-this-wipes-device
@@ -64,25 +64,25 @@ removes the token copy from the target immediately after clone.
 
 ## Command
 
-From the Arch builder after `engineos vm boot enginedev --display none
+From the Arch builder after `eos-vm boot enginedev --display none
 --background --ssh-port 2222`:
 
 ```bash
 cd /srv/engineos
-ENGINEOS_GUEST_PASSWORD=dev ./tools/engineos/engineos deploy first --host dev@127.0.0.1 --port 2222
+ENGINEOS_GUEST_PASSWORD=dev ./tools/engineos/eos-deploy first --host dev@127.0.0.1 --port 2222
 ```
 
 For faster iteration before that boot step, rebuild EngineDev with the generated
 fast-compression profile:
 
 ```bash
-./tools/engineos/engineos build iso enginedev --fast --clean --archive-existing
+./tools/engineos/eos-build iso enginedev --fast --clean --archive-existing
 ```
 
 Dry-run from any Linux shell:
 
 ```bash
-./tools/engineos/engineos deploy first --dry-run --host dev@127.0.0.1 --port 2222
+./tools/engineos/eos-deploy first --dry-run --host dev@127.0.0.1 --port 2222
 ```
 
 ## Payload
@@ -93,8 +93,8 @@ The deploy command copies `tools/post-install-payload/` to the guest and runs:
 bash /tmp/engineos-post-first-deploy/scripts/setup_dev_environment.sh --payload /tmp/engineos-post-first-deploy
 ```
 
-The destructive `engineos install dev` path uses the packaged payload from
-`/usr/share/engineos/post-install-payload` when the installed `engineos-cli`
+The destructive `eos-install dev` path uses the packaged payload from
+`/usr/share/engineos/post-install-payload` when the installed `engineos-tools`
 package provides it, with `/srv/engineos/tools/post-install-payload` as the
 fallback. Rebuild the EngineDev ISO after payload changes so autoinstall uses
 the intended first-boot setup.

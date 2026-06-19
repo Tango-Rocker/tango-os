@@ -5,11 +5,11 @@ cat <<'HELP'
 EngineRuntime recovery
 
 Useful commands:
-  engineos logs runtime --last 200
-  engineos logs shell --last 200
-  engineos logs engine --last 200
-  engineos doctor --bare-metal
-  engineos crash-bundle
+  eos-logs runtime --last 200
+  eos-logs shell --last 200
+  eos-logs engine --last 200
+  eos-doctor --bare-metal
+  eos-crash-bundle
 
 Disable runtime autostart for the next boot with the kernel flag:
   engineos.noautostart

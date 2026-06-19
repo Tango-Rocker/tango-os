@@ -35,15 +35,15 @@ terminal launcher, cube app, or engine runner.
 HELP
 }
 
-engineos_cmd_string() {
-  if [[ -n "${ENGINEOS_CMD:-}" ]]; then
-    printf '%s\n' "$ENGINEOS_CMD"
+runtime_cmd_string() {
+  if [[ -n "${ENGINEOS_RUNTIME_CMD:-}" ]]; then
+    printf '%s\n' "$ENGINEOS_RUNTIME_CMD"
     return
   fi
-  if [[ -x "$ROOT/tools/engineos/engineos" ]]; then
-    printf '%s\n' "$ROOT/tools/engineos/engineos"
+  if [[ -x "$ROOT/tools/engineos/eos-runtime" ]]; then
+    printf '%s\n' "$ROOT/tools/engineos/eos-runtime"
   else
-    printf '%s\n' engineos
+    printf '%s\n' eos-runtime
   fi
 }
 
@@ -159,7 +159,7 @@ require_shell_display() {
   if [[ "${ENGINEOS_APP_REQUIRE_WAYLAND:-true}" == "true" && -z "${WAYLAND_DISPLAY:-}" ]]; then
     write_app_state "${1:-unknown}" "failed" "missing-wayland-display"
     log_line "launch failed reason=missing-wayland-display app=${1:-unknown}"
-    printf 'engineos app: WAYLAND_DISPLAY is required so engineos-shell owns graphical clients.\n' >&2
+    printf 'eos-app: WAYLAND_DISPLAY is required so engineos-shell owns graphical clients.\n' >&2
     return 125
   fi
 }
@@ -199,7 +199,7 @@ run_launch() {
       prepare_client_env
       write_app_state "$app" "launch-requested" "" "$@"
       log_line "launch app=quake owner=engineos-shell display=${WAYLAND_DISPLAY:-missing} sdl=${SDL_VIDEODRIVER:-unset} args=$*"
-      exec "$(engineos_cmd_string)" engine launch quake "$@"
+      exec "$(runtime_cmd_string)" engine launch quake "$@"
       ;;
     *)
       die "unknown app id: $app"
@@ -485,7 +485,7 @@ run_manifest_validate() {
 
   manifest_expect_value terminal slot terminal
   manifest_expect_value terminal role terminal
-  manifest_expect_value terminal command "engineos app launch terminal"
+  manifest_expect_value terminal command "eos-app launch terminal"
   manifest_expect_value terminal package foot
   manifest_expect_app_id terminal foot
   manifest_expect_nonempty terminal log
@@ -493,8 +493,8 @@ run_manifest_validate() {
 
   manifest_expect_value cube slot cube
   manifest_expect_value cube role cube
-  manifest_expect_value cube command "engineos app launch cube"
-  manifest_expect_value cube smoke_command "engineos app launch cube --smoke"
+  manifest_expect_value cube command "eos-app launch cube"
+  manifest_expect_value cube smoke_command "eos-app launch cube --smoke"
   manifest_expect_value cube package engineos-cube
   manifest_expect_app_id cube engineos-cube
   manifest_expect_value cube health gl-renderer-and-frames
@@ -502,8 +502,8 @@ run_manifest_validate() {
 
   manifest_expect_value quake slot engine
   manifest_expect_value quake role engine
-  manifest_expect_value quake command "engineos app launch quake"
-  manifest_expect_value quake smoke_command "engineos app launch quake --smoke"
+  manifest_expect_value quake command "eos-app launch quake"
+  manifest_expect_value quake smoke_command "eos-app launch quake --smoke"
   manifest_expect_value quake package engineos-quakespasm
   manifest_expect_app_id quake quakespasm
   manifest_expect_value quake assets quake
@@ -546,7 +546,7 @@ case "$ACTION" in
       printf '  app:      %s\n' "${app:-missing}"
       printf '  display:  %s\n' "${WAYLAND_DISPLAY:-unset}"
       printf '  owner:    engineos-shell\n'
-      printf '  command:  engineos app launch %s' "${app:-missing}"
+      printf '  command:  eos-app launch %s' "${app:-missing}"
       printf ' %q' "$@"
       printf '\n'
       exit 0

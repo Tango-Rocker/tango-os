@@ -10,22 +10,22 @@ Collect evidence before guessing.
 ## Sequence
 
 ```bash
-./tools/engineos/engineos doctor --mock
-./tools/engineos/engineos logs all --last 200
-./tools/engineos/engineos app status --json
-./tools/engineos/engineos app manifest validate
-./tools/engineos/engineos crash-bundle
+./tools/engineos/eos-doctor --mock
+./tools/engineos/eos-logs all --last 200
+./tools/engineos/eos-app status --json
+./tools/engineos/eos-app manifest validate
+./tools/engineos/eos-crash-bundle
 ```
 
 Inside a booted ISO, use the mode that matches the session:
 
 ```bash
-engineos proof booted-iso --vm
-engineos proof launchpad --runtime
-engineos crash-bundle --runtime
-engineos logs runtime --last 200
-engineos logs shell --last 200
-engineos logs engine --last 200
+eos-proof booted-iso --vm
+eos-proof launchpad --runtime
+eos-crash-bundle --runtime
+eos-logs runtime --last 200
+eos-logs shell --last 200
+eos-logs engine --last 200
 ```
 
 ## Preserve

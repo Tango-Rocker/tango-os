@@ -25,15 +25,15 @@ SHELL_BIN="${ENGINEOS_SHELL_BIN:-engineos-shell}"
 LOG_FILE="$LOG_DIR/shell.log"
 export ENGINEOS_STATE_DIR="$STATE_DIR"
 
-engineos_cmd_string() {
-  if [[ -x "$ROOT/tools/engineos/engineos" ]]; then
-    printf '%q' "$ROOT/tools/engineos/engineos"
+eos_app_cmd_string() {
+  if [[ -x "$ROOT/tools/engineos/eos-app" ]]; then
+    printf '%q' "$ROOT/tools/engineos/eos-app"
   else
-    printf 'engineos'
+    printf 'eos-app'
   fi
 }
 
-ENGINEOS_CMD_STRING="$(engineos_cmd_string)"
+EOS_APP_CMD_STRING="$(eos_app_cmd_string)"
 APPS_MANIFEST="$(engineos_apps_manifest "$ROOT")"
 
 manifest_command_or_default() {
@@ -46,16 +46,16 @@ manifest_command_or_default() {
     printf '%s\n' "$fallback"
     return
   fi
-  if [[ "$command" == engineos\ * ]]; then
-    printf '%s%s\n' "$ENGINEOS_CMD_STRING" "${command#engineos}"
+  if [[ "$command" == engineos\ app* ]]; then
+    printf '%s%s\n' "$EOS_APP_CMD_STRING" "${command#engineos app}"
   else
     printf '%s\n' "$command"
   fi
 }
 
-DEFAULT_TERMINAL="${ENGINEOS_TERMINAL_SLOT_CMD:-$(manifest_command_or_default terminal "$ENGINEOS_CMD_STRING app launch terminal")}"
-DEFAULT_CUBE="${ENGINEOS_CUBE_CMD:-$(manifest_command_or_default cube "$ENGINEOS_CMD_STRING app launch cube")}"
-DEFAULT_ENGINE="${ENGINEOS_ENGINE_CMD:-$(manifest_command_or_default quake "$ENGINEOS_CMD_STRING app launch quake")}"
+DEFAULT_TERMINAL="${ENGINEOS_TERMINAL_SLOT_CMD:-$(manifest_command_or_default terminal "$EOS_APP_CMD_STRING launch terminal")}"
+DEFAULT_CUBE="${ENGINEOS_CUBE_CMD:-$(manifest_command_or_default cube "$EOS_APP_CMD_STRING launch cube")}"
+DEFAULT_ENGINE="${ENGINEOS_ENGINE_CMD:-$(manifest_command_or_default quake "$EOS_APP_CMD_STRING launch quake")}"
 
 usage() {
   cat <<'HELP'

@@ -18,18 +18,18 @@ evidence but does not replace bare-metal AMD validation.
 ## Checks
 
 ```bash
-./tools/engineos/engineos doctor --mock
-./tools/engineos/engineos test render --smoke
-./tools/engineos/engineos capture frame --target shell
-./tools/engineos/engineos proof launchpad --runtime --dry-run
+./tools/engineos/eos-doctor --mock
+./tools/engineos/eos-test render --smoke
+./tools/engineos/eos-capture frame --target shell
+./tools/engineos/eos-proof launchpad --runtime --dry-run
 ```
 
 In a booted Runtime proof:
 
 ```bash
-engineos logs app --last 200
-engineos logs shell --last 200
-engineos proof launchpad --runtime
+eos-logs app --last 200
+eos-logs shell --last 200
+eos-proof launchpad --runtime
 ```
 
 Expected Runtime evidence includes cube log `gl_renderer=` and `frames=`.

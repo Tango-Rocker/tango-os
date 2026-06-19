@@ -1,0 +1,16 @@
+[Unit]
+Description=EngineOS observability metrics exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=ENGINEOS_SCRIPT_DIR=/usr/lib/engineos/scripts
+Environment=ENGINEOS_OBSERVABILITY_EXPORTER_HOST=127.0.0.1
+Environment=ENGINEOS_OBSERVABILITY_EXPORTER_PORT=9109
+ExecStart=/usr/bin/eos-observe exporter serve --host 127.0.0.1 --port 9109
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

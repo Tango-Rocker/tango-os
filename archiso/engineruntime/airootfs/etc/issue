@@ -2,4 +2,4 @@ EngineRuntime OS \r (\l)
 
 Recovery TTY is intentionally available.
 Run: engineos-recovery-help
-Logs: engineos logs runtime --last 200
+Logs: eos-logs runtime --last 200

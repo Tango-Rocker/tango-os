@@ -17,7 +17,7 @@ WARN_PATTERNS = [
     (re.compile(r"\brm\s+-rf\s+/(?:\s|$)"), "recursive delete against /"),
     (re.compile(r"\bgit\s+reset\s+--hard\b"), "hard git reset"),
     (re.compile(r"\bgit\s+checkout\s+--\s+"), "destructive git checkout"),
-    (re.compile(r"\bmkarchiso\b"), "direct mkarchiso; prefer engineos build iso"),
+    (re.compile(r"\bmkarchiso\b"), "direct mkarchiso; prefer eos-build iso"),
     (re.compile(r"\bpacman\s+-R"), "package removal"),
     (re.compile(r"\bchmod\s+-R\s+777\b"), "world-writable recursive chmod"),
     (re.compile(r"\bengineos\s+run\s+shell\s+--tty\b"), "TTY/KMS takeover"),

@@ -115,7 +115,7 @@ if terminal_cmd="$(select_terminal)"; then
 
   if [[ "${ENGINEOS_TERMINAL_REQUIRE_WAYLAND:-true}" == "true" && -z "${WAYLAND_DISPLAY:-}" ]]; then
     log_line "launch failed reason=missing-wayland-display command=$terminal_cmd"
-    printf 'engineos terminal: WAYLAND_DISPLAY is required so the EngineOS shell owns graphical clients.\n' >&2
+    printf 'eos-terminal: WAYLAND_DISPLAY is required so the EngineOS shell owns graphical clients.\n' >&2
     exit 125
   fi
 
@@ -152,5 +152,5 @@ if [[ "$DRY_RUN" == true ]]; then
 fi
 
 log_line "launch failed reason=no-terminal-candidate candidates=$summary"
-printf 'engineos terminal: no graphical terminal found. Tried: %s\n' "$summary" >&2
+printf 'eos-terminal: no graphical terminal found. Tried: %s\n' "$summary" >&2
 exit 127

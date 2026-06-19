@@ -1,0 +1,3 @@
+interface:
+  display_name: "EngineOS Compiler"
+  short_description: "Build EngineOS packages, source trees, and compiler proof paths"

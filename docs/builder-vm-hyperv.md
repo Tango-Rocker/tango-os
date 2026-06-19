@@ -54,7 +54,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\scripts\tune_builder_vm_hyperv.
 For a 40 GiB / 12 logical CPU host, the helper targets 4 GiB minimum RAM, 8 GiB
 startup RAM, 16 GiB maximum RAM, and 6 vCPUs. Low-memory builders should also
 keep swap enabled inside Arch. The current project builder uses a persistent
-4 GiB `/swapfile`; `engineos build iso` uses `/srv/engineos/tmp`, remounts
+4 GiB `/swapfile`; `eos-build iso` uses `/srv/engineos/tmp`, remounts
 `/tmp` to 8 GiB when it is tmpfs, and limits SquashFS compression parallelism
 for reliable low-memory builds.
 
@@ -125,13 +125,13 @@ ssh dev@<builder-vm-ip> "uname -a && cat /etc/arch-release"
 From WSL or another shell with `rsync`, run the EngineOS handoff dry-run:
 
 ```bash
-./tools/engineos/engineos builder handoff --dry-run --host dev@<builder-vm-ip> --run-proof
+./tools/engineos/eos-builder handoff --dry-run --host dev@<builder-vm-ip> --run-proof
 ```
 
 When that looks right, start the real PoC 0 builder proof:
 
 ```bash
-./tools/engineos/engineos builder handoff --host dev@<builder-vm-ip> --run-proof
+./tools/engineos/eos-builder handoff --host dev@<builder-vm-ip> --run-proof
 ```
 
 The repo will land at `/srv/engineos` inside the builder. The real validation

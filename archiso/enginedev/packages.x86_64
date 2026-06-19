@@ -133,12 +133,6 @@ luajit
 luarocks
 fmt
 spdlog
-nlohmann-json
-yaml-cpp
-tomlplusplus
-catch2
-gtest
-benchmark
 enet
 imagemagick
 ffmpeg
@@ -147,10 +141,9 @@ pacman-contrib
 namcap
 devtools
 engineos-config
-engineos-cli
+engineos-tools
 engineos-oh-my-zsh
 engineos-tmux-plugins
-engineos-agent-tools
 engineos-cube
 engineos-shell
 engineos-engine-runner

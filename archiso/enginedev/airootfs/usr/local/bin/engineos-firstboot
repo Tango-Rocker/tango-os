@@ -2,4 +2,4 @@
 set -euo pipefail
 
 echo "EngineOS first boot hook"
-echo "Run engineos doctor --vm to collect VM diagnostics."
+echo "Run eos-doctor --vm to collect VM diagnostics."

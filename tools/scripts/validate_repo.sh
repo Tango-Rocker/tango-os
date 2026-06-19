@@ -18,7 +18,7 @@ usage() {
   cat <<'HELP'
 Usage: validate_repo.sh [--dry-run|--mock]
 
-Validate the local EngineOS pacman repository after `engineos build repo`.
+Validate the local EngineOS pacman repository after `eos-build repo`.
 HELP
 }
 

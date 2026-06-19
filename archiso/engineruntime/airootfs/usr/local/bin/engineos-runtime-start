@@ -4,7 +4,7 @@ set -euo pipefail
 LOG_DIR="${ENGINEOS_LOG_DIR:-/var/log/engineos}"
 LOG_FILE="$LOG_DIR/runtime-start.log"
 RUNTIME_CONF="${ENGINEOS_RUNTIME_CONF:-/etc/engineos/runtime.conf}"
-ENGINEOS_CMD="${ENGINEOS_CMD:-engineos}"
+ENGINEOS_RUNTIME_CMD="${ENGINEOS_RUNTIME_CMD:-eos-runtime}"
 CMDLINE_FILE="${ENGINEOS_PROC_CMDLINE:-/proc/cmdline}"
 
 mkdir -p "$LOG_DIR"
@@ -15,8 +15,8 @@ log() {
 
 recovery_hint() {
   log "recovery hint: switch to ${ENGINEOS_RUNTIME_RECOVERY_TTY:-tty2} and run engineos-recovery-help"
-  log "recovery logs: engineos logs runtime --last 200"
-  log "recovery bundle: engineos crash-bundle"
+  log "recovery logs: eos-logs runtime --last 200"
+  log "recovery bundle: eos-crash-bundle"
 }
 
 if [[ -r "$RUNTIME_CONF" ]]; then
@@ -39,7 +39,7 @@ fi
 MODE="${ENGINEOS_RUNTIME_SHELL_MODE:---tty}"
 log "starting EngineOS shell mode=$MODE recovery=${ENGINEOS_RUNTIME_RECOVERY_TTY:-tty2}"
 
-if "$ENGINEOS_CMD" run shell "$MODE" >>"$LOG_FILE" 2>&1; then
+if "$ENGINEOS_RUNTIME_CMD" shell "$MODE" >>"$LOG_FILE" 2>&1; then
   log "EngineOS shell exited cleanly"
 else
   rc="$?"

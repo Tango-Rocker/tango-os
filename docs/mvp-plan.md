@@ -20,11 +20,11 @@ Goal: prove that the builder can repeatably build packages, build EngineDev, boo
 Acceptance:
 
 - repo exists on the Arch builder at `/srv/engineos`
-- `engineos validate builder` passes on the builder
-- `engineos build repo` and `engineos validate repo` pass
-- `engineos build iso enginedev` produces `EngineDevOS-*.iso`
+- `eos-validate builder` passes on the builder
+- `eos-build repo` and `eos-validate repo` pass
+- `eos-build iso enginedev` produces `EngineDevOS-*.iso`
 - EngineDev boots in a test VM
-- `engineos proof booted-iso --vm` passes inside the guest
+- `eos-proof booted-iso --vm` passes inside the guest
 
 Current status: PoC 0 EngineDev build-lab acceptance is complete. The first-deploy dev environment follow-on is also complete: Codex CLI, tmux defaults, Docker, and the post-install payload were proven in clean EngineDev guests.
 
@@ -32,18 +32,18 @@ Commands:
 
 ```bash
 cd /srv/engineos
-./tools/engineos/engineos validate builder
-./tools/engineos/engineos build repo
-./tools/engineos/engineos validate repo
-./tools/engineos/engineos build iso enginedev
-./tools/engineos/engineos vm boot enginedev --display none --background --ssh-port 2222
-ENGINEOS_GUEST_PASSWORD=dev ./tools/engineos/engineos deploy first --host dev@127.0.0.1 --port 2222
+./tools/engineos/eos-validate builder
+./tools/engineos/eos-build repo
+./tools/engineos/eos-validate repo
+./tools/engineos/eos-build iso enginedev
+./tools/engineos/eos-vm boot enginedev --display none --background --ssh-port 2222
+ENGINEOS_GUEST_PASSWORD=dev ./tools/engineos/eos-deploy first --host dev@127.0.0.1 --port 2222
 ```
 
 Inside EngineDev:
 
 ```bash
-engineos proof booted-iso --vm
+eos-proof booted-iso --vm
 tmux -V
 docker info
 codex --version
@@ -55,8 +55,8 @@ Goal: prove QuakeSpasm can launch through EngineOS with assets, logs, and crash 
 
 Acceptance:
 
-- `engineos assets check quake` explains missing assets and passes with user-provided assets
-- `engineos run quake --smoke` works in a generated ISO
+- `eos-assets check quake` explains missing assets and passes with user-provided assets
+- `eos-runtime quake --smoke` works in a generated ISO
 - engine logs show launch arguments and audio driver
 - crash bundle includes Quake asset state and engine logs
 
@@ -68,7 +68,7 @@ Goal: prove the shell can run, display clients, route input, launch terminal, an
 
 Acceptance:
 
-- `engineos build shell` passes on the Arch builder
+- `eos-build shell` passes on the Arch builder
 - nested shell visibly runs under Wayland or X11
 - TTY shell path starts in Runtime
 - `Alt+Return` launches a terminal
@@ -90,7 +90,7 @@ Acceptance:
 - audio works through PipeWire/Pulse
 - recovery TTY and crash bundle work
 
-Current status: no bare-metal proof yet. Builder-hosted QEMU can expose an emulated ICH9 HDA device with `engineos vm boot --audio hda`; that proves guest ALSA/PipeWire plumbing but not real audible output.
+Current status: no bare-metal proof yet. Builder-hosted QEMU can expose an emulated ICH9 HDA device with `eos-vm boot --audio hda`; that proves guest ALSA/PipeWire plumbing but not real audible output.
 
 ## MVP
 
@@ -100,15 +100,15 @@ Release-candidate commands:
 
 ```bash
 cd /srv/engineos
-./tools/engineos/engineos proof release-candidate
-./tools/engineos/engineos release checklist --out-dir out
+./tools/engineos/eos-proof release-candidate
+./tools/engineos/eos-release checklist --out-dir out
 ```
 
 Hardware handoff:
 
 ```bash
-./tools/engineos/engineos proof hardware-ready --profile engineruntime --device /dev/sdX
-engineos proof booted-iso --bare-metal
+./tools/engineos/eos-proof hardware-ready --profile engineruntime --device /dev/sdX
+eos-proof booted-iso --bare-metal
 ```
 
 ## Deferred Until After MVP
@@ -119,4 +119,4 @@ engineos proof booted-iso --bare-metal
 - dynamic multi-monitor layout
 - rich 3D cockpit
 - package signing
-- external/shared MCP integrations when they add value beyond direct CLI
+- read-only live runtime MCP after observability and role routing are stable

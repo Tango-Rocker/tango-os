@@ -13,6 +13,8 @@ FAILURES=0
 WARNINGS=0
 INSTALLED_BIN_DIR="${ENGINEOS_INSTALLED_BIN_DIR:-/usr/bin}"
 INSTALLED_SCRIPT_DIR="${ENGINEOS_INSTALLED_SCRIPT_DIR:-/usr/lib/engineos/scripts}"
+INSTALLED_ENGINEOS_BIN_DIR="${ENGINEOS_INSTALLED_LIB_BIN_DIR:-/usr/lib/engineos/bin}"
+INSTALLED_EOS_DIR="${ENGINEOS_INSTALLED_EOS_DIR:-/usr/lib/engineos/eos}"
 
 usage() {
   cat <<'HELP'
@@ -196,65 +198,62 @@ check_package_inputs() {
       require_file "packages/engineos-config/files/etc/engineos/apps.toml"
       if ENGINEOS_APPS_MANIFEST="$ROOT/packages/engineos-config/files/etc/engineos/apps.toml" \
           "$ROOT/tools/scripts/app.sh" manifest validate >/dev/null; then
-        ok "engineos app manifest validates"
+        ok "eos app manifest validates"
       else
-        fail "engineos app manifest validation failed"
+        fail "eos app manifest validation failed"
       fi
       ;;
-    engineos-cli)
+    engineos-tools)
+      require_file "tools/engineos/eos"
       require_file "tools/engineos/engineos"
-      require_file "tools/scripts/builder_handoff.sh"
-      require_file "tools/scripts/builder_doctor_proof.sh"
-      require_file "tools/scripts/post_first_deploy.sh"
-      require_file "tools/scripts/bootstrap_builder.sh"
+      require_file "tools/engineos/eos-wrapper"
+      require_file "tools/engineos/generate-wrappers.sh"
       require_file "tools/scripts/common.sh"
+      require_file "tools/scripts/package_lint.sh"
+      require_file "tools/scripts/preflight.sh"
       require_file "tools/scripts/build_iso.sh"
       require_file "tools/scripts/build_engine.sh"
       require_file "tools/scripts/build_shell.sh"
       require_file "tools/scripts/build_repo.sh"
-      require_file "tools/scripts/preflight.sh"
-      require_file "tools/scripts/assets.sh"
-      require_file "tools/scripts/app.sh"
-      require_file "tools/scripts/artifacts.sh"
-      require_file "tools/scripts/release.sh"
-      require_file "tools/scripts/install_dev.sh"
       require_file "tools/scripts/installation_guide.sh"
-      require_file "tools/scripts/terminal_launcher.sh"
-      require_file "tools/scripts/capture_frame.sh"
+      require_file "tools/scripts/update_check.sh"
+      require_file "tools/scripts/release.sh"
+      require_file "tools/scripts/artifacts.sh"
       require_file "tools/scripts/doctor.sh"
-      require_file "tools/scripts/input_trace.sh"
       require_file "tools/scripts/logs.sh"
-      require_file "tools/scripts/package_lint.sh"
-      require_file "tools/scripts/outputs.sh"
-      require_file "tools/scripts/shell_runner.sh"
-      require_file "tools/scripts/proof.sh"
-      require_file "tools/scripts/vm.sh"
-      require_file "tools/scripts/usb.sh"
-      require_file "tools/scripts/secure_boot.sh"
-      require_file "tools/scripts/test_runner.sh"
+      require_file "tools/scripts/crash_bundle.sh"
       require_file "tools/scripts/validate_builder.sh"
       require_file "tools/scripts/validate_repo.sh"
       require_file "tools/scripts/validate_engine.sh"
       require_file "tools/scripts/validate_shell.sh"
-      require_file "tools/scripts/validate_boot.sh"
-      require_file "tools/scripts/crash_bundle.sh"
-      require_file "tools/scripts/smoke_test.sh"
-      require_file "tools/post-install-payload/scripts/setup_dev_environment.sh"
-      require_file "tools/post-install-payload/scripts/engineos-dev-shell-start"
-      require_file "tools/post-install-payload/assets/systemd/engineos-dev-shell.service"
-      require_file "tools/post-install-payload/assets/tmux.conf"
-      require_file "tools/post-install-payload/assets/zprofile"
-      require_file "tools/post-install-payload/assets/zshrc"
-      require_file "tools/post-install-payload/assets/docker/daemon.json"
-      require_file "tools/post-install-payload/assets/codex/engineos-dev-directives.md"
-      ;;
-    engineos-oh-my-zsh)
-      require_file "packages/engineos-oh-my-zsh/PKGBUILD"
-      ;;
-    engineos-tmux-plugins)
-      require_file "packages/engineos-tmux-plugins/PKGBUILD"
-      ;;
-    engineos-agent-tools)
+      require_file "tools/scripts/app.sh"
+      require_file "tools/scripts/terminal_launcher.sh"
+      require_file "tools/scripts/outputs.sh"
+      require_file "tools/scripts/shell_runner.sh"
+      require_file "tools/scripts/assets.sh"
+      require_file "tools/scripts/capture_frame.sh"
+      require_file "tools/scripts/input_trace.sh"
+      require_file "tools/scripts/observability.sh"
+      require_file "tools/scripts/agent_metadata.sh"
+      require_file "tools/scripts/agent_route.sh"
+      require_file "tools/scripts/agent_profile.sh"
+      require_file "tools/scripts/agent_hygiene.sh"
+      require_file "tools/scripts/agent_dispatcher.sh"
+      require_file "tools/eos/builder/builder_handoff.sh"
+      require_file "tools/eos/builder/builder_doctor_proof.sh"
+      require_file "tools/eos/builder/bootstrap_builder.sh"
+      require_file "tools/eos/vm/vm.sh"
+      require_file "tools/eos/os-dev/post_first_deploy.sh"
+      require_file "tools/eos/bare-metal/install_dev.sh"
+      require_file "tools/eos/bare-metal/usb.sh"
+      require_file "tools/eos/bare-metal/secure_boot.sh"
+      require_file "tools/eos/proof/proof.sh"
+      require_file "tools/eos/proof/validate_boot.sh"
+      require_file "tools/eos/test/test_runner.sh"
+      require_file "tools/eos/test/smoke_test.sh"
+      require_file "packages/engineos-tools/PKGBUILD"
+      require_file "packages/engineos-tools/files/usr/lib/systemd/system/engineos-observe-exporter.service"
+      require_file "packages/engineos-tools/files/usr/lib/systemd/system/engineos-agent-dispatcher@.service"
       require_file "AGENTS.md"
       require_file "BACKLOG.md"
       require_file "CURRENT_STATUS.md"
@@ -264,10 +263,11 @@ check_package_inputs() {
       require_file "docs/agent-harness.md"
       require_file "docs/dev-instance.md"
       require_file "docs/agent-lsp.md"
+      require_file "docs/agent-roles.md"
+      require_file "docs/agent-profiles.md"
       require_file "docs/agent-workflow.md"
       require_file "docs/engineos-agent-pack.md"
-      require_file "tools/mcp/README.md"
-      require_file "tools/mcp/engineos_mcp_server.py"
+      require_file ".agents/index.toml"
       require_file "tools/hooks/session_start.py"
       require_file "tools/hooks/pre_tool_policy.py"
       require_file "tools/hooks/stop_check.py"
@@ -279,10 +279,21 @@ check_package_inputs() {
       require_file ".agents/skills/quake-port/SKILL.md"
       require_file ".agents/skills/render-gl/SKILL.md"
       require_file ".agents/skills/wlroots-compositor/SKILL.md"
-      check_abs_python_syntax "$ROOT/tools/mcp/engineos_mcp_server.py"
+      if ! "$ROOT/tools/scripts/agent_metadata.sh" profile oracle >/dev/null; then
+        fail "agent profile generation failed"
+      fi
+      if ! "$ROOT/tools/scripts/agent_metadata.sh" wrapper oracle >/dev/null; then
+        fail "agent wrapper generation failed"
+      fi
       check_abs_python_syntax "$ROOT/tools/hooks/session_start.py"
       check_abs_python_syntax "$ROOT/tools/hooks/pre_tool_policy.py"
       check_abs_python_syntax "$ROOT/tools/hooks/stop_check.py"
+      ;;
+    engineos-oh-my-zsh)
+      require_file "packages/engineos-oh-my-zsh/PKGBUILD"
+      ;;
+    engineos-tmux-plugins)
+      require_file "packages/engineos-tmux-plugins/PKGBUILD"
       ;;
     engineos-cube)
       require_file "apps/cube/README.md"
@@ -296,9 +307,13 @@ check_package_inputs() {
       ;;
     engineos-engine-runner)
       require_file "tools/scripts/engine_runner.sh"
-      require_file "tools/scripts/engine_runner_daemon.py"
+      require_file "tools/go/cmd/engine-runner-daemon/main.go"
+      require_file "tools/go/internal/engineos/config.go"
       require_file "packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service"
       require_file "engine-runner/README.md"
+      if grep -F 'engine_runner_daemon.py' "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null; then
+        fail "engineos-engine-runner service must use the Go daemon"
+      fi
       if grep -F 'LogsDirectory=engineos' "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null; then
         fail "engineos-engine-runner service lets systemd reset /var/log/engineos permissions"
       elif grep -F 'RuntimeDirectory=engineos' "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null; then
@@ -333,6 +348,12 @@ check_package_inputs() {
 }
 
 check_installed_scripts() {
+  require_abs_file "$INSTALLED_BIN_DIR/eos"
+  require_abs_file "$INSTALLED_BIN_DIR/eos-doctor"
+  require_abs_file "$INSTALLED_BIN_DIR/eos-build"
+  require_abs_file "$INSTALLED_BIN_DIR/eos-agent"
+  require_abs_file "$INSTALLED_BIN_DIR/eos-observe"
+  require_abs_file "$INSTALLED_BIN_DIR/eos-test"
   require_abs_file "$INSTALLED_BIN_DIR/engineos"
   require_abs_file "$INSTALLED_SCRIPT_DIR/common.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/preflight.sh"
@@ -341,15 +362,33 @@ check_installed_scripts() {
   require_abs_file "$INSTALLED_SCRIPT_DIR/doctor.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/logs.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/outputs.sh"
-  require_abs_file "$INSTALLED_SCRIPT_DIR/proof.sh"
-  require_abs_file "$INSTALLED_SCRIPT_DIR/install_dev.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/installation_guide.sh"
-  require_abs_file "$INSTALLED_SCRIPT_DIR/secure_boot.sh"
-  require_abs_file "$INSTALLED_SCRIPT_DIR/test_runner.sh"
-  require_abs_file "$INSTALLED_SCRIPT_DIR/validate_boot.sh"
+  require_abs_file "$INSTALLED_SCRIPT_DIR/update_check.sh"
+  require_abs_file "$INSTALLED_SCRIPT_DIR/observability.sh"
+  require_abs_file "$INSTALLED_SCRIPT_DIR/agent_route.sh"
+  require_abs_file "$INSTALLED_SCRIPT_DIR/agent_profile.sh"
+  require_abs_file "$INSTALLED_SCRIPT_DIR/agent_hygiene.sh"
+  require_abs_file "$INSTALLED_SCRIPT_DIR/agent_dispatcher.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/crash_bundle.sh"
-  require_abs_file "$INSTALLED_SCRIPT_DIR/smoke_test.sh"
+  require_abs_file "$INSTALLED_EOS_DIR/builder/bootstrap_builder.sh"
+  require_abs_file "$INSTALLED_EOS_DIR/builder/builder_handoff.sh"
+  require_abs_file "$INSTALLED_EOS_DIR/builder/builder_doctor_proof.sh"
+  require_abs_file "$INSTALLED_EOS_DIR/vm/vm.sh"
+  require_abs_file "$INSTALLED_EOS_DIR/os-dev/post_first_deploy.sh"
+  require_abs_file "$INSTALLED_EOS_DIR/bare-metal/install_dev.sh"
+  require_abs_file "$INSTALLED_EOS_DIR/bare-metal/usb.sh"
+  require_abs_file "$INSTALLED_EOS_DIR/bare-metal/secure_boot.sh"
+  require_abs_file "$INSTALLED_EOS_DIR/proof/proof.sh"
+  require_abs_file "$INSTALLED_EOS_DIR/proof/validate_boot.sh"
+  require_abs_file "$INSTALLED_EOS_DIR/test/test_runner.sh"
+  require_abs_file "$INSTALLED_EOS_DIR/test/smoke_test.sh"
 
+  check_abs_bash_syntax "$INSTALLED_BIN_DIR/eos"
+  check_abs_bash_syntax "$INSTALLED_BIN_DIR/eos-doctor"
+  check_abs_bash_syntax "$INSTALLED_BIN_DIR/eos-build"
+  check_abs_bash_syntax "$INSTALLED_BIN_DIR/eos-agent"
+  check_abs_bash_syntax "$INSTALLED_BIN_DIR/eos-observe"
+  check_abs_bash_syntax "$INSTALLED_BIN_DIR/eos-test"
   check_abs_bash_syntax "$INSTALLED_BIN_DIR/engineos"
   for script in "$INSTALLED_SCRIPT_DIR"/*.sh; do
     [[ -e "$script" ]] || {
@@ -358,11 +397,18 @@ check_installed_scripts() {
     }
     check_abs_bash_syntax "$script"
   done
+  for module in "$INSTALLED_EOS_DIR"/*/*.sh; do
+    [[ -e "$module" ]] || {
+      fail "missing installed eos modules in $INSTALLED_EOS_DIR"
+      break
+    }
+    check_abs_bash_syntax "$module"
+  done
 
-  if [[ -f "$INSTALLED_SCRIPT_DIR/engine_runner_daemon.py" ]]; then
-    check_abs_python_syntax "$INSTALLED_SCRIPT_DIR/engine_runner_daemon.py"
+  if [[ -x "$INSTALLED_ENGINEOS_BIN_DIR/engine-runner-daemon" ]]; then
+    ok "$INSTALLED_ENGINEOS_BIN_DIR/engine-runner-daemon"
   else
-    warn "$INSTALLED_SCRIPT_DIR/engine_runner_daemon.py missing; engine runner package may be absent"
+    warn "$INSTALLED_ENGINEOS_BIN_DIR/engine-runner-daemon missing; engine runner package may be absent"
   fi
 }
 
@@ -373,10 +419,31 @@ check_scripts() {
   fi
 
   require_file "tools/engineos/engineos"
-  require_file "tools/scripts/builder_handoff.sh"
-  require_file "tools/scripts/builder_doctor_proof.sh"
-  require_file "tools/scripts/post_first_deploy.sh"
-  require_file "tools/scripts/bootstrap_builder.sh"
+  require_file "tools/engineos/eos"
+  require_file "tools/engineos/eos-wrapper"
+  require_file "tools/engineos/generate-wrappers.sh"
+  require_file "tools/go/go.mod"
+  require_file "tools/go/cmd/engine-runner-daemon/main.go"
+  require_file "tools/go/internal/engineos/config.go"
+  require_file "tools/go/internal/engineos/jsonl.go"
+  require_file "tools/eos/README.md"
+  require_file "tools/eos/builder/bootstrap_builder.sh"
+  require_file "tools/eos/builder/builder_handoff.sh"
+  require_file "tools/eos/builder/builder_doctor_proof.sh"
+  require_file "tools/eos/builder/create_builder_vm_hyperv.ps1"
+  require_file "tools/eos/builder/tune_builder_vm_hyperv.ps1"
+  require_file "tools/eos/vm/vm.sh"
+  require_file "tools/eos/vm/create_iso_test_vm_hyperv.ps1"
+  require_file "tools/eos/os-dev/post_first_deploy.sh"
+  require_file "tools/eos/bare-metal/install_dev.sh"
+  require_file "tools/eos/bare-metal/usb.sh"
+  require_file "tools/eos/bare-metal/secure_boot.sh"
+  require_file "tools/eos/bare-metal/deploy_real_install_from_windows.ps1"
+  require_file "tools/eos/bare-metal/write_signed_iso_usb_windows.ps1"
+  require_file "tools/eos/proof/proof.sh"
+  require_file "tools/eos/proof/validate_boot.sh"
+  require_file "tools/eos/test/test_runner.sh"
+  require_file "tools/eos/test/smoke_test.sh"
   require_file "tools/scripts/common.sh"
   require_file "tools/scripts/build_iso.sh"
   require_file "tools/scripts/build_engine.sh"
@@ -387,30 +454,27 @@ check_scripts() {
   require_file "tools/scripts/app.sh"
   require_file "tools/scripts/artifacts.sh"
   require_file "tools/scripts/release.sh"
-  require_file "tools/scripts/install_dev.sh"
   require_file "tools/scripts/installation_guide.sh"
   require_file "tools/scripts/terminal_launcher.sh"
   require_file "tools/scripts/capture_frame.sh"
   require_file "tools/scripts/doctor.sh"
   require_file "tools/scripts/engine_runner.sh"
-  require_file "tools/scripts/engine_runner_daemon.py"
   require_file "tools/scripts/input_trace.sh"
   require_file "tools/scripts/logs.sh"
   require_file "tools/scripts/package_lint.sh"
   require_file "tools/scripts/outputs.sh"
   require_file "tools/scripts/shell_runner.sh"
-  require_file "tools/scripts/proof.sh"
-  require_file "tools/scripts/vm.sh"
-  require_file "tools/scripts/usb.sh"
-  require_file "tools/scripts/secure_boot.sh"
-  require_file "tools/scripts/test_runner.sh"
+  require_file "tools/scripts/update_check.sh"
+  require_file "tools/scripts/observability.sh"
+  require_file "tools/scripts/agent_route.sh"
+  require_file "tools/scripts/agent_profile.sh"
+  require_file "tools/scripts/agent_hygiene.sh"
+  require_file "tools/scripts/agent_dispatcher.sh"
   require_file "tools/scripts/validate_builder.sh"
   require_file "tools/scripts/validate_repo.sh"
   require_file "tools/scripts/validate_engine.sh"
   require_file "tools/scripts/validate_shell.sh"
-  require_file "tools/scripts/validate_boot.sh"
   require_file "tools/scripts/crash_bundle.sh"
-  require_file "tools/scripts/smoke_test.sh"
   require_file "tools/post-install-payload/scripts/setup_dev_environment.sh"
   require_file "tools/post-install-payload/scripts/engineos-dev-shell-start"
   require_file "tools/post-install-payload/assets/systemd/engineos-dev-shell.service"
@@ -425,10 +489,16 @@ check_scripts() {
   require_file "tests/smoke.sh"
 
   check_bash_syntax "tools/engineos/engineos"
-  check_bash_syntax "tools/scripts/builder_handoff.sh"
-  check_bash_syntax "tools/scripts/builder_doctor_proof.sh"
-  check_bash_syntax "tools/scripts/post_first_deploy.sh"
-  check_bash_syntax "tools/scripts/bootstrap_builder.sh"
+  check_bash_syntax "tools/engineos/eos"
+  check_bash_syntax "tools/engineos/eos-wrapper"
+  for eos_command in "$ROOT"/tools/engineos/eos-*; do
+    [[ -f "$eos_command" ]] || continue
+    check_abs_bash_syntax "$eos_command"
+  done
+  for eos_module in "$ROOT"/tools/eos/*/*.sh; do
+    [[ -f "$eos_module" ]] || continue
+    check_abs_bash_syntax "$eos_module"
+  done
   check_bash_syntax "tools/scripts/common.sh"
   check_bash_syntax "tools/scripts/build_iso.sh"
   check_bash_syntax "tools/scripts/build_engine.sh"
@@ -439,30 +509,27 @@ check_scripts() {
   check_bash_syntax "tools/scripts/app.sh"
   check_bash_syntax "tools/scripts/artifacts.sh"
   check_bash_syntax "tools/scripts/release.sh"
-  check_bash_syntax "tools/scripts/install_dev.sh"
   check_bash_syntax "tools/scripts/installation_guide.sh"
   check_bash_syntax "tools/scripts/terminal_launcher.sh"
   check_bash_syntax "tools/scripts/capture_frame.sh"
   check_bash_syntax "tools/scripts/doctor.sh"
   check_bash_syntax "tools/scripts/engine_runner.sh"
-  check_abs_python_syntax "$ROOT/tools/scripts/engine_runner_daemon.py"
   check_bash_syntax "tools/scripts/input_trace.sh"
   check_bash_syntax "tools/scripts/logs.sh"
   check_bash_syntax "tools/scripts/package_lint.sh"
   check_bash_syntax "tools/scripts/outputs.sh"
   check_bash_syntax "tools/scripts/shell_runner.sh"
-  check_bash_syntax "tools/scripts/proof.sh"
-  check_bash_syntax "tools/scripts/vm.sh"
-  check_bash_syntax "tools/scripts/usb.sh"
-  check_bash_syntax "tools/scripts/secure_boot.sh"
-  check_bash_syntax "tools/scripts/test_runner.sh"
+  check_bash_syntax "tools/scripts/update_check.sh"
+  check_bash_syntax "tools/scripts/observability.sh"
+  check_bash_syntax "tools/scripts/agent_route.sh"
+  check_bash_syntax "tools/scripts/agent_profile.sh"
+  check_bash_syntax "tools/scripts/agent_hygiene.sh"
+  check_bash_syntax "tools/scripts/agent_dispatcher.sh"
   check_bash_syntax "tools/scripts/validate_builder.sh"
   check_bash_syntax "tools/scripts/validate_repo.sh"
   check_bash_syntax "tools/scripts/validate_engine.sh"
   check_bash_syntax "tools/scripts/validate_shell.sh"
-  check_bash_syntax "tools/scripts/validate_boot.sh"
   check_bash_syntax "tools/scripts/crash_bundle.sh"
-  check_bash_syntax "tools/scripts/smoke_test.sh"
   check_bash_syntax "tools/post-install-payload/scripts/setup_dev_environment.sh"
   check_bash_syntax "tools/post-install-payload/scripts/engineos-dev-shell-start"
   check_bash_syntax "engines/quakespasm/engineos/build.sh"
@@ -479,7 +546,7 @@ check_repo() {
   local packages=()
 
   if [[ -n "$ONLY_PACKAGE" ]]; then
-    package_exists_in_list "$ONLY_PACKAGE" || fail "package is not in engineos package list: $ONLY_PACKAGE"
+    package_exists_in_list "$ONLY_PACKAGE" || fail "package is not in eos-package list: $ONLY_PACKAGE"
     packages=("$ONLY_PACKAGE")
   else
     mapfile -t packages < <(engineos_packages)
@@ -736,7 +803,7 @@ check_iso() {
     else
       fail "$profile_dir login does not show recovery help"
     fi
-    if grep -F 'engineos logs runtime --last 200' "$ROOT/$profile_dir/airootfs/etc/issue" >/dev/null; then
+    if grep -F 'eos-logs runtime --last 200' "$ROOT/$profile_dir/airootfs/etc/issue" >/dev/null; then
       ok "$profile_dir issue points to runtime logs"
     else
       fail "$profile_dir issue does not point to runtime logs"

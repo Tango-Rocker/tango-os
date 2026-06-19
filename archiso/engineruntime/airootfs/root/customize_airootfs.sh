@@ -40,7 +40,7 @@ Profile: engineruntime
 
 Recovery TTY is intentionally available.
 Run: engineos-recovery-help
-Logs: engineos logs runtime --last 200
+Logs: eos-logs runtime --last 200
 EOF
 
 printf '%%wheel ALL=(ALL:ALL) NOPASSWD: ALL\n' >/etc/sudoers.d/10-engineos-wheel
@@ -51,6 +51,7 @@ systemctl enable sshd.service
 systemctl enable engineos-live-setup.service
 systemctl enable engineos-engine-runner.service
 systemctl enable engineos-runtime.service
+systemctl enable engineos-observe-exporter.service
 systemctl enable getty@tty2.service
 systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service || true
 loginctl enable-linger engineos || true

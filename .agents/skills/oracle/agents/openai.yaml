@@ -1,0 +1,3 @@
+interface:
+  display_name: "EngineOS Oracle"
+  short_description: "Route broad EngineOS requests to roles, risks, and proof commands"

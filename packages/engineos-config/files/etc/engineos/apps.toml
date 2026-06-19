@@ -2,12 +2,12 @@
 #
 # This file declares the MVP app contract used by the shell runner, app launcher,
 # and proof tooling. Keep commands canonical here; source-tree helpers may
-# rewrite a leading `engineos` to the local checkout command path.
+# rewrite a leading `eos-*` to the local checkout command path.
 
 [apps.terminal]
 slot = "terminal"
 role = "terminal"
-command = "engineos app launch terminal"
+command = "eos-app launch terminal"
 package = "foot"
 app_ids = ["foot", "terminal", "alacritty", "kitty", "wezterm"]
 log = "terminal.log"
@@ -18,8 +18,8 @@ capture = "none"
 [apps.cube]
 slot = "cube"
 role = "cube"
-command = "engineos app launch cube"
-smoke_command = "engineos app launch cube --smoke"
+command = "eos-app launch cube"
+smoke_command = "eos-app launch cube --smoke"
 package = "engineos-cube"
 app_ids = ["engineos-cube"]
 log = "cube.log"
@@ -30,8 +30,8 @@ capture = "none"
 [apps.quake]
 slot = "engine"
 role = "engine"
-command = "engineos app launch quake"
-smoke_command = "engineos app launch quake --smoke"
+command = "eos-app launch quake"
+smoke_command = "eos-app launch quake --smoke"
 package = "engineos-quakespasm"
 app_ids = ["quakespasm", "quake", "engine"]
 log = "engine.log"

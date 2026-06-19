@@ -9,21 +9,26 @@ Use:
 AGENTS.md
 .codex/config.toml
 .codex/hooks.example.json
+.agents/index.toml
+.agents/roles/*/AGENTS.md
 .agents/skills/*/SKILL.md
+tools/scripts/agent_metadata.sh
 tools/hooks/*.py
-tools/mcp/engineos_mcp_server.py
 docs/engineos-agent-pack.md
 docs/agent-harness.md
 docs/agent-workflow.md
 docs/agent-lsp.md
+docs/agent-roles.md
+docs/agent-profiles.md
 ```
 
 Validation:
 
 ```bash
-./tools/engineos/engineos test agent
-python tools/mcp/engineos_mcp_server.py --self-test
+./tools/engineos/eos-test agent
+./tools/engineos/eos-agent hygiene check
 ```
 
-The MCP server is read-only. Run local EngineOS work through the direct CLI and
-use skills for repeatable workflow guidance.
+Run local EngineOS work through the direct CLI and use skills for repeatable
+workflow guidance. Project-status/docs MCP has been removed; future MCP is
+runtime-only and read-only.

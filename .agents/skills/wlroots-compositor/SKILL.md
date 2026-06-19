@@ -20,18 +20,18 @@ The compositor is the desktop shell. Keep it observable, recoverable, and small.
 ## Checks
 
 ```bash
-./tools/engineos/engineos build shell --dry-run
-./tools/engineos/engineos test compositor --headless
-./tools/engineos/engineos test shell-actions
-./tools/engineos/engineos test shell
-./tools/engineos/engineos logs shell --last 200
+./tools/engineos/eos-build shell --dry-run
+./tools/engineos/eos-test compositor --headless
+./tools/engineos/eos-test shell-actions
+./tools/engineos/eos-test shell
+./tools/engineos/eos-logs shell --last 200
 ```
 
 For Runtime launchpad behavior:
 
 ```bash
-./tools/engineos/engineos app manifest validate
-./tools/engineos/engineos proof launchpad --runtime --dry-run
+./tools/engineos/eos-app manifest validate
+./tools/engineos/eos-proof launchpad --runtime --dry-run
 ```
 
 ## Files

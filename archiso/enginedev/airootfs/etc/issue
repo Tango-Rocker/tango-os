@@ -1,4 +1,4 @@
 EngineDev OS \r (\l)
 
-Run: engineos doctor --vm
+Run: eos-doctor --vm
 

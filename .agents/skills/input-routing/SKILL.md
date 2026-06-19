@@ -13,22 +13,22 @@ traces before changing routing policy.
 - Keep an emergency release path available.
 - Do not let game focus permanently steal shell focus.
 - TTY/KMS input changes need VM smoke first and bare-metal proof later.
-- Keep traces replayable with `engineos record input` / `engineos replay input`.
+- Keep traces replayable with `eos-input record` / `eos-input replay`.
 
 ## Checks
 
 ```bash
-./tools/engineos/engineos test input
-./tools/engineos/engineos test shell-actions
-./tools/engineos/engineos record input artifacts/input-trace.json
-./tools/engineos/engineos replay input artifacts/input-trace.json
+./tools/engineos/eos-test input
+./tools/engineos/eos-test shell-actions
+./tools/engineos/eos-input record artifacts/input-trace.json
+./tools/engineos/eos-input replay artifacts/input-trace.json
 ```
 
 For runtime validation:
 
 ```bash
-engineos proof launchpad --runtime
-engineos logs shell --last 200
+eos-proof launchpad --runtime
+eos-logs shell --last 200
 ```
 
 ## Files

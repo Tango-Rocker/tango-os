@@ -1,0 +1,559 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEFAULT_ENGINEOS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+if [[ "$DEFAULT_ENGINEOS_ROOT" == "/" && -d /usr/lib/engineos/scripts ]]; then
+  DEFAULT_ENGINEOS_ROOT="/usr"
+fi
+
+ENGINEOS_ROOT="${ENGINEOS_ROOT:-$DEFAULT_ENGINEOS_ROOT}"
+ENGINEOS_LOG_DIR_OVERRIDE="${ENGINEOS_LOG_DIR-}"
+ENGINEOS_SCRIPT_DIR_OVERRIDE="${ENGINEOS_SCRIPT_DIR-}"
+ENGINEOS_EOS_DIR_OVERRIDE="${ENGINEOS_EOS_DIR-}"
+
+if [[ -r /etc/engineos/profile.conf ]]; then
+  # shellcheck disable=SC1091
+  source /etc/engineos/profile.conf
+fi
+if [[ -n "$ENGINEOS_LOG_DIR_OVERRIDE" ]]; then
+  ENGINEOS_LOG_DIR="$ENGINEOS_LOG_DIR_OVERRIDE"
+fi
+if [[ -n "$ENGINEOS_SCRIPT_DIR_OVERRIDE" ]]; then
+  ENGINEOS_SCRIPT_DIR="$ENGINEOS_SCRIPT_DIR_OVERRIDE"
+fi
+if [[ -n "$ENGINEOS_EOS_DIR_OVERRIDE" ]]; then
+  ENGINEOS_EOS_DIR="$ENGINEOS_EOS_DIR_OVERRIDE"
+fi
+
+is_installed_root() {
+  [[ "$ENGINEOS_ROOT" == /usr || "$ENGINEOS_ROOT" == /usr/* ]] && return 0
+  [[ -d "$ENGINEOS_ROOT/lib/engineos/scripts" ]]
+}
+
+if is_installed_root; then
+  ENGINEOS_SCRIPT_DIR="${ENGINEOS_SCRIPT_DIR:-/usr/lib/engineos/scripts}"
+  ENGINEOS_EOS_DIR="${ENGINEOS_EOS_DIR:-/usr/lib/engineos/eos}"
+  ENGINEOS_LOG_DIR="${ENGINEOS_LOG_DIR:-/var/log/engineos}"
+elif [[ -d "$ENGINEOS_ROOT/tools/scripts" ]]; then
+  ENGINEOS_SCRIPT_DIR="$ENGINEOS_ROOT/tools/scripts"
+  ENGINEOS_EOS_DIR="${ENGINEOS_EOS_DIR:-$ENGINEOS_ROOT/tools/eos}"
+  ENGINEOS_LOG_DIR="${ENGINEOS_LOG_DIR:-$ENGINEOS_ROOT/artifacts/logs}"
+else
+  ENGINEOS_SCRIPT_DIR="${ENGINEOS_SCRIPT_DIR:-/usr/lib/engineos/scripts}"
+  ENGINEOS_EOS_DIR="${ENGINEOS_EOS_DIR:-/usr/lib/engineos/eos}"
+  ENGINEOS_LOG_DIR="${ENGINEOS_LOG_DIR:-/var/log/engineos}"
+fi
+
+export ENGINEOS_ROOT ENGINEOS_SCRIPT_DIR ENGINEOS_EOS_DIR ENGINEOS_LOG_DIR
+
+usage() {
+  cat <<'HELP'
+EngineOS split command dispatcher.
+
+Commands:
+  eos-doctor, eos-logs, eos-crash-bundle
+  eos-build, eos-package, eos-lint, eos-preflight, eos-release, eos-artifacts
+  eos-builder, eos-deploy, eos-install, eos-update
+  eos-app, eos-terminal, eos-outputs, eos-runtime, eos-assets, eos-capture, eos-input
+  eos-proof, eos-validate, eos-vm, eos-usb, eos-secureboot
+  eos-agent, eos-observe, eos-test
+
+Run an individual command with --help for details.
+HELP
+}
+
+die() {
+  printf '%s: %s\n' "${EOS_TOOL:-eos}" "$*" >&2
+  exit 1
+}
+
+script() {
+  printf '%s/%s\n' "$ENGINEOS_SCRIPT_DIR" "$1"
+}
+
+exec_script() {
+  local script_name="$1"
+  shift || true
+  exec "$(script "$script_name")" "$@"
+}
+
+eos_module() {
+  printf '%s/%s\n' "$ENGINEOS_EOS_DIR" "$1"
+}
+
+exec_eos_module() {
+  local module_name="$1"
+  shift || true
+  exec "$(eos_module "$module_name")" "$@"
+}
+
+record_eos_command() {
+  local tool="$1"
+  shift || true
+
+  [[ "${ENGINEOS_OBSERVABILITY_SUPPRESS_CLI:-}" == "1" ]] && return 0
+  [[ -x "$(script observability.sh)" ]] || return 0
+
+  case "$tool ${1:-}" in
+    "eos-observe record"|"eos-observe hook"|"eos-observe prompt-login")
+      return 0
+      ;;
+  esac
+
+  ENGINEOS_OBSERVABILITY_SUPPRESS_CLI=1 \
+    "$(script observability.sh)" record \
+      --kind engineos-command \
+      --source "$tool" \
+      --cwd "$PWD" \
+      --command "$tool $*" >/dev/null 2>&1 || true
+}
+
+cmd_build() {
+  local target="${1:-help}"
+
+  case "$target" in
+    repo)
+      shift || true
+      exec_script build_repo.sh "$@"
+      ;;
+    iso)
+      shift || true
+      exec_script build_iso.sh "$@"
+      ;;
+    engine)
+      shift || true
+      exec_script build_engine.sh "$@"
+      ;;
+    shell)
+      shift || true
+      exec_script build_shell.sh "$@"
+      ;;
+    fetch)
+      shift || true
+      local domain="${1:-}"
+      shift || true
+      case "$domain" in
+        engine)
+          local engine="${1:-}"
+          shift || true
+          case "$engine" in
+            quake)
+              if [[ -x "$ENGINEOS_ROOT/engines/quakespasm/engineos/fetch.sh" ]]; then
+                exec "$ENGINEOS_ROOT/engines/quakespasm/engineos/fetch.sh" "$@"
+              fi
+              exec /usr/share/engineos/quake/fetch.sh "$@"
+              ;;
+            *)
+              die "unknown engine fetch target: ${engine:-missing}"
+              ;;
+          esac
+          ;;
+        *)
+          die "fetch expects: engine quake"
+          ;;
+      esac
+      ;;
+    help|--help|-h)
+      cat <<'HELP'
+Usage:
+  eos-build repo [--dry-run]
+  eos-build iso [enginedev|engineruntime] [--dry-run] [--fast]
+  eos-build engine quake [--dry-run] [--fetch]
+  eos-build shell [--dry-run]
+  eos-build fetch engine quake [--dry-run|--status]
+HELP
+      ;;
+    *)
+      die "unknown build target: $target"
+      ;;
+  esac
+}
+
+cmd_package() {
+  case "${1:-}" in
+    help|--help|-h)
+      printf 'Usage: eos-package <package-name> [--dry-run]\n'
+      return 0
+      ;;
+  esac
+
+  local pkg="${1:-}"
+  [[ -n "$pkg" ]] || die "package name required"
+  shift || true
+  exec_script build_repo.sh --package "$pkg" "$@"
+}
+
+cmd_lint() {
+  local target="${1:-packages}"
+  case "$target" in
+    packages)
+      shift || true
+      exec_script package_lint.sh "$@"
+      ;;
+    help|--help|-h)
+      printf 'Usage: eos-lint packages [--package <name>]\n'
+      ;;
+    *)
+      die "unknown lint target: $target"
+      ;;
+  esac
+}
+
+cmd_builder() {
+  local target="${1:-help}"
+  case "$target" in
+    handoff)
+      shift || true
+      exec_eos_module builder/builder_handoff.sh "$@"
+      ;;
+    doctor-proof)
+      shift || true
+      exec_eos_module builder/builder_doctor_proof.sh "$@"
+      ;;
+    bootstrap)
+      shift || true
+      exec_eos_module builder/bootstrap_builder.sh "$@"
+      ;;
+    help|--help|-h)
+      cat <<'HELP'
+Usage:
+  eos-builder bootstrap [--dry-run|--print-packages]
+  eos-builder handoff [--dry-run] [--host user@host] [--run-proof]
+  eos-builder doctor-proof [--dry-run] --host user@host [--guest-port 2222]
+HELP
+      ;;
+    *)
+      die "unknown builder target: $target"
+      ;;
+  esac
+}
+
+cmd_deploy() {
+  local target="${1:-help}"
+  case "$target" in
+    first)
+      shift || true
+      exec_eos_module os-dev/post_first_deploy.sh "$@"
+      ;;
+    help|--help|-h)
+      printf 'Usage: eos-deploy first [--dry-run] [--host dev@127.0.0.1] [--port 2222]\n'
+      ;;
+    *)
+      die "unknown deploy target: $target"
+      ;;
+  esac
+}
+
+cmd_install() {
+  local target="${1:-help}"
+  case "$target" in
+    dev)
+      exec_eos_module bare-metal/install_dev.sh "$@"
+      ;;
+    guide|installation-guide|install-guide)
+      shift || true
+      exec_script installation_guide.sh "$@"
+      ;;
+    help|--help|-h)
+      cat <<'HELP'
+Usage:
+  eos-install dev --dry-run [--device <block-device>] [options]
+  eos-install guide
+HELP
+      ;;
+    *)
+      die "unknown install target: $target"
+      ;;
+  esac
+}
+
+cmd_update() {
+  local target="${1:-check}"
+  case "$target" in
+    check)
+      shift || true
+      exec_script update_check.sh "$@"
+      ;;
+    help|--help|-h)
+      printf 'Usage: eos-update check [--init] [--component tango-os|engine-os] [--dry-run]\n'
+      ;;
+    *)
+      die "unknown update target: $target"
+      ;;
+  esac
+}
+
+cmd_runtime() {
+  local target="${1:-help}"
+  shift || true
+
+  case "$target" in
+    quake)
+      mkdir -p "$ENGINEOS_LOG_DIR"
+      if [[ "$ENGINEOS_ROOT" != /usr && "$ENGINEOS_ROOT" != /usr/* && -x "$ENGINEOS_ROOT/engines/quakespasm/engineos/run.sh" ]]; then
+        exec "$ENGINEOS_ROOT/engines/quakespasm/engineos/run.sh" "$@"
+      fi
+      exec /usr/share/engineos/quake/run.sh "$@"
+      ;;
+    shell)
+      mkdir -p "$ENGINEOS_LOG_DIR"
+      exec_script shell_runner.sh "$@"
+      ;;
+    engine)
+      exec_script engine_runner.sh "$@"
+      ;;
+    status|launch|quit|restart|daemon-stop)
+      exec_script engine_runner.sh "$target" "$@"
+      ;;
+    help|--help|-h)
+      cat <<'HELP'
+Usage:
+  eos-runtime quake [--smoke]
+  eos-runtime shell --headless|--nested|--tty
+  eos-runtime engine status|launch|quit|restart
+HELP
+      ;;
+    *)
+      die "unknown runtime target: $target"
+      ;;
+  esac
+}
+
+cmd_agent() {
+  local target="${1:-help}"
+  shift || true
+
+  case "$target" in
+    route)
+      exec_script agent_route.sh route "$@"
+      ;;
+    profile|profiles)
+      exec_script agent_profile.sh "$@"
+      ;;
+    hygiene)
+      exec_script agent_hygiene.sh "$@"
+      ;;
+    queue)
+      exec_script agent_dispatcher.sh queue "$@"
+      ;;
+    dispatch)
+      exec_script agent_dispatcher.sh dispatch "$@"
+      ;;
+    help|--help|-h)
+      cat <<'HELP'
+Usage:
+  eos-agent route --dry-run "<request>"
+  eos-agent profile list|show <role>
+  eos-agent hygiene check [--json] [--fix-plan] [--enqueue]
+  eos-agent queue add|list|show|cancel
+  eos-agent dispatch drain|status|wake
+HELP
+      ;;
+    *)
+      die "unknown agent target: $target"
+      ;;
+  esac
+}
+
+cmd_capture() {
+  local target="${1:-help}"
+  shift || true
+  case "$target" in
+    frame)
+      exec_script capture_frame.sh "$@"
+      ;;
+    help|--help|-h)
+      printf 'Usage: eos-capture frame --target shell\n'
+      ;;
+    *)
+      die "unknown capture target: $target"
+      ;;
+  esac
+}
+
+cmd_input() {
+  local action="${1:-help}"
+  shift || true
+  case "$action" in
+    record|replay)
+      if [[ "${1:-}" == "input" ]]; then
+        shift || true
+      fi
+      exec_script input_trace.sh "$action" "$@"
+      ;;
+    help|--help|-h)
+      cat <<'HELP'
+Usage:
+  eos-input record <trace.json>
+  eos-input replay <trace.json>
+HELP
+      ;;
+    *)
+      die "unknown input action: $action"
+      ;;
+  esac
+}
+
+cmd_validate() {
+  local target="${1:-help}"
+  shift || true
+  case "$target" in
+    builder)
+      exec_script validate_builder.sh "$@"
+      ;;
+    repo)
+      exec_script validate_repo.sh "$@"
+      ;;
+    engine)
+      exec_script validate_engine.sh "$@"
+      ;;
+    shell)
+      exec_script validate_shell.sh "$@"
+      ;;
+    boot)
+      exec_eos_module proof/validate_boot.sh "$@"
+      ;;
+    help|--help|-h)
+      printf 'Usage: eos-validate builder|repo|engine|shell|boot [options]\n'
+      ;;
+    *)
+      die "unknown validation target: $target"
+      ;;
+  esac
+}
+
+main() {
+  local tool="${1:-help}"
+  shift || true
+
+  if [[ "$tool" == "eos" ]]; then
+    tool="${1:-help}"
+    shift || true
+  fi
+
+  EOS_TOOL="$tool"
+  export EOS_TOOL
+
+  case "$tool" in
+    help|--help|-h)
+      usage
+      ;;
+    eos-doctor)
+      record_eos_command "$tool" "$@"
+      exec_script doctor.sh "$@"
+      ;;
+    eos-logs)
+      record_eos_command "$tool" "$@"
+      exec_script logs.sh "$@"
+      ;;
+    eos-crash-bundle)
+      record_eos_command "$tool" "$@"
+      exec_script crash_bundle.sh "$@"
+      ;;
+    eos-build)
+      record_eos_command "$tool" "$@"
+      cmd_build "$@"
+      ;;
+    eos-package)
+      record_eos_command "$tool" "$@"
+      cmd_package "$@"
+      ;;
+    eos-lint)
+      record_eos_command "$tool" "$@"
+      cmd_lint "$@"
+      ;;
+    eos-preflight)
+      record_eos_command "$tool" "$@"
+      exec_script preflight.sh "$@"
+      ;;
+    eos-release)
+      record_eos_command "$tool" "$@"
+      exec_script release.sh "$@"
+      ;;
+    eos-artifacts)
+      record_eos_command "$tool" "$@"
+      exec_script artifacts.sh "$@"
+      ;;
+    eos-builder)
+      record_eos_command "$tool" "$@"
+      cmd_builder "$@"
+      ;;
+    eos-deploy)
+      record_eos_command "$tool" "$@"
+      cmd_deploy "$@"
+      ;;
+    eos-install)
+      record_eos_command "$tool" "$@"
+      cmd_install "$@"
+      ;;
+    eos-update)
+      record_eos_command "$tool" "$@"
+      cmd_update "$@"
+      ;;
+    eos-app)
+      record_eos_command "$tool" "$@"
+      exec_script app.sh "$@"
+      ;;
+    eos-terminal)
+      record_eos_command "$tool" "$@"
+      exec_script terminal_launcher.sh "$@"
+      ;;
+    eos-outputs)
+      record_eos_command "$tool" "$@"
+      exec_script outputs.sh "$@"
+      ;;
+    eos-runtime)
+      record_eos_command "$tool" "$@"
+      cmd_runtime "$@"
+      ;;
+    eos-assets)
+      record_eos_command "$tool" "$@"
+      exec_script assets.sh "$@"
+      ;;
+    eos-capture)
+      record_eos_command "$tool" "$@"
+      cmd_capture "$@"
+      ;;
+    eos-input)
+      record_eos_command "$tool" "$@"
+      cmd_input "$@"
+      ;;
+    eos-proof)
+      record_eos_command "$tool" "$@"
+      exec_eos_module proof/proof.sh "$@"
+      ;;
+    eos-validate)
+      record_eos_command "$tool" "$@"
+      cmd_validate "$@"
+      ;;
+    eos-vm)
+      record_eos_command "$tool" "$@"
+      exec_eos_module vm/vm.sh "$@"
+      ;;
+    eos-usb)
+      record_eos_command "$tool" "$@"
+      exec_eos_module bare-metal/usb.sh "$@"
+      ;;
+    eos-secureboot)
+      record_eos_command "$tool" "$@"
+      exec_eos_module bare-metal/secure_boot.sh "$@"
+      ;;
+    eos-agent)
+      record_eos_command "$tool" "$@"
+      cmd_agent "$@"
+      ;;
+    eos-observe)
+      record_eos_command "$tool" "$@"
+      exec_script observability.sh "$@"
+      ;;
+    eos-test)
+      record_eos_command "$tool" "$@"
+      exec_eos_module test/test_runner.sh "$@"
+      ;;
+    *)
+      die "unknown eos command: $tool"
+      ;;
+  esac
+}
+
+main "$@"

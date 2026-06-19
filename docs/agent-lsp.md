@@ -41,8 +41,8 @@ Use `lsp_start_server` only when auto-start does not happen and the server is kn
 For Bash-heavy work:
 
 ```bash
-bash -n tools/engineos/engineos tools/scripts/*.sh engines/quakespasm/engineos/*.sh tests/smoke.sh archiso/enginedev/profiledef.sh archiso/engineruntime/profiledef.sh
-shellcheck tools/engineos/engineos tools/scripts/*.sh engines/quakespasm/engineos/*.sh tests/smoke.sh
+bash -n tools/engineos/engineos tools/scripts/*.sh tools/eos/*/*.sh engines/quakespasm/engineos/*.sh tests/smoke.sh archiso/enginedev/profiledef.sh archiso/engineruntime/profiledef.sh
+shellcheck tools/engineos/engineos tools/scripts/*.sh tools/eos/*/*.sh engines/quakespasm/engineos/*.sh tests/smoke.sh
 ```
 
 If `shellcheck` is missing, say so and still run `bash -n`.
@@ -54,15 +54,15 @@ For `shell/src/engineos-shell.c`, this Windows/WSL harness can inspect text and 
 Use locally:
 
 ```bash
-./tools/engineos/engineos build shell --dry-run
-./tools/engineos/engineos package engineos-shell --dry-run
+./tools/engineos/eos-build shell --dry-run
+./tools/engineos/eos-package engineos-shell --dry-run
 ```
 
 Use on the Arch builder VM:
 
 ```bash
-./tools/engineos/engineos build shell
-./tools/engineos/engineos build repo
+./tools/engineos/eos-build shell
+./tools/engineos/eos-build repo
 ```
 
 Treat compiler output against Arch `wlroots0.19` as the source of truth until LSP is stable.

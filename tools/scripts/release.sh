@@ -104,35 +104,35 @@ append_report_commands() {
 Builder:
 
 ```bash
-./tools/engineos/engineos validate builder
-./tools/engineos/engineos build repo
-./tools/engineos/engineos build iso enginedev
-./tools/engineos/engineos build iso engineruntime
-./tools/engineos/engineos release checklist --out-dir out
-./tools/engineos/engineos proof hardware-ready --profile engineruntime --device /dev/sdX
+./tools/engineos/eos-validate builder
+./tools/engineos/eos-build repo
+./tools/engineos/eos-build iso enginedev
+./tools/engineos/eos-build iso engineruntime
+./tools/engineos/eos-release checklist --out-dir out
+./tools/engineos/eos-proof hardware-ready --profile engineruntime --device /dev/sdX
 ```
 
 Test VM:
 
 ```bash
-engineos proof booted-iso --vm
-engineos proof booted-iso --runtime
-engineos app manifest validate
-engineos proof launchpad --runtime
+eos-proof booted-iso --vm
+eos-proof booted-iso --runtime
+eos-app manifest validate
+eos-proof launchpad --runtime
 ```
 
 Bare-metal AMD:
 
 ```bash
-engineos doctor --bare-metal
-engineos outputs validate --single
-engineos run shell --tty
-engineos app launch terminal
-engineos terminal
-engineos assets check quake
-engineos run quake
-engineos proof booted-iso --bare-metal
-engineos crash-bundle --bare-metal
+eos-doctor --bare-metal
+eos-outputs validate --single
+eos-runtime shell --tty
+eos-app launch terminal
+eos-terminal
+eos-assets check quake
+eos-runtime quake
+eos-proof booted-iso --bare-metal
+eos-crash-bundle --bare-metal
 ```
 
 ## Known Unproven Items
@@ -144,13 +144,13 @@ engineos crash-bundle --bare-metal
 - The wlroots shell must compile and run headless, nested, and TTY/KMS.
 - `engineos-cube` must build through the local package repo and provide `/usr/bin/engineos-cube`.
 - `engineos-quakespasm` must build through the local package repo and provide `/usr/bin/quakespasm`.
-- App registry validation must pass through `engineos app manifest validate`.
-- Launchpad bootstrap must pass through `engineos proof launchpad --runtime`.
-- QuakeSpasm must launch with user-provided assets through `engineos run quake`.
-- DRM output validation must pass through `engineos outputs validate --single`.
-- Terminal launch fallback must be checked through `engineos terminal`.
-- Bare-metal crash bundles must be collected with `engineos crash-bundle --bare-metal`.
-- Hardware handoff must run through `engineos proof hardware-ready` before USB boot testing.
+- App registry validation must pass through `eos-app manifest validate`.
+- Launchpad bootstrap must pass through `eos-proof launchpad --runtime`.
+- QuakeSpasm must launch with user-provided assets through `eos-runtime quake`.
+- DRM output validation must pass through `eos-outputs validate --single`.
+- Terminal launch fallback must be checked through `eos-terminal`.
+- Bare-metal crash bundles must be collected with `eos-crash-bundle --bare-metal`.
+- Hardware handoff must run through `eos-proof hardware-ready` before USB boot testing.
 - Input capture/release and recovery TTY must be manually confirmed on hardware.
 REPORT
 }

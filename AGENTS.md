@@ -13,7 +13,7 @@ Read only what the task needs:
 2. [ROADMAP.md](ROADMAP.md) for the PoC/sprint/MVP map.
 3. [docs/mvp-plan.md](docs/mvp-plan.md) only when scope or acceptance details matter.
 4. [docs/agent-harness.md](docs/agent-harness.md) for command policy and tangent handling.
-5. [docs/agent-lsp.md](docs/agent-lsp.md) when semantic navigation or MCP state matters.
+5. [docs/agent-lsp.md](docs/agent-lsp.md) when semantic navigation matters.
 
 ## Work Loop
 
@@ -36,9 +36,11 @@ engines/              QuakeSpasm and future engine ports
 tools/engineos/       primary CLI
 tools/scripts/        implementation helpers for the CLI
 tools/post-install-payload/ first-deploy guest setup scripts and assets
-tools/mcp/            read-only MCP status/docs bridge
 docs/                 architecture, plans, and workflow docs
+.agents/index.toml    canonical agent role/path index
+.agents/roles/        role-specific AGENTS.md boundaries
 .agents/skills/       local task skills
+artifacts/agent-ledger/ local queue/ledger for manual agent dispatch
 tests/                smoke checks
 ```
 
@@ -51,6 +53,10 @@ Use this before opening broad docs.
 | Find the next useful move | [CURRENT_STATUS.md](CURRENT_STATUS.md) | [ROADMAP.md](ROADMAP.md) |
 | Understand sprint scope | [ROADMAP.md](ROADMAP.md) | [docs/mvp-plan.md](docs/mvp-plan.md) |
 | Run agent workflow safely | [docs/agent-harness.md](docs/agent-harness.md) | [docs/agent-workflow.md](docs/agent-workflow.md) |
+| Route broad agent work | [docs/agent-roles.md](docs/agent-roles.md) | `.agents/roles/*/AGENTS.md` |
+| Inspect agent profiles | [docs/agent-profiles.md](docs/agent-profiles.md) | `eos-agent profile list` |
+| Clean agent-pack drift | [.agents/skills/cleaner/SKILL.md](.agents/skills/cleaner/SKILL.md) | `eos-agent hygiene check` |
+| Queue or dispatch agent work | [docs/engineos-agent-pack.md](docs/engineos-agent-pack.md) | `eos-agent dispatch status` |
 | First-deploy EngineDev setup | [docs/dev-instance.md](docs/dev-instance.md) | [CURRENT_STATUS.md](CURRENT_STATUS.md) |
 | Navigate code or check LSP | [.agents/skills/code-navigation/SKILL.md](.agents/skills/code-navigation/SKILL.md) | [docs/agent-lsp.md](docs/agent-lsp.md) |
 | Build packages or repo | [docs/agent-harness.md](docs/agent-harness.md) | `packages/*/PKGBUILD` |
@@ -67,66 +73,68 @@ Use this before opening broad docs.
 Prefer dry-run proof locally:
 
 ```bash
-./tools/engineos/engineos --help
-./tools/engineos/engineos doctor --mock
-./tools/engineos/engineos builder handoff --dry-run --host dev@<builder-vm-ip>
-./tools/engineos/engineos builder handoff --dry-run --host dev@<builder-vm-ip> --run-proof
-./tools/engineos/engineos builder doctor-proof --dry-run --host dev@<builder-vm-ip>
-./tools/engineos/engineos deploy first --dry-run --host dev@127.0.0.1 --port 2222
-./tools/engineos/engineos bootstrap builder --dry-run
-./tools/engineos/engineos validate builder --mock
-./tools/engineos/engineos validate repo --dry-run
-./tools/engineos/engineos preflight all
-./tools/engineos/engineos lint packages
-./tools/engineos/engineos fetch engine quake --status
-./tools/engineos/engineos proof build-lab --dry-run
-./tools/engineos/engineos proof release-candidate --dry-run
-./tools/engineos/engineos proof hardware-ready --dry-run --profile engineruntime --device /dev/sdX
-./tools/engineos/engineos test vm
-./tools/engineos/engineos build shell --dry-run
-./tools/engineos/engineos build repo --dry-run
-./tools/engineos/engineos build iso --dry-run
-./tools/engineos/engineos build iso enginedev --fast --dry-run
-./tools/engineos/engineos test
-./tools/engineos/engineos test all
+./tools/engineos/eos --help
+./tools/engineos/eos-doctor --mock
+./tools/engineos/eos-builder handoff --dry-run --host dev@<builder-vm-ip>
+./tools/engineos/eos-builder handoff --dry-run --host dev@<builder-vm-ip> --run-proof
+./tools/engineos/eos-builder doctor-proof --dry-run --host dev@<builder-vm-ip>
+./tools/engineos/eos-deploy first --dry-run --host dev@127.0.0.1 --port 2222
+./tools/engineos/eos-builder bootstrap --dry-run
+./tools/engineos/eos-validate builder --mock
+./tools/engineos/eos-validate repo --dry-run
+./tools/engineos/eos-agent hygiene check
+./tools/engineos/eos-agent dispatch status
+./tools/engineos/eos-preflight all
+./tools/engineos/eos-lint packages
+./tools/engineos/eos-build fetch engine quake --status
+./tools/engineos/eos-proof build-lab --dry-run
+./tools/engineos/eos-proof release-candidate --dry-run
+./tools/engineos/eos-proof hardware-ready --dry-run --profile engineruntime --device /dev/sdX
+./tools/engineos/eos-test vm
+./tools/engineos/eos-build shell --dry-run
+./tools/engineos/eos-build repo --dry-run
+./tools/engineos/eos-build iso --dry-run
+./tools/engineos/eos-build iso enginedev --fast --dry-run
+./tools/engineos/eos-test
+./tools/engineos/eos-test all
 ```
 
 On the Arch builder VM, use real builds when the task is ready:
 
 ```bash
 cd /srv/engineos
-./tools/engineos/engineos bootstrap builder
-./tools/engineos/engineos validate builder
-./tools/engineos/engineos proof build-lab
-./tools/engineos/engineos build iso enginedev --fast --clean --archive-existing
-./tools/engineos/engineos proof release-candidate
-./tools/engineos/engineos proof hardware-ready --profile engineruntime --device /dev/sdX
-./tools/engineos/engineos vm boot enginedev --display none --background --ssh-port 2222
-ENGINEOS_GUEST_PASSWORD=dev ./tools/engineos/engineos deploy first --host dev@127.0.0.1 --port 2222
-./tools/engineos/engineos vm boot engineruntime
+./tools/engineos/eos-builder bootstrap
+./tools/engineos/eos-validate builder
+./tools/engineos/eos-proof build-lab
+./tools/engineos/eos-build iso enginedev --fast --clean --archive-existing
+./tools/engineos/eos-proof release-candidate
+./tools/engineos/eos-proof hardware-ready --profile engineruntime --device /dev/sdX
+./tools/engineos/eos-vm boot enginedev --display none --background --ssh-port 2222
+ENGINEOS_GUEST_PASSWORD=dev ./tools/engineos/eos-deploy first --host dev@127.0.0.1 --port 2222
+./tools/engineos/eos-vm boot engineruntime
 ```
 
 From the host, after the EngineDev VM is booted by the builder with SSH
 forwarded on port 2222, use the combined build-and-doctor directive:
 
 ```bash
-./tools/engineos/engineos builder doctor-proof --host dev@<builder-vm-ip>
+./tools/engineos/eos-builder doctor-proof --host dev@<builder-vm-ip>
 ```
 
-This SSHes into the builder, runs `./tools/engineos/engineos proof build-lab`,
+This SSHes into the builder, runs `./tools/engineos/eos-proof build-lab`,
 then SSHes from the builder into the booted EngineDev guest and runs
-`engineos doctor --vm`.
+`eos-doctor --vm`.
 If WSL cannot route to the Hyper-V builder but Windows OpenSSH can, run it as:
 
 ```bash
-ENGINEOS_SSH=ssh.exe ./tools/engineos/engineos builder doctor-proof --host dev@<builder-vm-ip>
+ENGINEOS_SSH=ssh.exe ./tools/engineos/eos-builder doctor-proof --host dev@<builder-vm-ip>
 ```
 
 Inside a booted ISO:
 
 ```bash
-engineos proof booted-iso --vm
-engineos proof booted-iso --runtime
+eos-proof booted-iso --vm
+eos-proof booted-iso --runtime
 ```
 
 After first deploy inside EngineDev, verify:
@@ -143,6 +151,10 @@ cat /var/log/engineos/post-first-deploy.log
 Semantic navigation MCP: `mcp__sdl_scaffoliding_lsp`.
 
 Use `tool_search` if tools are not visible yet. In this harness the MCP is discoverable, but live LSP calls currently fail with `Transport closed`, so do not block PoC work on it. When LSP responds for a supported source file, prefer it for symbols, definitions, references, diagnostics, completions, type hierarchy, and call flow.
+
+Project-status/docs MCP was removed. Use skills and direct `eos-*` CLI
+commands for build, config, admin, package, proof, and log workflows. Future
+EngineOS MCP work is reserved for read-only live runtime state only.
 
 Currently exposed LSP tools include:
 
@@ -169,7 +181,7 @@ lsp_find_symbol
 lsp_related_files
 ```
 
-Bash, PKGBUILD, Markdown, archiso profiles, and package lists are not LSP-backed here. Use `rg`, `bash -n`, `shellcheck` when available, `engineos preflight all`, and `engineos lint packages`. Real C/wlroots proof belongs on the Arch builder VM with compiler output.
+Bash, PKGBUILD, Markdown, archiso profiles, and package lists are not LSP-backed here. Use `rg`, `bash -n`, `shellcheck` when available, `eos-preflight all`, and `eos-lint packages`. Real C/wlroots proof belongs on the Arch builder VM with compiler output.
 
 ## Stay Focused
 
@@ -185,9 +197,11 @@ Bash, PKGBUILD, Markdown, archiso profiles, and package lists are not LSP-backed
 Run the narrowest relevant check before handing off. For broad scaffold changes:
 
 ```bash
-bash -n tools/engineos/engineos tools/scripts/*.sh engines/quakespasm/engineos/*.sh tests/smoke.sh archiso/enginedev/profiledef.sh archiso/engineruntime/profiledef.sh
-./tools/engineos/engineos preflight all
-./tools/engineos/engineos test
+bash -n tools/engineos/engineos tools/scripts/*.sh tools/eos/*/*.sh engines/quakespasm/engineos/*.sh tests/smoke.sh archiso/enginedev/profiledef.sh archiso/engineruntime/profiledef.sh
+./tools/engineos/eos-test agent-hygiene
+./tools/engineos/eos-test agent-dispatcher
+./tools/engineos/eos-preflight all
+./tools/engineos/eos-test
 ```
 
 If a check cannot run here, do not treat that as success. Decide whether it is caused by the local environment or by the repo change. Fix repo-owned failures before handoff. For environment-only blockers, say why, preserve the failing output, and name the exact command to run in the Arch builder VM.

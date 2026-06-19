@@ -1,0 +1,64 @@
+pkgname=engineos-tools
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="EngineOS command, proof, agent, and observability tools"
+arch=('any')
+url="https://example.invalid/engineos"
+license=('custom:EngineOS-TBD')
+depends=('bash' 'python' 'git' 'ripgrep' 'jq' 'engineos-config')
+provides=(
+  'engineos-core' 'engineos-cli' 'engineos-package-tools' 'engineos-preflight-tools'
+  'engineos-build-tools' 'engineos-deploy-tools' 'engineos-install-tools'
+  'engineos-update-tools' 'engineos-admin-tools' 'engineos-validation-tools'
+  'engineos-proof-tools' 'engineos-builder-tools' 'engineos-release-tools'
+  'engineos-artifact-tools' 'engineos-vm-tools' 'engineos-usb-tools'
+  'engineos-secureboot-tools' 'engineos-app-tools' 'engineos-runtime-tools'
+  'engineos-asset-tools' 'engineos-capture-tools' 'engineos-input-tools'
+  'engineos-observability' 'engineos-agent-runtime' 'engineos-test-tools'
+  'engineos-agent-tools'
+)
+conflicts=("${provides[@]}")
+replaces=("${provides[@]}")
+source=()
+sha256sums=()
+
+package() {
+  local _engineos_root
+  local _cmd
+  _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
+
+  install -Dm755 "$_engineos_root/tools/engineos/eos" "$pkgdir/usr/bin/eos"
+  install -Dm755 "$_engineos_root/tools/engineos/engineos" "$pkgdir/usr/bin/engineos"
+  install -Dm755 "$_engineos_root/tools/engineos/eos-wrapper" "$pkgdir/usr/lib/engineos/eos-wrapper"
+  while IFS= read -r _cmd; do
+    [[ -n "$_cmd" ]] || continue
+    install -Dm755 "$_engineos_root/tools/engineos/eos-wrapper" "$pkgdir/usr/bin/$_cmd"
+  done < <(source "$_engineos_root/tools/scripts/common.sh"; engineos_eos_commands)
+
+  install -d -m0755 "$pkgdir/usr/lib/engineos/scripts" "$pkgdir/usr/lib/engineos/eos"
+  cp -a "$_engineos_root/tools/scripts"/. "$pkgdir/usr/lib/engineos/scripts/"
+  cp -a "$_engineos_root/tools/eos"/. "$pkgdir/usr/lib/engineos/eos/"
+  chmod -R a+rX "$pkgdir/usr/lib/engineos/scripts" "$pkgdir/usr/lib/engineos/eos"
+  find "$pkgdir/usr/lib/engineos/scripts" "$pkgdir/usr/lib/engineos/eos" -type f \( -name '*.sh' -o -name '*.ps1' \) -exec chmod 0755 {} +
+
+  install -Dm644 "$_engineos_root/packages/engineos-tools/files/usr/lib/systemd/system/engineos-observe-exporter.service" "$pkgdir/usr/lib/systemd/system/engineos-observe-exporter.service"
+  install -Dm644 "$_engineos_root/packages/engineos-tools/files/usr/lib/systemd/system/engineos-agent-dispatcher@.service" "$pkgdir/usr/lib/systemd/system/engineos-agent-dispatcher@.service"
+
+  install -d -m0755 "$pkgdir/usr/share/engineos"
+  cp -a "$_engineos_root/tools/post-install-payload" "$pkgdir/usr/share/engineos/post-install-payload"
+  install -Dm644 "$_engineos_root/AGENTS.md" "$pkgdir/usr/share/engineos/AGENTS.md"
+  install -Dm644 "$_engineos_root/BACKLOG.md" "$pkgdir/usr/share/engineos/BACKLOG.md"
+  install -Dm644 "$_engineos_root/CURRENT_STATUS.md" "$pkgdir/usr/share/engineos/CURRENT_STATUS.md"
+  install -Dm644 "$_engineos_root/ROADMAP.md" "$pkgdir/usr/share/engineos/ROADMAP.md"
+  install -Dm644 "$_engineos_root/.codex/config.toml" "$pkgdir/usr/share/engineos/.codex/config.toml"
+  install -Dm644 "$_engineos_root/.codex/hooks.example.json" "$pkgdir/usr/share/engineos/.codex/hooks.example.json"
+  cp -a "$_engineos_root/docs" "$pkgdir/usr/share/engineos/docs"
+  cp -a "$_engineos_root/.agents" "$pkgdir/usr/share/engineos/.agents"
+  rm -rf "$pkgdir/usr/share/engineos/.agents/profiles"
+  ENGINEOS_ROOT="$_engineos_root" "$_engineos_root/tools/scripts/agent_metadata.sh" write "$pkgdir/usr/share/engineos"
+  install -Dm755 "$_engineos_root/tools/hooks/session_start.py" "$pkgdir/usr/share/engineos/tools/hooks/session_start.py"
+  install -Dm755 "$_engineos_root/tools/hooks/pre_tool_policy.py" "$pkgdir/usr/share/engineos/tools/hooks/pre_tool_policy.py"
+  install -Dm755 "$_engineos_root/tools/hooks/stop_check.py" "$pkgdir/usr/share/engineos/tools/hooks/stop_check.py"
+
+  install -Dm644 "$_engineos_root/LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
