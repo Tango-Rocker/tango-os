@@ -808,7 +808,7 @@ FAKE
   cat >"$fake_bin/tmux" <<'FAKE'
 #!/usr/bin/env bash
 if [[ "$1" == "display-message" ]]; then
-  printf '10 5 80 24 160 48\n'
+  printf '%s\n' "${ENGINEOS_FAKE_TMUX_GEOMETRY:-10 5 80 24 160 48}"
   exit 0
 fi
 exit 1
@@ -881,6 +881,35 @@ FAKE
   grep -F 'libdecor=0' "$log_dir/cube.log" >/dev/null ||
     die "app launcher did not disable libdecor for cube"
 
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    ENGINEOS_APP_NOTIFY_SHELL=false \
+    ENGINEOS_FAKE_TMUX_GEOMETRY="20 6 70 20 160 48" \
+    TMUX="$tmp_dir/tmux-socket,1,0" \
+    TMUX_PANE="%1" \
+    "$SCRIPT_DIR/app.sh" pane sync cube >"$out"
+  grep -F 'pane_left=20' "$tmp_dir/run/launch-bounds/cube.env" >/dev/null ||
+    die "app pane sync did not refresh cube pane left"
+  grep -F 'pane_height=20' "$tmp_dir/run/launch-bounds/cube.env" >/dev/null ||
+    die "app pane sync did not refresh cube pane height"
+  grep -F 'synced cube pane %1 bounds 20 6 70 20 160 48' "$out" >/dev/null ||
+    die "app pane sync did not report refreshed cube bounds"
+  grep -F 'app pane sync role=cube source=tmux pane=%1 bounds=20 6 70 20 160 48' "$log_dir/app.log" >/dev/null ||
+    die "app pane sync did not log refreshed cube bounds"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    ENGINEOS_APP_NOTIFY_SHELL=false \
+    ENGINEOS_FAKE_TMUX_GEOMETRY="30 7 60 18 160 48" \
+    TMUX="$tmp_dir/tmux-socket,1,0" \
+    "$SCRIPT_DIR/app.sh" pane sync --all >"$out"
+  grep -F 'pane_left=30' "$tmp_dir/run/launch-bounds/cube.env" >/dev/null ||
+    die "app pane sync --all did not refresh stored cube pane"
+  grep -F 'synced cube pane %1 bounds 30 7 60 18 160 48' "$out" >/dev/null ||
+    die "app pane sync --all did not use stored pane id"
+
   if env -u WAYLAND_DISPLAY -u DISPLAY \
       ENGINEOS_LOG_DIR="$log_dir" \
       ENGINEOS_STATE_DIR="$tmp_dir/run" \
@@ -903,10 +932,22 @@ FAKE
     printf '[2026-01-01T00:00:01Z] launchpad active slot=cube mode=terminal capture=none reason=bootstrap-launchpad\n'
     printf '[2026-01-01T00:00:02Z] view mapped role=cube title=engineos-cube app_id=engineos-cube mapped_total=1\n'
   } >"$log_dir/shell.log"
+  cat >"$tmp_dir/run/shell-state.json" <<'JSON'
+{
+  "schema": "engineos-shell-state-v0",
+  "active_slot": "terminal",
+  "pending_slot": "unknown",
+  "slots": {
+    "terminal": {"mapped": true, "visible": true, "layout": "output", "fullscreen": false, "x": 0, "y": 0, "width": 1600, "height": 900, "title": "EngineOS", "app_id": "foot"},
+    "cube": {"mapped": true, "visible": true, "layout": "tmux-pane", "fullscreen": false, "x": 200, "y": 100, "width": 700, "height": 375, "title": "engineos-cube", "app_id": "engineos-cube"},
+    "engine": {"mapped": false, "visible": false, "layout": "", "fullscreen": false, "x": 0, "y": 0, "width": 0, "height": 0, "title": "", "app_id": ""}
+  }
+}
+JSON
   ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_STATE_DIR="$tmp_dir/run" \
     "$SCRIPT_DIR/app.sh" status --json >"$out"
-  grep -F '"active_slot":"cube"' "$out" >/dev/null ||
-    die "app status json did not report active cube slot"
+  grep -F '"active_slot":"terminal"' "$out" >/dev/null ||
+    die "app status json did not report shell-state active terminal slot"
   grep -F '"manifest": "' "$out" >/dev/null ||
     die "app status json did not report manifest path"
   grep -F '"terminal": {"app":"terminal","command":"eos-app launch terminal","launch_state":"launch-requested"' "$out" >/dev/null ||
@@ -915,6 +956,8 @@ FAKE
     die "app status json did not report secondary terminal slot"
   grep -F '"cube": {"app":"cube","command":"eos-app launch cube","launch_state":"launch-requested","mapped":true' "$out" >/dev/null ||
     die "app status json did not report mapped cube state"
+  grep -F '"visible":true,"layout":"tmux-pane","fullscreen":false,"x":200,"y":100,"width":700,"height":375' "$out" >/dev/null ||
+    die "app status json did not report pane visibility and bounds from shell state"
   grep -F '"shell_last_log":"[2026-01-01T00:00:02Z] view mapped role=cube title=engineos-cube app_id=engineos-cube mapped_total=1"' "$out" >/dev/null ||
     die "app status json did not report shell lifecycle evidence"
   [[ -f "$tmp_dir/run/apps/cube.status" ]] ||
@@ -2204,6 +2247,10 @@ run_post_first_deploy() {
     die "post-first-deploy tmux config does not set the EngineOS color status style"
   grep -F '#{pane_current_path}' "$payload_dir/assets/tmux.conf" >/dev/null ||
     die "post-first-deploy tmux config status line does not show pane path"
+  grep -F 'eos-app pane sync --all' "$payload_dir/assets/tmux.conf" >/dev/null ||
+    die "post-first-deploy tmux config does not wire EngineOS pane sync hooks"
+  grep -F 'after-select-pane' "$payload_dir/assets/tmux.conf" >/dev/null ||
+    die "post-first-deploy tmux config does not sync after pane selection"
   [[ -f "$payload_dir/assets/zshrc" ]] ||
     die "post-first-deploy payload missing zsh config"
   [[ -f "$payload_dir/assets/zprofile" ]] ||

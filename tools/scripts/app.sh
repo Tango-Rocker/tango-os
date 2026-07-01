@@ -28,6 +28,7 @@ Usage: app.sh launch terminal [args...]
        app.sh launch terminal-secondary [args...]
        app.sh launch cube [--smoke]
        app.sh launch quake [--smoke] [--pane|--fullscreen|--output]
+       app.sh pane sync [--all|cube|engine|quake]
        app.sh status [--json]
        app.sh manifest path|show|validate
 
@@ -37,6 +38,8 @@ terminal launcher, cube app, or engine runner.
 
 Quake launches from inside tmux default to the invoking pane's bounds. Use
 --fullscreen or --output to clear pane bounds for the launch.
+pane sync refreshes existing tmux-pane launch bounds and asks engineos-shell to
+re-layout mapped panel clients without restarting them.
 HELP
 }
 
@@ -137,6 +140,39 @@ shell_state_slot_mapped_json() {
   ' "$SHELL_STATE_FILE"
 }
 
+shell_state_slot_field_json() {
+  local role="$1"
+  local field="$2"
+  [[ -r "$SHELL_STATE_FILE" ]] || return 1
+  awk -v role="$role" -v field="$field" '
+    $0 ~ "\"" role "\"[[:space:]]*:" {
+      line = $0
+      pattern = "\"" field "\"[[:space:]]*:[[:space:]]*"
+      if (match(line, pattern)) {
+        value = substr(line, RSTART + RLENGTH)
+        if (substr(value, 1, 1) == "\"") {
+          value = substr(value, 2)
+          sub(/".*/, "", value)
+          gsub(/\\/, "\\\\", value)
+          gsub(/"/, "\\\"", value)
+          printf "\"%s\"", value
+        } else {
+          sub(/[,}].*/, "", value)
+          gsub(/[[:space:]]/, "", value)
+          printf "%s", value
+        }
+        found = 1
+        exit
+      }
+    }
+    END {
+      if (!found) {
+        exit 1
+      }
+    }
+  ' "$SHELL_STATE_FILE"
+}
+
 write_app_state() {
   local app="$1"
   local state="$2"
@@ -179,11 +215,12 @@ is_positive_integer() {
 }
 
 tmux_pane_geometry() {
-  [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]] || return 1
+  local target="${1:-${TMUX_PANE:-}}"
+  [[ -n "${TMUX:-}" && -n "$target" ]] || return 1
   have_cmd tmux || return 1
 
   local values
-  values="$(tmux display-message -p -t "$TMUX_PANE" \
+  values="$(tmux display-message -p -t "$target" \
     '#{pane_left} #{pane_top} #{pane_width} #{pane_height} #{window_width} #{window_height}' 2>/dev/null)" ||
     return 1
 
@@ -208,6 +245,7 @@ write_tmux_bounds() {
   local pane_height="$5"
   local window_width="$6"
   local window_height="$7"
+  local pane_id="${8:-${TMUX_PANE:-unknown}}"
   local file
   local tmp
 
@@ -219,7 +257,7 @@ write_tmux_bounds() {
     printf 'role=%s\n' "$role"
     printf 'mode=pane\n'
     printf 'source=tmux\n'
-    printf 'pane_id=%s\n' "${TMUX_PANE:-unknown}"
+    printf 'pane_id=%s\n' "$pane_id"
     printf 'pane_left=%s\n' "$pane_left"
     printf 'pane_top=%s\n' "$pane_top"
     printf 'pane_width=%s\n' "$pane_width"
@@ -256,6 +294,167 @@ write_engine_tmux_bounds() {
 
 write_engine_output_bounds() {
   write_output_bounds engine "$@"
+}
+
+launch_bounds_value() {
+  local role="$1"
+  local key="$2"
+  local file
+  file="$(launch_bounds_file "$role")"
+  [[ -r "$file" ]] || return 1
+  awk -F= -v key="$key" '
+    $1 == key {
+      print substr($0, length($1) + 2)
+      found = 1
+      exit
+    }
+    END {
+      if (!found) {
+        exit 1
+      }
+    }
+  ' "$file"
+}
+
+normalize_layout_role() {
+  case "${1:-}" in
+    cube)
+      printf 'cube\n'
+      ;;
+    engine|quake)
+      printf 'engine\n'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+role_has_pane_bounds() {
+  local role="$1"
+  [[ "$(launch_bounds_value "$role" mode || true)" == "pane" ]]
+}
+
+sync_role_to_pane() {
+  local role="$1"
+  local pane_id="$2"
+  local geometry
+
+  geometry="$(tmux_pane_geometry "$pane_id")" || return 1
+  # shellcheck disable=SC2086
+  write_tmux_bounds "$role" $geometry "$pane_id"
+  log_line "pane sync role=$role source=tmux pane=$pane_id bounds=$geometry"
+  printf 'synced %s pane %s bounds %s\n' "$role" "$pane_id" "$geometry"
+}
+
+notify_shell_layout_sync() {
+  if [[ "${ENGINEOS_APP_NOTIFY_SHELL:-true}" != "true" ]]; then
+    log_line "pane sync notify=skipped reason=disabled"
+    return
+  fi
+
+  if have_cmd pkill && pkill -HUP -x engineos-shell >/dev/null 2>&1; then
+    log_line "pane sync notify=signal shell=engineos-shell"
+    return
+  fi
+
+  if have_cmd pgrep; then
+    local pid
+    while IFS= read -r pid; do
+      [[ -n "$pid" ]] || continue
+      kill -HUP "$pid" >/dev/null 2>&1 || true
+    done < <(pgrep -x engineos-shell 2>/dev/null || true)
+  fi
+}
+
+run_pane_sync() {
+  local sync_all=false
+  local roles=()
+  local role
+  local normalized
+  local current_pane="${TMUX_PANE:-}"
+  local changed=0
+  local failed=0
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --all|-a)
+        sync_all=true
+        ;;
+      cube|engine|quake)
+        normalized="$(normalize_layout_role "$1")" || die "unknown pane sync role: $1"
+        roles+=("$normalized")
+        ;;
+      help|--help|-h)
+        usage
+        return 0
+        ;;
+      *)
+        die "unknown pane sync option: $1"
+        ;;
+    esac
+    shift
+  done
+
+  if [[ "$sync_all" == false && "${#roles[@]}" -eq 0 && -z "$current_pane" ]]; then
+    die "pane sync requires TMUX_PANE unless --all or a role with stored pane bounds is used"
+  fi
+
+  if [[ "${#roles[@]}" -eq 0 ]]; then
+    for role in cube engine; do
+      role_has_pane_bounds "$role" || continue
+      if [[ "$sync_all" == true ||
+          "$(launch_bounds_value "$role" pane_id || true)" == "$current_pane" ]]; then
+        roles+=("$role")
+      fi
+    done
+  fi
+
+  if [[ "${#roles[@]}" -eq 0 ]]; then
+    log_line "pane sync noop reason=no-pane-bound-roles pane=${current_pane:-unknown}"
+    printf 'no pane-bound roles to sync\n'
+    return 0
+  fi
+
+  for role in "${roles[@]}"; do
+    local pane_id="$current_pane"
+    if [[ "$sync_all" == true || -z "$pane_id" ]]; then
+      pane_id="$(launch_bounds_value "$role" pane_id || true)"
+    fi
+    if [[ -z "$pane_id" ]]; then
+      log_line "pane sync skipped role=$role reason=missing-pane-id"
+      failed=$((failed + 1))
+      continue
+    fi
+    if sync_role_to_pane "$role" "$pane_id"; then
+      changed=$((changed + 1))
+    else
+      log_line "pane sync skipped role=$role pane=$pane_id reason=tmux-geometry-unavailable"
+      failed=$((failed + 1))
+    fi
+  done
+
+  if (( changed > 0 )); then
+    notify_shell_layout_sync
+  fi
+  (( failed == 0 ))
+}
+
+run_pane() {
+  local sub="${1:-help}"
+  shift || true
+
+  case "$sub" in
+    sync)
+      run_pane_sync "$@"
+      ;;
+    help|--help|-h)
+      usage
+      ;;
+    *)
+      die "unknown app pane action: $sub"
+      ;;
+  esac
 }
 
 QUAKE_LAUNCH_ARGS=()
@@ -541,6 +740,20 @@ print_slot_json() {
   json_string "$state"
   printf ',"mapped":'
   slot_mapped_json "$role"
+  printf ',"visible":'
+  shell_state_slot_field_json "$role" visible || printf 'null'
+  printf ',"layout":'
+  shell_state_slot_field_json "$role" layout || printf 'null'
+  printf ',"fullscreen":'
+  shell_state_slot_field_json "$role" fullscreen || printf 'null'
+  printf ',"x":'
+  shell_state_slot_field_json "$role" x || printf 'null'
+  printf ',"y":'
+  shell_state_slot_field_json "$role" y || printf 'null'
+  printf ',"width":'
+  shell_state_slot_field_json "$role" width || printf 'null'
+  printf ',"height":'
+  shell_state_slot_field_json "$role" height || printf 'null'
   printf ',"display":'
   json_string "${display:-unknown}"
   printf ',"owner":'
@@ -791,6 +1004,9 @@ case "$ACTION" in
     ;;
   status)
     run_status "$@"
+    ;;
+  pane)
+    run_pane "$@"
     ;;
   manifest)
     run_manifest "$@"

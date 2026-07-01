@@ -202,6 +202,8 @@ static bool is_terminal_role(enum engineos_surface_role role);
 static char *join_state_path(const char *dir, const char *name);
 static bool compute_view_geometry(struct engineos_shell_view *view,
 	struct engineos_view_geometry *geometry);
+static bool is_persistent_panel_geometry(enum engineos_surface_role role,
+	const struct engineos_view_geometry *geometry);
 static void clear_keyboard_focus(struct engineos_shell_server *server);
 static void clear_pointer_focus(struct engineos_shell_server *server,
 	const char *reason);
@@ -341,6 +343,14 @@ static int terminate_from_signal(int signal_number, void *data) {
 	struct engineos_shell_server *server = data;
 	wlr_log(WLR_INFO, "terminating on signal %d", signal_number);
 	wl_display_terminate(server->display);
+	return 0;
+}
+
+static int relayout_from_signal(int signal_number, void *data) {
+	struct engineos_shell_server *server = data;
+	wlr_log(WLR_INFO, "layout sync requested signal=%d", signal_number);
+	apply_launchpad_visibility(server, "layout-sync-signal");
+	write_shell_state(server, "layout-sync-signal");
 	return 0;
 }
 
@@ -879,6 +889,28 @@ static bool compute_view_geometry(struct engineos_shell_view *view,
 	return true;
 }
 
+static bool is_persistent_panel_geometry(enum engineos_surface_role role,
+		const struct engineos_view_geometry *geometry) {
+	if (geometry == NULL || geometry->fullscreen ||
+			geometry->layout == NULL ||
+			strcmp(geometry->layout, "tmux-pane") != 0) {
+		return false;
+	}
+	return role == ENGINEOS_SURFACE_CUBE || role == ENGINEOS_SURFACE_ENGINE;
+}
+
+static bool view_geometry_visible(struct engineos_shell_server *server,
+		struct engineos_shell_view *view,
+		const struct engineos_view_geometry *geometry) {
+	if (view == NULL || !view->mapped) {
+		return false;
+	}
+	if (server->active_slot == view->role || is_terminal_role(view->role)) {
+		return true;
+	}
+	return is_persistent_panel_geometry(view->role, geometry);
+}
+
 static struct engineos_shell_view *find_mapped_role(
 		struct engineos_shell_server *server,
 		enum engineos_surface_role role) {
@@ -961,11 +993,11 @@ static void write_slot_state(FILE *file, struct engineos_shell_server *server,
 		enum engineos_surface_role role) {
 	struct engineos_shell_view *view = find_mapped_role(server, role);
 	bool mapped = view != NULL;
-	bool visible = mapped && (server->active_slot == role || is_terminal_role(role));
 	struct engineos_view_geometry geometry = {0};
 	if (mapped) {
 		compute_view_geometry(view, &geometry);
 	}
+	bool visible = mapped && view_geometry_visible(server, view, &geometry);
 
 	fprintf(file, "    \"%s\": {", surface_role_name(role));
 	fprintf(file, "\"mapped\": %s", mapped ? "true" : "false");
@@ -1522,6 +1554,7 @@ static void apply_launchpad_visibility(struct engineos_shell_server *server,
 		const char *reason) {
 	struct engineos_shell_view *view;
 	struct engineos_shell_view *active_view = NULL;
+	bool active_terminal = false;
 
 	wl_list_for_each(view, &server->views, link) {
 		if (!view->mapped || !is_launchpad_role(view->role)) {
@@ -1529,11 +1562,14 @@ static void apply_launchpad_visibility(struct engineos_shell_server *server,
 		}
 
 		bool active = view->role == server->active_slot;
-		bool visible = active || is_terminal_role(view->role);
+		struct engineos_view_geometry geometry = {0};
+		compute_view_geometry(view, &geometry);
+		bool visible = view_geometry_visible(server, view, &geometry);
 		apply_view_layout(view);
 		wlr_scene_node_set_enabled(&view->scene_tree->node, visible);
 		if (active) {
 			active_view = view;
+			active_terminal = is_terminal_role(view->role);
 		} else {
 			set_view_activated(view, false);
 		}
@@ -1544,9 +1580,26 @@ static void apply_launchpad_visibility(struct engineos_shell_server *server,
 			reason != NULL ? reason : "unspecified");
 	}
 
-	if (active_view != NULL) {
+	if (active_view != NULL && active_terminal) {
 		focus_view(active_view);
-	} else if (is_launchpad_role(server->active_slot)) {
+	}
+
+	wl_list_for_each(view, &server->views, link) {
+		if (!view->mapped || !is_launchpad_role(view->role) ||
+				view == active_view) {
+			continue;
+		}
+		struct engineos_view_geometry geometry = {0};
+		compute_view_geometry(view, &geometry);
+		if (view_geometry_visible(server, view, &geometry) &&
+				is_persistent_panel_geometry(view->role, &geometry)) {
+			wlr_scene_node_raise_to_top(&view->scene_tree->node);
+		}
+	}
+
+	if (active_view != NULL && !active_terminal) {
+		focus_view(active_view);
+	} else if (active_view == NULL && is_launchpad_role(server->active_slot)) {
 		wlr_log(WLR_INFO,
 			"launchpad slot unavailable role=%s reason=%s",
 			surface_role_name(server->active_slot),
@@ -2452,26 +2505,31 @@ static void xdg_surface_map(struct wl_listener *listener, void *data) {
 		mark_launch_role_mapped(view->server, view->role);
 		bool pending = view->server->pending_slot == view->role;
 		struct engineos_layout_request request;
-		bool external_layout_launch =
+		bool has_layout_request =
 			(view->role == ENGINEOS_SURFACE_CUBE ||
 				view->role == ENGINEOS_SURFACE_ENGINE) &&
 			read_layout_request(view->server, view->role, &request);
+		bool pane_layout_launch = has_layout_request && request.pane;
+		bool exclusive_layout_launch =
+			has_layout_request && (request.output || request.fullscreen);
 		if (pending) {
 			view->server->pending_slot = ENGINEOS_SURFACE_UNKNOWN;
 		}
-		if (pending || external_layout_launch ||
+		if (pending || exclusive_layout_launch ||
 				view->role == view->server->active_slot) {
 			set_active_slot(view->server, view->role,
 				pending ? "pending-slot-mapped" :
-				(external_layout_launch ? "layout-request-mapped" :
+				(exclusive_layout_launch ? "layout-request-mapped" :
 					"slot-mapped"));
 		} else {
-			wlr_scene_node_set_enabled(&view->scene_tree->node, false);
 			wlr_log(WLR_INFO,
-				"launchpad slot mapped inactive role=%s active_slot=%s",
+				"launchpad slot mapped inactive role=%s active_slot=%s layout=%s",
 				surface_role_name(view->role),
-				surface_role_name(view->server->active_slot));
-			apply_launchpad_visibility(view->server, "slot-mapped-inactive");
+				surface_role_name(view->server->active_slot),
+				pane_layout_launch ? "tmux-pane" : "slot");
+			apply_launchpad_visibility(view->server,
+				pane_layout_launch ? "pane-layout-mapped-inactive" :
+					"slot-mapped-inactive");
 		}
 	} else {
 		wlr_log(WLR_INFO, "launchpad unknown view excluded title=%s app_id=%s",
@@ -2982,6 +3040,7 @@ int main(int argc, char **argv) {
 	struct wl_event_loop *event_loop = wl_display_get_event_loop(server.display);
 	wl_event_loop_add_signal(event_loop, SIGINT, terminate_from_signal, &server);
 	wl_event_loop_add_signal(event_loop, SIGTERM, terminate_from_signal, &server);
+	wl_event_loop_add_signal(event_loop, SIGHUP, relayout_from_signal, &server);
 	wl_event_loop_add_signal(event_loop, SIGCHLD, reap_child_processes, &server);
 
 	if (server.smoke_ms > 0) {

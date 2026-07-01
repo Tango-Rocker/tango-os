@@ -137,11 +137,14 @@ FAKE
   grep -Fx -- "WLR_BACKENDS=headless" "$env_file" >/dev/null || fail "headless pass-through missing WLR_BACKENDS"
   grep -Fx -- "WLR_HEADLESS_OUTPUTS=1" "$env_file" >/dev/null || fail "headless pass-through missing WLR_HEADLESS_OUTPUTS"
 
-  ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_SHELL_BIN="$fake_shell" \
-    ENGINEOS_FAKE_SHELL_ARGS="$args_file" \
-    ENGINEOS_FAKE_SHELL_ENV="$env_file" \
-    "$SCRIPT_DIR/shell_runner.sh" --nested >/dev/null
+	  env -u ENGINEOS_SHELL_BOOTSTRAP \
+	    -u ENGINEOS_SHELL_STARTUP \
+	    -u ENGINEOS_SHELL_AUTO_STARTUP \
+	    ENGINEOS_LOG_DIR="$log_dir" \
+	    ENGINEOS_SHELL_BIN="$fake_shell" \
+	    ENGINEOS_FAKE_SHELL_ARGS="$args_file" \
+	    ENGINEOS_FAKE_SHELL_ENV="$env_file" \
+	    "$SCRIPT_DIR/shell_runner.sh" --nested >/dev/null
 
   grep -Fx -- "--nested" "$args_file" >/dev/null || fail "real shell pass-through missing --nested"
   grep -Fx -- "--startup" "$args_file" >/dev/null || fail "nested pass-through missing --startup"
@@ -157,10 +160,13 @@ FAKE
     fail "nested pass-through should not bootstrap by default"
   fi
 
-  ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_SHELL_BIN="$fake_shell" \
-    ENGINEOS_FAKE_SHELL_ARGS="$args_file" \
-    ENGINEOS_FAKE_SHELL_ENV="$env_file" \
+	  env -u ENGINEOS_SHELL_BOOTSTRAP \
+	    -u ENGINEOS_SHELL_STARTUP \
+	    -u ENGINEOS_SHELL_AUTO_STARTUP \
+	    ENGINEOS_LOG_DIR="$log_dir" \
+	    ENGINEOS_SHELL_BIN="$fake_shell" \
+	    ENGINEOS_FAKE_SHELL_ARGS="$args_file" \
+	    ENGINEOS_FAKE_SHELL_ENV="$env_file" \
     "$SCRIPT_DIR/shell_runner.sh" --tty >/dev/null
 
   grep -Fx -- "--tty" "$args_file" >/dev/null || fail "real shell pass-through missing --tty"
@@ -240,6 +246,9 @@ check_contains "$ROOT/shell/src/engineos-shell.c" 'reason=process-exited-before-
 check_contains "$ROOT/shell/src/engineos-shell.c" 'shell-state.json' "shell writes structured state artifact"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'launch-bounds/%s.env' "shell reads per-role launch bounds"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'layout = "tmux-pane"' "shell supports tmux pane engine layout"
+check_contains "$ROOT/shell/src/engineos-shell.c" 'is_persistent_panel_geometry' "shell treats tmux pane cube/engine views as persistent panels"
+check_contains "$ROOT/shell/src/engineos-shell.c" 'pane-layout-mapped-inactive' "shell maps pane layout requests without stealing active slot"
+check_contains "$ROOT/shell/src/engineos-shell.c" 'wl_event_loop_add_signal(event_loop, SIGHUP, relayout_from_signal, &server)' "shell relayouts pane bounds on SIGHUP"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'events.request_fullscreen' "shell listens for xdg fullscreen requests"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'wlr_xdg_toplevel_set_fullscreen' "shell applies engine fullscreen state"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'input mode request ignored requested=game' "shell keeps active slot when engine is unavailable"

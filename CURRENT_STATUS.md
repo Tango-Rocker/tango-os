@@ -124,6 +124,27 @@ e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeO
   GLES with `first_frame window_size=1920x524 drawable_size=1920x524`,
   `frames=228`, `result=smoke-ok`, and no new coredump after
   `2026-07-01T22:50:02Z`.
+- Source now implements the v1 pane-embedded GL panel policy: tmux-pane cube
+  and engine surfaces remain scene-visible when inactive, pane-bound maps no
+  longer steal the active slot unless they were launched through a pending slot,
+  output/fullscreen launches keep exclusive slot behavior, `shell-state.json`
+  and `eos-app status --json` expose pane visibility/layout/bounds, and
+  `eos-app pane sync` plus tmux hooks can refresh launch bounds and signal the
+  shell to relayout without restarting clients. Local source-root validation,
+  tmux config loading, and an `engineos-shell` compile pass on the bare-metal
+  EngineDev host.
+- Bare-metal EngineDev now has the v1 pane-embedded GL panel policy deployed
+  without an ISO rebuild: `engineos-shell 0.1.0-5` and `engineos-tools
+  0.1.0-3` were installed with `pacman -U`, `engineos-dev-shell.service`
+  restarted cleanly on PID `130195`, and the live tmux config/skel config carry
+  the pane-sync hooks. A live `eos-app launch cube --smoke-ms 30000` from the
+  tmux session kept `active_slot=terminal-secondary` while `shell-state.json`
+  and `eos-app status --json` reported cube `mapped=true`, `visible=true`,
+  `layout=tmux-pane`, `fullscreen=false`, `app_id=engineos-cube`, and
+  `title=engineos-cube`. Shell logs show inactive cube visibility as
+  `reason=pane-layout-mapped-inactive visible=true`, and a sync pass logged
+  `layout sync requested signal=1` followed by inactive cube
+  `visible=true reason=layout-sync-signal`.
 - The launchpad app registry is now packaged at `/etc/engineos/apps.toml` from `packages/engineos-config/files/etc/engineos/apps.toml`. `eos-app manifest validate` checks the terminal, cube, and Quake slot contract, `eos-runtime shell` reads the manifest for default slot commands, and `eos-proof launchpad` validates the manifest before checking runtime logs.
 - The first rebuilt EngineRuntime ISO booted in builder-hosted QEMU far enough to mount the 50% cowspace and reach login, but exposed two runtime-proof blockers: `engineos-live-setup.service` was ordered after `multi-user.target`, creating a cycle that skipped `engineos-engine-runner.service`, and Runtime did not yet enable explicit SSH password access for automated VM proof. The profile now runs live setup before the runtime services and configures `engineos` / `engineos` SSH validation access.
 - A clean generated EngineRuntime ISO now passes `eos-proof booted-iso --runtime` in builder-hosted QEMU through SSH port 2223 with 0 boot-validation failures and 0 warnings. The final proven ISO is `EngineRuntimeOS-2026.06.15-x86_64.iso`, checksum `e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2`.
