@@ -114,6 +114,16 @@ e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeO
   coordinate is clamped at the window edge. The final live state showed
   `active_slot=engine`, `input.capture=true`, `cursor.locked=true`,
   `cursor.hidden=true`, Quake pid `78881`, and no `engineos-shell` coredump.
+- Bare-metal EngineDev now has a faster cube-based pane-bounds proof deployed
+  without an ISO rebuild. `eos-app launch cube` disables SDL/libdecor to avoid
+  the GTK/glycin decoration abort, writes `launch-bounds/cube.env` from the
+  current tmux pane, and `engineos-shell` applies per-role pane geometry to cube
+  as well as engine surfaces. A temporary split-pane smoke launch requested
+  tmux bounds `0 34 240 32 240 66`; the shell laid cube out as
+  `layout=tmux-pane x=0 y=556 size=1920x524`, and `cube.log` reported AMD Mesa
+  GLES with `first_frame window_size=1920x524 drawable_size=1920x524`,
+  `frames=228`, `result=smoke-ok`, and no new coredump after
+  `2026-07-01T22:50:02Z`.
 - The launchpad app registry is now packaged at `/etc/engineos/apps.toml` from `packages/engineos-config/files/etc/engineos/apps.toml`. `eos-app manifest validate` checks the terminal, cube, and Quake slot contract, `eos-runtime shell` reads the manifest for default slot commands, and `eos-proof launchpad` validates the manifest before checking runtime logs.
 - The first rebuilt EngineRuntime ISO booted in builder-hosted QEMU far enough to mount the 50% cowspace and reach login, but exposed two runtime-proof blockers: `engineos-live-setup.service` was ordered after `multi-user.target`, creating a cycle that skipped `engineos-engine-runner.service`, and Runtime did not yet enable explicit SSH password access for automated VM proof. The profile now runs live setup before the runtime services and configures `engineos` / `engineos` SSH validation access.
 - A clean generated EngineRuntime ISO now passes `eos-proof booted-iso --runtime` in builder-hosted QEMU through SSH port 2223 with 0 boot-validation failures and 0 warnings. The final proven ISO is `EngineRuntimeOS-2026.06.15-x86_64.iso`, checksum `e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2`.
@@ -147,6 +157,15 @@ e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeO
 ## Not Yet Proven
 
 - Interactive Quake keyboard/mouse/audio in a live Runtime console session with user assets.
+- Quake has a first shell-side retest on the new shared per-role pane-bounds
+  path: a temporary split-pane launch wrote `launch-bounds/engine.env` with
+  bounds `0 34 132 32 240 66`, and the shell mapped Quake as
+  `layout=tmux-pane x=0 y=556 size=1056x524` with game capture active. After
+  terminating the test process, the engine slot unmapped, capture released, and
+  no new coredump was recorded. QuakeSpasm did not flush its video-mode line
+  before the timed run was terminated, so the next Quake pass should use a
+  longer clean shutdown or explicit client-size instrumentation to confirm the
+  client-side video mode matches the shell layout.
 - Persistent Quake asset mounting is not implemented yet; the current Hyper-V VM still loses manually copied assets on reboot because it is a live ISO, even though the writable overlay is now large enough for session-local copies.
 - Real audible output is not proven in the current Hyper-V/basic QEMU path. Hyper-V is not presenting a sound device to Linux, and the QEMU HDA proof uses an audio discard backend; prove audible output on hardware or an audio-forwarding VM/RDP path.
 - Accelerated VM graphics are not available in the current lab VM paths: the builder QEMU GL path fails without a host DRM render node, and the Hyper-V test guest reports llvmpipe.

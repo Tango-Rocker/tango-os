@@ -803,6 +803,7 @@ FAKE
   cat >"$fake_bin/engineos-cube" <<'FAKE'
 #!/usr/bin/env bash
 printf 'fake cube %s\n' "$*"
+printf 'libdecor=%s\n' "${SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR:-unset}"
 FAKE
   cat >"$fake_bin/tmux" <<'FAKE'
 #!/usr/bin/env bash
@@ -863,12 +864,22 @@ FAKE
   PATH="$fake_bin:$PATH" \
     ENGINEOS_LOG_DIR="$log_dir" \
     ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    TMUX="$tmp_dir/tmux-socket,1,0" \
+    TMUX_PANE="%1" \
     WAYLAND_DISPLAY="engineos-test-wayland" \
     "$SCRIPT_DIR/app.sh" launch cube --smoke >"$out"
-  grep -F 'app launch app=cube owner=engineos-shell display=engineos-test-wayland sdl=wayland args=--smoke' "$log_dir/app.log" >/dev/null ||
+  grep -F 'app launch app=cube owner=engineos-shell display=engineos-test-wayland sdl=wayland libdecor=0 args=--smoke' "$log_dir/app.log" >/dev/null ||
     die "app launcher did not log shell-owned cube launch"
+  grep -F 'mode=pane' "$tmp_dir/run/launch-bounds/cube.env" >/dev/null ||
+    die "app launcher did not write pane bounds request for cube"
+  grep -F 'pane_left=10' "$tmp_dir/run/launch-bounds/cube.env" >/dev/null ||
+    die "app launcher cube pane bounds missing tmux pane left"
+  grep -F 'app layout app=cube mode=pane source=tmux bounds=10 5 80 24 160 48' "$log_dir/app.log" >/dev/null ||
+    die "app launcher did not log tmux pane bounds for cube"
   grep -F 'fake cube --smoke' "$log_dir/cube.log" >/dev/null ||
     die "app launcher did not write cube output to cube log"
+  grep -F 'libdecor=0' "$log_dir/cube.log" >/dev/null ||
+    die "app launcher did not disable libdecor for cube"
 
   if env -u WAYLAND_DISPLAY -u DISPLAY \
       ENGINEOS_LOG_DIR="$log_dir" \

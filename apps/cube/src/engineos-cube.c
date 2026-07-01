@@ -62,6 +62,19 @@ static bool parse_options(int argc, char **argv, struct cube_options *options) {
 	return true;
 }
 
+static void log_window_size(const char *label, SDL_Window *window) {
+	int window_width = 0;
+	int window_height = 0;
+	int drawable_width = 0;
+	int drawable_height = 0;
+
+	SDL_GetWindowSize(window, &window_width, &window_height);
+	SDL_GL_GetDrawableSize(window, &drawable_width, &drawable_height);
+	printf("%s window_size=%dx%d drawable_size=%dx%d\n", label,
+		window_width, window_height, drawable_width, drawable_height);
+	fflush(stdout);
+}
+
 static GLuint compile_shader(GLenum type, const char *source) {
 	GLuint shader = glCreateShader(type);
 	glShaderSource(shader, 1, &source, NULL);
@@ -225,6 +238,12 @@ int main(int argc, char **argv) {
 #ifdef SDL_HINT_VIDEO_WAYLAND_WMCLASS
 	SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_WMCLASS, "engineos-cube");
 #endif
+#ifdef SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR
+	SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR, "0");
+#endif
+#ifdef SDL_HINT_VIDEO_WAYLAND_PREFER_LIBDECOR
+	SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_PREFER_LIBDECOR, "0");
+#endif
 
 	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
 		fprintf(stderr, "engineos-cube: SDL_Init failed: %s\n", SDL_GetError());
@@ -306,6 +325,7 @@ int main(int argc, char **argv) {
 	printf("gl_vendor=%s\n", (const char *)glGetString(GL_VENDOR));
 	printf("gl_renderer=%s\n", (const char *)glGetString(GL_RENDERER));
 	printf("gl_version=%s\n", (const char *)glGetString(GL_VERSION));
+	log_window_size("startup", window);
 	fflush(stdout);
 
 	bool running = true;
@@ -322,6 +342,11 @@ int main(int argc, char **argv) {
 			if (event.type == SDL_KEYDOWN &&
 					event.key.keysym.sym == SDLK_ESCAPE) {
 				running = false;
+			}
+			if (event.type == SDL_WINDOWEVENT &&
+					(event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
+						event.window.event == SDL_WINDOWEVENT_RESIZED)) {
+				log_window_size("resize", window);
 			}
 		}
 
@@ -356,6 +381,7 @@ int main(int argc, char **argv) {
 		SDL_GL_SwapWindow(window);
 		frames++;
 		if (!logged_first_frame) {
+			log_window_size("first_frame", window);
 			printf("frames=%u\n", frames);
 			fflush(stdout);
 			logged_first_frame = true;
@@ -368,6 +394,7 @@ int main(int argc, char **argv) {
 	}
 
 	printf("frames=%u\n", frames);
+	log_window_size("final", window);
 	printf("result=%s\n", options.smoke ? "smoke-ok" : "ok");
 	fflush(stdout);
 

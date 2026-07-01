@@ -77,7 +77,7 @@ struct engineos_view_geometry {
 	const char *layout;
 };
 
-struct engineos_engine_layout_request {
+struct engineos_layout_request {
 	bool pane;
 	bool output;
 	bool fullscreen;
@@ -709,8 +709,9 @@ static bool parse_nonnegative_int(const char *value, int *out) {
 	return true;
 }
 
-static bool read_engine_layout_request(struct engineos_shell_server *server,
-		struct engineos_engine_layout_request *request) {
+static bool read_layout_request(struct engineos_shell_server *server,
+		enum engineos_surface_role role,
+		struct engineos_layout_request *request) {
 	memset(request, 0, sizeof(*request));
 	snprintf(request->source, sizeof(request->source), "%s", "unknown");
 
@@ -718,7 +719,10 @@ static bool read_engine_layout_request(struct engineos_shell_server *server,
 		return false;
 	}
 
-	char *path = join_state_path(server->state_dir, "launch-bounds/engine.env");
+	char request_name[96];
+	snprintf(request_name, sizeof(request_name), "launch-bounds/%s.env",
+		surface_role_name(role));
+	char *path = join_state_path(server->state_dir, request_name);
 	if (path == NULL) {
 		return false;
 	}
@@ -739,7 +743,7 @@ static bool read_engine_layout_request(struct engineos_shell_server *server,
 		}
 
 		if (strcmp(key, "role") == 0) {
-			role_matches = strcmp(value, "engine") == 0;
+			role_matches = strcmp(value, surface_role_name(role)) == 0;
 		} else if (strcmp(key, "mode") == 0) {
 			request->pane = strcmp(value, "pane") == 0;
 			request->output = strcmp(value, "output") == 0;
@@ -778,8 +782,8 @@ static bool read_engine_layout_request(struct engineos_shell_server *server,
 		request->window_height > 0;
 }
 
-static bool apply_engine_pane_geometry(
-		const struct engineos_engine_layout_request *request,
+static bool apply_pane_geometry(
+		const struct engineos_layout_request *request,
 		const struct engineos_view_geometry *output_geometry,
 		struct engineos_view_geometry *geometry) {
 	long x_offset = ((long)output_geometry->width * request->pane_left) /
@@ -845,12 +849,13 @@ static bool compute_view_geometry(struct engineos_shell_view *view,
 		&geometry->y, &geometry->width, &geometry->height);
 	geometry->layout = "output";
 
-	if (view->role != ENGINEOS_SURFACE_ENGINE) {
+	if (view->role != ENGINEOS_SURFACE_CUBE &&
+			view->role != ENGINEOS_SURFACE_ENGINE) {
 		return true;
 	}
 
-	struct engineos_engine_layout_request request;
-	bool has_request = read_engine_layout_request(view->server, &request);
+	struct engineos_layout_request request;
+	bool has_request = read_layout_request(view->server, view->role, &request);
 	if (has_request && request.fullscreen) {
 		geometry->fullscreen = true;
 		geometry->layout = "fullscreen-request";
@@ -866,7 +871,7 @@ static bool compute_view_geometry(struct engineos_shell_view *view,
 	}
 	if (has_request && request.pane) {
 		struct engineos_view_geometry output_geometry = *geometry;
-		if (apply_engine_pane_geometry(&request, &output_geometry, geometry)) {
+		if (apply_pane_geometry(&request, &output_geometry, geometry)) {
 			return true;
 		}
 	}
@@ -1459,7 +1464,7 @@ static bool xdg_toplevel_supports_configure_bounds(
 		XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION;
 }
 
-static void set_engine_toplevel_geometry(struct wlr_xdg_toplevel *toplevel,
+static void set_toplevel_geometry(struct wlr_xdg_toplevel *toplevel,
 		const struct engineos_view_geometry *geometry) {
 	if (toplevel == NULL || geometry == NULL) {
 		return;
@@ -1483,9 +1488,9 @@ static void apply_view_layout(struct engineos_shell_view *view) {
 	case ENGINEOS_SURFACE_ENGINE:
 		if (view->xdg_surface != NULL &&
 				view->xdg_surface->toplevel != NULL) {
-			if (view->role == ENGINEOS_SURFACE_ENGINE) {
-				set_engine_toplevel_geometry(view->xdg_surface->toplevel,
-					&geometry);
+			if (view->role == ENGINEOS_SURFACE_CUBE ||
+					view->role == ENGINEOS_SURFACE_ENGINE) {
+				set_toplevel_geometry(view->xdg_surface->toplevel, &geometry);
 			} else {
 				wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel,
 					geometry.width, geometry.height);
@@ -2446,17 +2451,19 @@ static void xdg_surface_map(struct wl_listener *listener, void *data) {
 	if (is_launchpad_role(view->role)) {
 		mark_launch_role_mapped(view->server, view->role);
 		bool pending = view->server->pending_slot == view->role;
-		struct engineos_engine_layout_request request;
-		bool external_engine_launch = view->role == ENGINEOS_SURFACE_ENGINE &&
-			read_engine_layout_request(view->server, &request);
+		struct engineos_layout_request request;
+		bool external_layout_launch =
+			(view->role == ENGINEOS_SURFACE_CUBE ||
+				view->role == ENGINEOS_SURFACE_ENGINE) &&
+			read_layout_request(view->server, view->role, &request);
 		if (pending) {
 			view->server->pending_slot = ENGINEOS_SURFACE_UNKNOWN;
 		}
-		if (pending || external_engine_launch ||
+		if (pending || external_layout_launch ||
 				view->role == view->server->active_slot) {
 			set_active_slot(view->server, view->role,
 				pending ? "pending-slot-mapped" :
-				(external_engine_launch ? "engine-layout-request-mapped" :
+				(external_layout_launch ? "layout-request-mapped" :
 					"slot-mapped"));
 		} else {
 			wlr_scene_node_set_enabled(&view->scene_tree->node, false);
@@ -2525,9 +2532,9 @@ static void xdg_surface_commit(struct wl_listener *listener, void *data) {
 		if (is_launchpad_role(view->role)) {
 			struct engineos_view_geometry geometry = {0};
 			compute_view_geometry(view, &geometry);
-			if (view->role == ENGINEOS_SURFACE_ENGINE) {
-				set_engine_toplevel_geometry(view->xdg_surface->toplevel,
-					&geometry);
+			if (view->role == ENGINEOS_SURFACE_CUBE ||
+					view->role == ENGINEOS_SURFACE_ENGINE) {
+				set_toplevel_geometry(view->xdg_surface->toplevel, &geometry);
 			} else {
 				wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel,
 					geometry.width, geometry.height);

@@ -200,22 +200,23 @@ tmux_pane_geometry() {
     "$pane_left" "$pane_top" "$pane_width" "$pane_height" "$window_width" "$window_height"
 }
 
-write_engine_tmux_bounds() {
-  local pane_left="$1"
-  local pane_top="$2"
-  local pane_width="$3"
-  local pane_height="$4"
-  local window_width="$5"
-  local window_height="$6"
+write_tmux_bounds() {
+  local role="$1"
+  local pane_left="$2"
+  local pane_top="$3"
+  local pane_width="$4"
+  local pane_height="$5"
+  local window_width="$6"
+  local window_height="$7"
   local file
   local tmp
 
   mkdir -p "$LAUNCH_BOUNDS_DIR"
-  file="$(launch_bounds_file engine)"
+  file="$(launch_bounds_file "$role")"
   tmp="$file.$$"
   {
     printf 'schema=engineos-launch-bounds-v0\n'
-    printf 'role=engine\n'
+    printf 'role=%s\n' "$role"
     printf 'mode=pane\n'
     printf 'source=tmux\n'
     printf 'pane_id=%s\n' "${TMUX_PANE:-unknown}"
@@ -230,17 +231,18 @@ write_engine_tmux_bounds() {
   mv "$tmp" "$file"
 }
 
-write_engine_output_bounds() {
-  local source="$1"
+write_output_bounds() {
+  local role="$1"
+  local source="$2"
   local file
   local tmp
 
   mkdir -p "$LAUNCH_BOUNDS_DIR"
-  file="$(launch_bounds_file engine)"
+  file="$(launch_bounds_file "$role")"
   tmp="$file.$$"
   {
     printf 'schema=engineos-launch-bounds-v0\n'
-    printf 'role=engine\n'
+    printf 'role=%s\n' "$role"
     printf 'mode=output\n'
     printf 'source=%s\n' "$source"
     printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -248,7 +250,60 @@ write_engine_output_bounds() {
   mv "$tmp" "$file"
 }
 
+write_engine_tmux_bounds() {
+  write_tmux_bounds engine "$@"
+}
+
+write_engine_output_bounds() {
+  write_output_bounds engine "$@"
+}
+
 QUAKE_LAUNCH_ARGS=()
+CUBE_LAUNCH_ARGS=()
+
+prepare_cube_layout() {
+  local layout_mode="auto"
+  CUBE_LAUNCH_ARGS=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --pane)
+        layout_mode="pane"
+        ;;
+      --output|--no-pane)
+        layout_mode="output"
+        ;;
+      --smoke|--smoke-ms)
+        CUBE_LAUNCH_ARGS+=("$1")
+        if [[ "$1" == "--smoke-ms" && $# -gt 1 ]]; then
+          shift
+          CUBE_LAUNCH_ARGS+=("$1")
+        fi
+        ;;
+      *)
+        CUBE_LAUNCH_ARGS+=("$1")
+        ;;
+    esac
+    shift
+  done
+
+  if [[ "$layout_mode" == "output" ]]; then
+    write_output_bounds cube "app"
+    log_line "layout app=cube mode=output source=app"
+    return
+  fi
+
+  local geometry
+  if geometry="$(tmux_pane_geometry)"; then
+    # shellcheck disable=SC2086
+    write_tmux_bounds cube $geometry
+    log_line "layout app=cube mode=pane source=tmux bounds=$geometry"
+    return
+  fi
+
+  clear_launch_bounds cube
+  log_line "layout app=cube mode=output source=no-tmux"
+}
 
 prepare_quake_layout() {
   local layout_mode="auto"
@@ -356,9 +411,12 @@ run_launch() {
     cube)
       require_shell_display "$app"
       prepare_client_env
-      write_app_state "$app" "launch-requested" "" "$@"
-      log_line "launch app=cube owner=engineos-shell display=${WAYLAND_DISPLAY:-missing} sdl=${SDL_VIDEODRIVER:-unset} args=$* log=$LOG_DIR/cube.log"
-      exec engineos-cube "$@" >>"$LOG_DIR/cube.log" 2>&1
+      prepare_cube_layout "$@"
+      export SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR=0
+      export SDL_VIDEO_WAYLAND_PREFER_LIBDECOR=0
+      write_app_state "$app" "launch-requested" "" "${CUBE_LAUNCH_ARGS[@]}"
+      log_line "launch app=cube owner=engineos-shell display=${WAYLAND_DISPLAY:-missing} sdl=${SDL_VIDEODRIVER:-unset} libdecor=${SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR:-unset} args=${CUBE_LAUNCH_ARGS[*]} log=$LOG_DIR/cube.log"
+      exec engineos-cube "${CUBE_LAUNCH_ARGS[@]}" >>"$LOG_DIR/cube.log" 2>&1
       ;;
     quake)
       require_shell_display "$app"

@@ -238,7 +238,7 @@ check_contains "$ROOT/shell/src/engineos-shell.c" 'wl_event_loop_add_signal(even
 check_contains "$ROOT/shell/src/engineos-shell.c" 'launch action exit label=%s role=%s' "shell logs launch process exits"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'reason=process-exited-before-map' "shell logs launchpad slot failure before map"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'shell-state.json' "shell writes structured state artifact"
-check_contains "$ROOT/shell/src/engineos-shell.c" 'launch-bounds/engine.env' "shell reads engine launch bounds"
+check_contains "$ROOT/shell/src/engineos-shell.c" 'launch-bounds/%s.env' "shell reads per-role launch bounds"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'layout = "tmux-pane"' "shell supports tmux pane engine layout"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'events.request_fullscreen' "shell listens for xdg fullscreen requests"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'wlr_xdg_toplevel_set_fullscreen' "shell applies engine fullscreen state"
