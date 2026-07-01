@@ -70,6 +70,35 @@ candidate_summary() {
   done < <(terminal_candidates)
 }
 
+terminal_metadata_args() {
+  local terminal_cmd="$1"
+  local app_id="${ENGINEOS_TERMINAL_APP_ID:-}"
+  local title="${ENGINEOS_TERMINAL_TITLE:-}"
+  local decorations="${ENGINEOS_TERMINAL_DECORATIONS:-none}"
+
+  case "$(basename "$terminal_cmd")" in
+    foot)
+      if [[ "$decorations" == "none" ]]; then
+        printf '%s\0%s\0' --override csd.preferred=none
+        printf '%s\0%s\0' --override csd.size=0
+      fi
+      [[ -z "$app_id" ]] || printf '%s\0%s\0' --app-id "$app_id"
+      [[ -z "$title" ]] || printf '%s\0%s\0' --title "$title"
+      ;;
+    alacritty)
+      [[ -z "$app_id" ]] || printf '%s\0%s\0' --class "$app_id"
+      [[ -z "$title" ]] || printf '%s\0%s\0' --title "$title"
+      ;;
+    kitty)
+      [[ -z "$app_id" ]] || printf '%s\0%s\0' --class "$app_id"
+      [[ -z "$title" ]] || printf '%s\0%s\0' --title "$title"
+      ;;
+    wezterm)
+      [[ -z "$title" ]] || printf '%s\0%s\0' start --title "$title"
+      ;;
+  esac
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)
@@ -95,6 +124,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 if terminal_cmd="$(select_terminal)"; then
+  if [[ -z "${ENGINEOS_TERMINAL_CMD:-}" ]]; then
+    while IFS= read -r -d '' arg; do
+      TERMINAL_ARGS+=("$arg")
+    done < <(terminal_metadata_args "$terminal_cmd")
+  fi
+
   if [[ "$PRINT_COMMAND" == true ]]; then
     printf '%s\n' "$terminal_cmd"
     exit 0
@@ -131,9 +166,9 @@ if terminal_cmd="$(select_terminal)"; then
     exec /bin/sh -lc "exec $ENGINEOS_TERMINAL_CMD"
   fi
 
-  if [[ -n "${ENGINEOS_TERMINAL_SESSION_CMD:-}" && ${#TERMINAL_ARGS[@]} -eq 0 ]]; then
+  if [[ -n "${ENGINEOS_TERMINAL_SESSION_CMD:-}" ]]; then
     log_line "session command=$ENGINEOS_TERMINAL_SESSION_CMD"
-    exec "$terminal_cmd" -- zsh -lc "exec $ENGINEOS_TERMINAL_SESSION_CMD"
+    exec "$terminal_cmd" "${TERMINAL_ARGS[@]}" -- zsh -lc "exec $ENGINEOS_TERMINAL_SESSION_CMD"
   fi
 
   exec "$terminal_cmd" "${TERMINAL_ARGS[@]}"

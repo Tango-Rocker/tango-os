@@ -10,6 +10,7 @@ LOG_DIR="${ENGINEOS_LOG_DIR:-$(engineos_default_log_dir "$ROOT")}"
 STATE_DIR="${ENGINEOS_STATE_DIR:-$(engineos_default_state_dir "$ROOT")}"
 APP_STATE_DIR="$STATE_DIR/apps"
 SHELL_STATE_FILE="$STATE_DIR/shell-state.json"
+LAUNCH_BOUNDS_DIR="$STATE_DIR/launch-bounds"
 APPS_MANIFEST="$(engineos_apps_manifest "$ROOT")"
 DRY_RUN=false
 ACTION="${1:-help}"
@@ -24,14 +25,18 @@ fi
 usage() {
   cat <<'HELP'
 Usage: app.sh launch terminal [args...]
+       app.sh launch terminal-secondary [args...]
        app.sh launch cube [--smoke]
-       app.sh launch quake [--smoke]
+       app.sh launch quake [--smoke] [--pane|--fullscreen|--output]
        app.sh status [--json]
        app.sh manifest path|show|validate
 
 Launch graphical applications through the EngineOS shell-owned Wayland session.
 The app layer enforces the common client environment and dispatches to the
 terminal launcher, cube app, or engine runner.
+
+Quake launches from inside tmux default to the invoking pane's bounds. Use
+--fullscreen or --output to clear pane bounds for the launch.
 HELP
 }
 
@@ -155,6 +160,157 @@ write_app_state() {
   } >"$APP_STATE_DIR/$app.status"
 }
 
+launch_bounds_file() {
+  local role="$1"
+  printf '%s/%s.env\n' "$LAUNCH_BOUNDS_DIR" "$role"
+}
+
+clear_launch_bounds() {
+  local role="$1"
+  rm -f "$(launch_bounds_file "$role")"
+}
+
+is_nonnegative_integer() {
+  [[ "${1:-}" =~ ^[0-9]+$ ]]
+}
+
+is_positive_integer() {
+  is_nonnegative_integer "$1" && (( 10#$1 > 0 ))
+}
+
+tmux_pane_geometry() {
+  [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]] || return 1
+  have_cmd tmux || return 1
+
+  local values
+  values="$(tmux display-message -p -t "$TMUX_PANE" \
+    '#{pane_left} #{pane_top} #{pane_width} #{pane_height} #{window_width} #{window_height}' 2>/dev/null)" ||
+    return 1
+
+  local pane_left pane_top pane_width pane_height window_width window_height
+  read -r pane_left pane_top pane_width pane_height window_width window_height <<<"$values"
+  is_nonnegative_integer "$pane_left" || return 1
+  is_nonnegative_integer "$pane_top" || return 1
+  is_positive_integer "$pane_width" || return 1
+  is_positive_integer "$pane_height" || return 1
+  is_positive_integer "$window_width" || return 1
+  is_positive_integer "$window_height" || return 1
+
+  printf '%s %s %s %s %s %s\n' \
+    "$pane_left" "$pane_top" "$pane_width" "$pane_height" "$window_width" "$window_height"
+}
+
+write_engine_tmux_bounds() {
+  local pane_left="$1"
+  local pane_top="$2"
+  local pane_width="$3"
+  local pane_height="$4"
+  local window_width="$5"
+  local window_height="$6"
+  local file
+  local tmp
+
+  mkdir -p "$LAUNCH_BOUNDS_DIR"
+  file="$(launch_bounds_file engine)"
+  tmp="$file.$$"
+  {
+    printf 'schema=engineos-launch-bounds-v0\n'
+    printf 'role=engine\n'
+    printf 'mode=pane\n'
+    printf 'source=tmux\n'
+    printf 'pane_id=%s\n' "${TMUX_PANE:-unknown}"
+    printf 'pane_left=%s\n' "$pane_left"
+    printf 'pane_top=%s\n' "$pane_top"
+    printf 'pane_width=%s\n' "$pane_width"
+    printf 'pane_height=%s\n' "$pane_height"
+    printf 'window_width=%s\n' "$window_width"
+    printf 'window_height=%s\n' "$window_height"
+    printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } >"$tmp"
+  mv "$tmp" "$file"
+}
+
+write_engine_output_bounds() {
+  local source="$1"
+  local file
+  local tmp
+
+  mkdir -p "$LAUNCH_BOUNDS_DIR"
+  file="$(launch_bounds_file engine)"
+  tmp="$file.$$"
+  {
+    printf 'schema=engineos-launch-bounds-v0\n'
+    printf 'role=engine\n'
+    printf 'mode=output\n'
+    printf 'source=%s\n' "$source"
+    printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } >"$tmp"
+  mv "$tmp" "$file"
+}
+
+QUAKE_LAUNCH_ARGS=()
+
+prepare_quake_layout() {
+  local layout_mode="auto"
+  local saw_window_flag=false
+  local saw_smoke=false
+  QUAKE_LAUNCH_ARGS=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --pane)
+        layout_mode="pane"
+        ;;
+      --fullscreen)
+        layout_mode="output"
+        QUAKE_LAUNCH_ARGS+=("$1")
+        saw_window_flag=true
+        ;;
+      --output|--no-pane)
+        layout_mode="output"
+        ;;
+      --window)
+        QUAKE_LAUNCH_ARGS+=("$1")
+        saw_window_flag=true
+        ;;
+      --smoke)
+        QUAKE_LAUNCH_ARGS+=("$1")
+        saw_smoke=true
+        ;;
+      *)
+        QUAKE_LAUNCH_ARGS+=("$1")
+        ;;
+    esac
+    shift
+  done
+
+  if [[ "$saw_smoke" == true ]]; then
+    clear_launch_bounds engine
+    log_line "layout app=quake mode=output source=smoke"
+    return
+  fi
+
+  if [[ "$layout_mode" == "output" ]]; then
+    write_engine_output_bounds "app"
+    log_line "layout app=quake mode=output source=app"
+    return
+  fi
+
+  local geometry
+  if geometry="$(tmux_pane_geometry)"; then
+    # shellcheck disable=SC2086
+    write_engine_tmux_bounds $geometry
+    if [[ "$saw_window_flag" == false ]]; then
+      QUAKE_LAUNCH_ARGS+=(--window)
+    fi
+    log_line "layout app=quake mode=pane source=tmux bounds=$geometry"
+    return
+  fi
+
+  clear_launch_bounds engine
+  log_line "layout app=quake mode=output source=no-tmux"
+}
+
 require_shell_display() {
   if [[ "${ENGINEOS_APP_REQUIRE_WAYLAND:-true}" == "true" && -z "${WAYLAND_DISPLAY:-}" ]]; then
     write_app_state "${1:-unknown}" "failed" "missing-wayland-display"
@@ -187,6 +343,16 @@ run_launch() {
       log_line "launch app=terminal owner=engineos-shell display=${WAYLAND_DISPLAY:-missing}"
       exec "$SCRIPT_DIR/terminal_launcher.sh" -- "$@"
       ;;
+    terminal-secondary)
+      require_shell_display "$app"
+      prepare_client_env
+      write_app_state "$app" "launch-requested" "" "$@"
+      log_line "launch app=terminal-secondary owner=engineos-shell display=${WAYLAND_DISPLAY:-missing}"
+      ENGINEOS_TERMINAL_APP_ID="${ENGINEOS_TERMINAL_APP_ID:-engineos-terminal-secondary}" \
+        ENGINEOS_TERMINAL_TITLE="${ENGINEOS_TERMINAL_TITLE:-EngineOS Side}" \
+        ENGINEOS_TERMINAL_SESSION_CMD="${ENGINEOS_TERMINAL_SECONDARY_SESSION_CMD:-tmux new -A -s engineos-side}" \
+        exec "$SCRIPT_DIR/terminal_launcher.sh" -- "$@"
+      ;;
     cube)
       require_shell_display "$app"
       prepare_client_env
@@ -197,9 +363,10 @@ run_launch() {
     quake)
       require_shell_display "$app"
       prepare_client_env
-      write_app_state "$app" "launch-requested" "" "$@"
-      log_line "launch app=quake owner=engineos-shell display=${WAYLAND_DISPLAY:-missing} sdl=${SDL_VIDEODRIVER:-unset} args=$*"
-      exec "$(runtime_cmd_string)" engine launch quake "$@"
+      prepare_quake_layout "$@"
+      write_app_state "$app" "launch-requested" "" "${QUAKE_LAUNCH_ARGS[@]}"
+      log_line "launch app=quake owner=engineos-shell display=${WAYLAND_DISPLAY:-missing} sdl=${SDL_VIDEODRIVER:-unset} args=${QUAKE_LAUNCH_ARGS[*]}"
+      exec "$(runtime_cmd_string)" engine launch quake "${QUAKE_LAUNCH_ARGS[@]}"
       ;;
     *)
       die "unknown app id: $app"
@@ -219,7 +386,7 @@ slot_mapped_json() {
     return
   fi
 
-  line="$(last_line_matching "$shell_log" "(view mapped role=$role|view unmapped role=$role|view destroyed role=$role|launchpad slot mapped inactive role=$role)")"
+  line="$(last_line_matching "$shell_log" "(view mapped role=$role([[:space:]]|$)|view unmapped role=$role([[:space:]]|$)|view destroyed role=$role([[:space:]]|$)|launchpad slot mapped inactive role=$role([[:space:]]|$))")"
   if [[ -z "$line" ]]; then
     printf 'null'
   elif [[ "$line" == *"view mapped role=$role"* || "$line" == *"launchpad slot mapped inactive role=$role"* ]]; then
@@ -234,7 +401,7 @@ app_launch_state() {
   local app_log="$LOG_DIR/app.log"
   local line
 
-  line="$(last_line_matching "$app_log" "(launch app=$app|launch failed .*app=$app)")"
+  line="$(last_line_matching "$app_log" "(launch app=$app([[:space:]]|$)|launch failed .*app=$app([[:space:]]|$))")"
   if [[ -n "$line" ]]; then
     if [[ "$line" == *"launch failed"* ]]; then
       printf 'failed\n'
@@ -257,7 +424,7 @@ app_last_log() {
   local app="$1"
   local line
 
-  line="$(last_line_matching "$LOG_DIR/app.log" "(launch app=$app|launch failed .*app=$app)")"
+  line="$(last_line_matching "$LOG_DIR/app.log" "(launch app=$app([[:space:]]|$)|launch failed .*app=$app([[:space:]]|$))")"
   if [[ -z "$line" && "$app" == "terminal" ]]; then
     line="$(last_line_matching "$LOG_DIR/terminal.log" "(launch command=|launch failed)")"
   fi
@@ -266,7 +433,7 @@ app_last_log() {
 
 slot_last_shell_log() {
   local role="$1"
-  last_line_matching "$LOG_DIR/shell.log" "(launch action mapped .*role=$role|launch action exit .*role=$role|launchpad slot unavailable role=$role|view mapped role=$role|view unmapped role=$role|view destroyed role=$role)"
+  last_line_matching "$LOG_DIR/shell.log" "(launch action mapped .*role=$role([[:space:]]|$)|launch action exit .*role=$role([[:space:]]|$)|launchpad slot unavailable role=$role([[:space:]]|$)|view mapped role=$role([[:space:]]|$)|view unmapped role=$role([[:space:]]|$)|view destroyed role=$role([[:space:]]|$))"
 }
 
 shell_active_slot() {
@@ -369,6 +536,8 @@ run_status_json() {
   printf '  "slots": {\n'
   print_slot_json terminal terminal
   printf ',\n'
+  print_slot_json terminal-secondary terminal-secondary
+  printf ',\n'
   print_slot_json cube cube
   printf ',\n'
   print_slot_json engine quake
@@ -423,6 +592,7 @@ run_status() {
   printf '  shell_bootstrap: %s\n' "${bootstrap:-unknown}"
   printf '  active_slot: %s\n' "${active_slot:-unknown}"
   printf '  terminal: %s\n' "$(app_launch_state terminal)"
+  printf '  terminal-secondary: %s\n' "$(app_launch_state terminal-secondary)"
   printf '  cube: %s\n' "$(app_launch_state cube)"
   printf '  quake: %s\n' "$(app_launch_state quake)"
 }
@@ -490,6 +660,14 @@ run_manifest_validate() {
   manifest_expect_app_id terminal foot
   manifest_expect_nonempty terminal log
   manifest_expect_value terminal input normal
+
+  manifest_expect_value terminal-secondary slot terminal-secondary
+  manifest_expect_value terminal-secondary role terminal-secondary
+  manifest_expect_value terminal-secondary command "eos-app launch terminal-secondary"
+  manifest_expect_value terminal-secondary package foot
+  manifest_expect_app_id terminal-secondary engineos-terminal-secondary
+  manifest_expect_nonempty terminal-secondary log
+  manifest_expect_value terminal-secondary input normal
 
   manifest_expect_value cube slot cube
   manifest_expect_value cube role cube

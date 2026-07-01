@@ -2,6 +2,10 @@
 
 Current focus: make the EngineRuntime startup shell prove hardware GL acceleration on the AMD target, with shell-owned Wayland clients still launched through the EngineOS app stack.
 
+Current deployment context: this session is the bare-metal EngineDev installation.
+Do not build ISO profiles or ISO artifacts again until the user explicitly
+re-enables that path.
+
 PoC 0 build-lab acceptance is complete for EngineDev. The Arch builder can repeatably rebuild the local package repo and EngineDev ISO, the rebuilt ISO checksum passes, the ISO boots headlessly in QEMU, SSH comes up through the forwarded port, and `eos-proof booted-iso --vm` passes inside the clean live guest. The first-deploy dev environment follow-on is also proven: the guest has tmux, Docker, Docker Compose, Codex CLI, and the post-install payload applied.
 
 ## Current Artifacts
@@ -95,6 +99,21 @@ e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeO
 - EngineDev is now patched for the rebuilt-image path: `archiso/enginedev/packages.x86_64` includes `engineos-shell`, `engineos-dev-shell.service` autostarts on `tty1` as `dev`, requires the shell-owned Wayland terminal path, and bootstraps the terminal only with `ENGINEOS_TERMINAL_SESSION_CMD=tmux new -A -s engineos`. EngineDev and EngineRuntime zsh login profiles now auto-attach tmux for interactive login shells, guarded by `ENGINEOS_AUTO_TMUX=0` for opt-out. First-deploy now backs up and replaces legacy EngineOS `.tmux.conf` and `.zprofile` files.
 - The first-deploy payload now carries the same dev shell retrofit: it requests `engineos-shell` during package install, installs `/usr/local/bin/engineos-dev-shell-start`, installs `/etc/systemd/system/engineos-dev-shell.service`, enables the service when `engineos-shell` is available, and otherwise logs the exact blocker plus the enable command to rerun after installing/rebuilding. Payload preflight now requires the shell-start helper, service unit, managed zprofile, and tmux-owned Wayland launch markers.
 - The shell-owned app launch contract is now explicit: `eos-app launch terminal|cube|quake` requires `WAYLAND_DISPLAY` by default, sets common Wayland client hints (`XDG_SESSION_TYPE`, `SDL_VIDEODRIVER`, GTK/Qt hints), unsets `DISPLAY` when the shell Wayland socket is active, logs `owner=engineos-shell` to `app.log`, writes cube output to `cube.log`, and dispatches Quake through the existing engine runner. The shell default launchpad commands now use `eos-app launch terminal`, `eos-app launch cube`, and `eos-app launch quake`; `eos-app status --json` reports log-derived shell/slot/app state for proofs.
+- The source path now supports tmux-pane-bounded Quake launches through the shell-owned Wayland path: `eos-app launch quake` captures the current tmux pane geometry, writes an engine launch-bounds request, forces QuakeSpasm windowed for pane launches, and lets `--fullscreen` request output/fullscreen behavior instead. `engineos-shell` applies engine pane/output/fullscreen geometry and records the layout in shell state; local `eos-test`, `eos-preflight all`, and app manifest validation pass.
+- Bare-metal EngineDev now has the shell/Quake pane-bounds path deployed without
+  an ISO rebuild: `engineos-shell` was rebuilt/reinstalled in place, the dev
+  shell service restarted cleanly, and `eos-app launch quake` mapped
+  QuakeSpasm under the shell with `active_slot=engine`, `layout=tmux-pane`,
+  AMD Mesa GL renderer evidence, PulseAudio output, and no new
+  `engineos-shell` coredump after the launch.
+- Bare-metal EngineDev now has the game cursor capture follow-up deployed
+  without an ISO rebuild: `engineos-shell` advertises Wayland relative-pointer
+  and pointer-constraints globals, hides the cursor while the mapped engine slot
+  owns game capture, ignores client cursor images during capture, and emits
+  nonzero `relative pointer motion` deltas even while the focused engine surface
+  coordinate is clamped at the window edge. The final live state showed
+  `active_slot=engine`, `input.capture=true`, `cursor.locked=true`,
+  `cursor.hidden=true`, Quake pid `78881`, and no `engineos-shell` coredump.
 - The launchpad app registry is now packaged at `/etc/engineos/apps.toml` from `packages/engineos-config/files/etc/engineos/apps.toml`. `eos-app manifest validate` checks the terminal, cube, and Quake slot contract, `eos-runtime shell` reads the manifest for default slot commands, and `eos-proof launchpad` validates the manifest before checking runtime logs.
 - The first rebuilt EngineRuntime ISO booted in builder-hosted QEMU far enough to mount the 50% cowspace and reach login, but exposed two runtime-proof blockers: `engineos-live-setup.service` was ordered after `multi-user.target`, creating a cycle that skipped `engineos-engine-runner.service`, and Runtime did not yet enable explicit SSH password access for automated VM proof. The profile now runs live setup before the runtime services and configures `engineos` / `engineos` SSH validation access.
 - A clean generated EngineRuntime ISO now passes `eos-proof booted-iso --runtime` in builder-hosted QEMU through SSH port 2223 with 0 boot-validation failures and 0 warnings. The final proven ISO is `EngineRuntimeOS-2026.06.15-x86_64.iso`, checksum `e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2`.

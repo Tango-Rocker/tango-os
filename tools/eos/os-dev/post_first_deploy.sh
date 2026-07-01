@@ -20,6 +20,7 @@ STRICT_HOST_KEY_CHECKING="no"
 RUN_CODEX=true
 RUN_DOCKER=true
 RUN_PACMAN=true
+RUN_DEV_REPOS=true
 FORCE_CONFIG=false
 
 usage() {
@@ -40,6 +41,7 @@ Options:
   --skip-codex             Do not install/upgrade Codex CLI
   --skip-docker            Do not install/start Docker
   --skip-pacman            Do not install Arch packages
+  --skip-dev-repos         Do not clone/update EngineDev helper repos
   --force-config           Replace managed tmux/Docker config files
   -h, --help               Show this help
 
@@ -96,6 +98,7 @@ remote_setup_args() {
   "$RUN_CODEX" || args+=(--skip-codex)
   "$RUN_DOCKER" || args+=(--skip-docker)
   "$RUN_PACMAN" || args+=(--skip-pacman)
+  "$RUN_DEV_REPOS" || args+=(--skip-dev-repos)
   "$FORCE_CONFIG" && args+=(--force-config)
   printf '%s\0' "${args[@]}"
 }
@@ -111,6 +114,7 @@ dry_run() {
   printf '  codex:      %s\n' "$RUN_CODEX"
   printf '  docker:     %s\n' "$RUN_DOCKER"
   printf '  pacman:     %s\n' "$RUN_PACMAN"
+  printf '  repos:      %s\n' "$RUN_DEV_REPOS"
   printf '\nCommands:\n'
   printf '  %s%s %q\n' "$(quote_join "${SSH_BASE[@]}")" "$HOST" "rm -rf '$REMOTE_DIR' && mkdir -p '$REMOTE_DIR'"
   printf '  %s-r %q %s:%q\n' "$(quote_join "${SCP_BASE[@]}")" "$PAYLOAD/." "$HOST" "$REMOTE_DIR/"
@@ -187,6 +191,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-pacman)
       RUN_PACMAN=false
+      shift
+      ;;
+    --skip-dev-repos)
+      RUN_DEV_REPOS=false
       shift
       ;;
     --force-config)

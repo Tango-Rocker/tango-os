@@ -6,10 +6,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$SCRIPT_DIR/common.sh"
 
 ROOT="$(engineos_root)"
+ENGINEOS_LOG_DIR_OVERRIDE="${ENGINEOS_LOG_DIR-}"
+ENGINEOS_STATE_DIR_OVERRIDE="${ENGINEOS_STATE_DIR-}"
+ENGINEOS_ENGINE_SOCKET_OVERRIDE="${ENGINEOS_ENGINE_SOCKET-}"
 
 if [[ -r /etc/engineos/profile.conf ]]; then
   # shellcheck disable=SC1091
   source /etc/engineos/profile.conf
+fi
+if [[ -n "$ENGINEOS_LOG_DIR_OVERRIDE" ]]; then
+  ENGINEOS_LOG_DIR="$ENGINEOS_LOG_DIR_OVERRIDE"
+fi
+if [[ -n "$ENGINEOS_STATE_DIR_OVERRIDE" ]]; then
+  ENGINEOS_STATE_DIR="$ENGINEOS_STATE_DIR_OVERRIDE"
+fi
+if [[ -n "$ENGINEOS_ENGINE_SOCKET_OVERRIDE" ]]; then
+  ENGINEOS_ENGINE_SOCKET="$ENGINEOS_ENGINE_SOCKET_OVERRIDE"
 fi
 
 if engineos_is_source_root "$ROOT"; then
@@ -61,10 +73,6 @@ go_bin() {
   command -v go
 }
 
-daemon_running() {
-  [[ -S "$SOCKET_FILE" ]]
-}
-
 run_daemon_client() {
   local mode="$1"
   shift || true
@@ -87,6 +95,20 @@ run_daemon_client() {
   fi
 
   die "Go engine-runner daemon unavailable; build tools/go/cmd/engine-runner-daemon or set ENGINEOS_ENGINE_RUNNER_DAEMON"
+}
+
+daemon_running() {
+  [[ -S "$SOCKET_FILE" ]] || return 1
+
+  if ENGINEOS_ROOT="$ROOT" \
+      ENGINEOS_STATE_DIR="$STATE_DIR" \
+      ENGINEOS_LOG_DIR="$LOG_DIR" \
+      run_daemon_client --client engine.status >/dev/null 2>&1; then
+    return 0
+  fi
+
+  rm -f "$SOCKET_FILE" "$DAEMON_PID_FILE"
+  return 1
 }
 
 start_daemon() {

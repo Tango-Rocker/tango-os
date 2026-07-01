@@ -113,6 +113,14 @@ run_all() {
   printf '\nengineos full local test suite passed\n'
 }
 
+post_install_payload_dir() {
+  if [[ -d "$ROOT/tools/post-install-payload" ]]; then
+    printf '%s\n' "$ROOT/tools/post-install-payload"
+    return
+  fi
+  printf '%s\n' "$ROOT/share/engineos/post-install-payload"
+}
+
 run_compositor() {
   local mode="${1:---headless}"
   case "$mode" in
@@ -155,6 +163,8 @@ run_agent() {
     die "Codex hook example does not reference the session-start hook"
   grep -F 'docs/agent-roles.md' "$ROOT/docs/engineos-agent-pack.md" >/dev/null ||
     die "agent pack docs do not reference the role spec"
+  grep -F 'agentd.md' "$ROOT/docs/engineos-agent-pack.md" >/dev/null ||
+    die "agent pack docs do not reference the progressive-disclosure directive file"
   grep -F 'docs/agent-profiles.md' "$ROOT/docs/engineos-agent-pack.md" >/dev/null ||
     die "agent pack docs do not reference profile docs"
   grep -F '.agents/index.toml' "$ROOT/docs/engineos-agent-pack.md" >/dev/null ||
@@ -541,8 +551,10 @@ run_observability() {
     die "bash observability hook missing PROMPT_COMMAND"
   grep -F 'eos-observe prompt-login --shell zsh' "$ROOT/tools/post-install-payload/assets/zprofile" >/dev/null ||
     die "zprofile does not prompt for observability opt-in"
-  grep -F 'eos-observe hook zsh' "$ROOT/tools/post-install-payload/assets/zshrc" >/dev/null ||
-    die "zshrc does not install observability hook"
+  if grep -F 'eos-observe hook zsh' "$ROOT/tools/post-install-payload/assets/zshrc" >/dev/null ||
+      grep -F 'eos-observe hook zsh' "$ROOT/tools/post-install-payload/assets/zprofile" >/dev/null; then
+    die "managed zsh files should not install per-command observability hooks"
+  fi
   grep -F 'eos-observe prompt-login --shell bash' "$ROOT/archiso/enginedev/airootfs/etc/skel/.bash_profile" >/dev/null ||
     die "EngineDev bash profile does not prompt for observability opt-in"
   grep -F 'eos-observe hook bash' "$ROOT/archiso/engineruntime/airootfs/etc/skel/.bash_profile" >/dev/null ||
@@ -679,6 +691,8 @@ FAKE
   grep -Fx -- "--nested" "$args_file" >/dev/null || die "shell actions test missing --nested"
   grep -Fx -- "--terminal" "$args_file" >/dev/null || die "shell actions test missing --terminal"
   grep -Fx -- "foot --server" "$args_file" >/dev/null || die "shell actions test missing terminal command"
+  grep -Fx -- "--terminal-secondary" "$args_file" >/dev/null || die "shell actions test missing --terminal-secondary"
+  grep -E -- '(^|/)eos-app launch terminal-secondary$' "$args_file" >/dev/null || die "shell actions test missing secondary terminal app command"
   grep -Fx -- "--cube" "$args_file" >/dev/null || die "shell actions test missing --cube"
   grep -Fx -- "eos-app launch cube --smoke" "$args_file" >/dev/null || die "shell actions test missing cube command"
   grep -Fx -- "--engine" "$args_file" >/dev/null || die "shell actions test missing --engine"
@@ -687,11 +701,14 @@ FAKE
   ENGINEOS_SHELL_BIN="$fake_shell" \
     ENGINEOS_FAKE_SHELL_ARGS="$args_file" \
     ENGINEOS_LOG_DIR="$tmp_dir/logs" \
+    ENGINEOS_SHELL_BOOTSTRAP= \
     "$SCRIPT_DIR/shell_runner.sh" --tty >/dev/null
 
   grep -Fx -- "--tty" "$args_file" >/dev/null || die "shell actions test missing --tty"
   grep -Fx -- "--terminal" "$args_file" >/dev/null || die "shell actions tty missing --terminal"
   grep -E -- '(^|/)eos-app launch terminal$' "$args_file" >/dev/null || die "shell actions tty missing default terminal app command"
+  grep -Fx -- "--terminal-secondary" "$args_file" >/dev/null || die "shell actions tty missing --terminal-secondary"
+  grep -E -- '(^|/)eos-app launch terminal-secondary$' "$args_file" >/dev/null || die "shell actions tty missing default secondary terminal app command"
   grep -Fx -- "--cube" "$args_file" >/dev/null || die "shell actions tty missing --cube"
   grep -E -- '(^|/)eos-app launch cube$' "$args_file" >/dev/null || die "shell actions tty missing default cube command"
   grep -Fx -- "--engine" "$args_file" >/dev/null || die "shell actions tty missing --engine"
@@ -787,7 +804,15 @@ FAKE
 #!/usr/bin/env bash
 printf 'fake cube %s\n' "$*"
 FAKE
-  chmod +x "$fake_bin/eos-runtime" "$fake_bin/engineos-cube"
+  cat >"$fake_bin/tmux" <<'FAKE'
+#!/usr/bin/env bash
+if [[ "$1" == "display-message" ]]; then
+  printf '10 5 80 24 160 48\n'
+  exit 0
+fi
+exit 1
+FAKE
+  chmod +x "$fake_bin/eos-runtime" "$fake_bin/engineos-cube" "$fake_bin/tmux"
 
   PATH="$fake_bin:$PATH" \
     ENGINEOS_LOG_DIR="$log_dir" \
@@ -800,6 +825,40 @@ FAKE
     die "app launcher did not dispatch quake through engine runner"
   grep -F 'app launch app=quake owner=engineos-shell display=engineos-test-wayland sdl=wayland args=--smoke' "$log_dir/app.log" >/dev/null ||
     die "app launcher did not log shell-owned quake launch"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    ENGINEOS_RUNTIME_CMD="$fake_bin/eos-runtime" \
+    ENGINEOS_FAKE_APP_LAUNCHED="$launched" \
+    WAYLAND_DISPLAY="engineos-test-wayland" \
+    TMUX="$tmp_dir/tmux-socket,1,0" \
+    TMUX_PANE="%1" \
+    "$SCRIPT_DIR/app.sh" launch quake >"$out"
+  grep -F 'engine launch quake --window' "$launched" >/dev/null ||
+    die "app launcher did not force pane-bounded quake into windowed mode"
+  grep -F 'mode=pane' "$tmp_dir/run/launch-bounds/engine.env" >/dev/null ||
+    die "app launcher did not write pane bounds request"
+  grep -F 'pane_left=10' "$tmp_dir/run/launch-bounds/engine.env" >/dev/null ||
+    die "app launcher pane bounds missing tmux pane left"
+  grep -F 'window_height=48' "$tmp_dir/run/launch-bounds/engine.env" >/dev/null ||
+    die "app launcher pane bounds missing tmux window height"
+  grep -F 'app layout app=quake mode=pane source=tmux bounds=10 5 80 24 160 48' "$log_dir/app.log" >/dev/null ||
+    die "app launcher did not log tmux pane bounds"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    ENGINEOS_RUNTIME_CMD="$fake_bin/eos-runtime" \
+    ENGINEOS_FAKE_APP_LAUNCHED="$launched" \
+    WAYLAND_DISPLAY="engineos-test-wayland" \
+    TMUX="$tmp_dir/tmux-socket,1,0" \
+    TMUX_PANE="%1" \
+    "$SCRIPT_DIR/app.sh" launch quake --fullscreen >"$out"
+  grep -F 'engine launch quake --fullscreen' "$launched" >/dev/null ||
+    die "app launcher did not pass quake fullscreen flag"
+  grep -F 'mode=output' "$tmp_dir/run/launch-bounds/engine.env" >/dev/null ||
+    die "app launcher did not clear pane bounds for fullscreen launch"
 
   PATH="$fake_bin:$PATH" \
     ENGINEOS_LOG_DIR="$log_dir" \
@@ -841,6 +900,8 @@ FAKE
     die "app status json did not report manifest path"
   grep -F '"terminal": {"app":"terminal","command":"eos-app launch terminal","launch_state":"launch-requested"' "$out" >/dev/null ||
     die "app status json did not report terminal launch state"
+  grep -F '"terminal-secondary": {"app":"terminal-secondary","command":"eos-app launch terminal-secondary","launch_state":"missing"' "$out" >/dev/null ||
+    die "app status json did not report secondary terminal slot"
   grep -F '"cube": {"app":"cube","command":"eos-app launch cube","launch_state":"launch-requested","mapped":true' "$out" >/dev/null ||
     die "app status json did not report mapped cube state"
   grep -F '"shell_last_log":"[2026-01-01T00:00:02Z] view mapped role=cube title=engineos-cube app_id=engineos-cube mapped_total=1"' "$out" >/dev/null ||
@@ -853,6 +914,8 @@ FAKE
     die "app manifest validation did not pass"
   grep -F 'cube.app_ids contains engineos-cube' "$out" >/dev/null ||
     die "app manifest validation did not check cube app id"
+  grep -F 'terminal-secondary.app_ids contains engineos-terminal-secondary' "$out" >/dev/null ||
+    die "app manifest validation did not check secondary terminal app id"
 
   printf 'app launcher smoke test passed\n'
 }
@@ -1332,7 +1395,12 @@ run_terminal() {
 #!/usr/bin/env bash
 printf 'alacritty %s\n' "$*" >"$ENGINEOS_FAKE_TERMINAL_LAUNCHED"
 FAKE
+  cat >"$fake_bin/foot" <<'FAKE'
+#!/usr/bin/env bash
+printf 'foot %s\n' "$*" >"$ENGINEOS_FAKE_TERMINAL_LAUNCHED"
+FAKE
   chmod +x "$fake_bin/alacritty"
+  chmod +x "$fake_bin/foot"
 
   PATH="$fake_bin:$PATH" \
     ENGINEOS_TERMINAL_CANDIDATES="missing-terminal alacritty" \
@@ -1356,12 +1424,26 @@ FAKE
   PATH="$fake_bin:$PATH" \
     ENGINEOS_LOG_DIR="$log_dir" \
     ENGINEOS_FAKE_TERMINAL_LAUNCHED="$launched" \
-    ENGINEOS_TERMINAL_CANDIDATES="alacritty" \
+    ENGINEOS_TERMINAL_CANDIDATES="foot" \
+    ENGINEOS_TERMINAL_APP_ID="engineos-terminal" \
+    ENGINEOS_TERMINAL_TITLE="EngineOS Terminal" \
     ENGINEOS_TERMINAL_SESSION_CMD="tmux new -A -s engineos" \
     WAYLAND_DISPLAY="engineos-test-wayland" \
     "$SCRIPT_DIR/terminal_launcher.sh" >/dev/null
-  grep -F 'alacritty -- zsh -lc exec tmux new -A -s engineos' "$launched" >/dev/null ||
-    die "terminal launcher did not start tmux session through zsh"
+  grep -F 'foot --override csd.preferred=none --override csd.size=0 --app-id engineos-terminal --title EngineOS Terminal -- zsh -lc exec tmux new -A -s engineos' "$launched" >/dev/null ||
+    die "terminal launcher did not disable foot titlebar decorations"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_FAKE_TERMINAL_LAUNCHED="$launched" \
+    ENGINEOS_TERMINAL_CANDIDATES="alacritty" \
+    ENGINEOS_TERMINAL_APP_ID="engineos-terminal-secondary" \
+    ENGINEOS_TERMINAL_TITLE="EngineOS Side" \
+    ENGINEOS_TERMINAL_SESSION_CMD="tmux new -A -s engineos" \
+    WAYLAND_DISPLAY="engineos-test-wayland" \
+    "$SCRIPT_DIR/terminal_launcher.sh" >/dev/null
+  grep -F 'alacritty --class engineos-terminal-secondary --title EngineOS Side -- zsh -lc exec tmux new -A -s engineos' "$launched" >/dev/null ||
+    die "terminal launcher did not start named tmux session through zsh"
   grep -F 'session command=tmux new -A -s engineos' "$log_dir/terminal.log" >/dev/null ||
     die "terminal launcher did not log tmux session command"
 
@@ -2064,6 +2146,8 @@ run_builder_doctor() {
 run_post_first_deploy() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-post-first-deploy-test-$$"
   local out="$tmp_dir/post-first-deploy.txt"
+  local payload_dir
+  payload_dir="$(post_install_payload_dir)"
 
   cleanup_post_first_deploy() {
     rm -rf "$tmp_dir"
@@ -2078,7 +2162,7 @@ run_post_first_deploy() {
     die "post-first-deploy dry-run missing guest host"
   grep -F -- '-P 2225' "$out" >/dev/null ||
     die "post-first-deploy dry-run missing scp port"
-  grep -F 'tools/post-install-payload' "$out" >/dev/null ||
+  grep -F "$payload_dir" "$out" >/dev/null ||
     die "post-first-deploy dry-run missing payload path"
   grep -F 'setup_dev_environment.sh' "$out" >/dev/null ||
     die "post-first-deploy dry-run missing remote setup script"
@@ -2087,54 +2171,72 @@ run_post_first_deploy() {
   grep -F 'Next real command: eos-deploy first --host dev@192.0.2.55 --port 2225' "$out" >/dev/null ||
     die "post-first-deploy dry-run missing real command hint"
 
-  "$OS_DEV_DIR/post_first_deploy.sh" --dry-run --host dev@192.0.2.55 --skip-codex --skip-docker --skip-pacman >"$out"
+  "$OS_DEV_DIR/post_first_deploy.sh" --dry-run --host dev@192.0.2.55 --skip-codex --skip-docker --skip-pacman --skip-dev-repos >"$out"
   grep -F -- '--skip-codex' "$out" >/dev/null ||
     die "post-first-deploy dry-run did not preserve --skip-codex"
   grep -F -- '--skip-docker' "$out" >/dev/null ||
     die "post-first-deploy dry-run did not preserve --skip-docker"
   grep -F -- '--skip-pacman' "$out" >/dev/null ||
     die "post-first-deploy dry-run did not preserve --skip-pacman"
+  grep -F -- '--skip-dev-repos' "$out" >/dev/null ||
+    die "post-first-deploy dry-run did not preserve --skip-dev-repos"
 
-  [[ -f "$ROOT/tools/post-install-payload/assets/tmux.conf" ]] ||
+  [[ -f "$payload_dir/assets/tmux.conf" ]] ||
     die "post-first-deploy payload missing tmux config"
-  grep -F 'set -g mouse on' "$ROOT/tools/post-install-payload/assets/tmux.conf" >/dev/null ||
+  grep -F 'set -g mouse on' "$payload_dir/assets/tmux.conf" >/dev/null ||
     die "post-first-deploy tmux config does not enable mouse support"
-  grep -F "@engineos-plugins" "$ROOT/tools/post-install-payload/assets/tmux.conf" >/dev/null ||
+  grep -F "@engineos-plugins" "$payload_dir/assets/tmux.conf" >/dev/null ||
     die "post-first-deploy tmux config does not declare packaged plugins"
-  grep -F "/usr/share/tmux/plugins/tmux-sensible/sensible.tmux" "$ROOT/tools/post-install-payload/assets/tmux.conf" >/dev/null ||
+  grep -F "/usr/share/tmux/plugins/tmux-sensible/sensible.tmux" "$payload_dir/assets/tmux.conf" >/dev/null ||
     die "post-first-deploy tmux config does not source packaged plugins"
-  [[ -f "$ROOT/tools/post-install-payload/assets/zshrc" ]] ||
+  grep -F 'set -g status-style bg=colour235,fg=colour250' "$payload_dir/assets/tmux.conf" >/dev/null ||
+    die "post-first-deploy tmux config does not set the EngineOS color status style"
+  grep -F '#{pane_current_path}' "$payload_dir/assets/tmux.conf" >/dev/null ||
+    die "post-first-deploy tmux config status line does not show pane path"
+  [[ -f "$payload_dir/assets/zshrc" ]] ||
     die "post-first-deploy payload missing zsh config"
-  [[ -f "$ROOT/tools/post-install-payload/assets/zprofile" ]] ||
+  [[ -f "$payload_dir/assets/zprofile" ]] ||
     die "post-first-deploy payload missing zprofile config"
-  grep -F '/usr/share/oh-my-zsh' "$ROOT/tools/post-install-payload/assets/zshrc" >/dev/null ||
+  grep -F '/usr/share/oh-my-zsh' "$payload_dir/assets/zshrc" >/dev/null ||
     die "post-first-deploy zsh config does not use packaged oh-my-zsh"
-  grep -F 'zsh-autosuggestions.zsh' "$ROOT/tools/post-install-payload/assets/zshrc" >/dev/null ||
+  grep -F 'zsh-autosuggestions.zsh' "$payload_dir/assets/zshrc" >/dev/null ||
     die "post-first-deploy zsh config does not source packaged plugins"
-  grep -F 'tmux new-session -A -s engineos' "$ROOT/tools/post-install-payload/assets/zprofile" >/dev/null ||
+  grep -F 'tmux new-session -A -s engineos' "$payload_dir/assets/zprofile" >/dev/null ||
     die "post-first-deploy zprofile does not auto-attach tmux"
-  grep -F 'tools/scripts/update_check.sh" --init' "$ROOT/tools/post-install-payload/assets/zprofile" >/dev/null ||
+  grep -F 'tools/scripts/update_check.sh" --init' "$payload_dir/assets/zprofile" >/dev/null ||
     die "post-first-deploy zprofile does not run source update init check"
-  grep -F 'eos-update check --init' "$ROOT/tools/post-install-payload/assets/zprofile" >/dev/null ||
+  grep -F 'eos-update check --init' "$payload_dir/assets/zprofile" >/dev/null ||
     die "post-first-deploy zprofile does not run update init check"
-  [[ -f "$ROOT/tools/post-install-payload/assets/docker/daemon.json" ]] ||
+  [[ -f "$payload_dir/assets/docker/daemon.json" ]] ||
     die "post-first-deploy payload missing Docker config"
-  [[ -x "$ROOT/tools/post-install-payload/scripts/setup_dev_environment.sh" ]] ||
+  [[ -x "$payload_dir/scripts/setup_dev_environment.sh" ]] ||
     die "post-first-deploy payload setup script is not executable"
-  [[ -x "$ROOT/tools/post-install-payload/scripts/engineos-dev-shell-start" ]] ||
+  [[ -x "$payload_dir/scripts/engineos-dev-shell-start" ]] ||
     die "post-first-deploy payload dev shell start script is not executable"
-  [[ -f "$ROOT/tools/post-install-payload/assets/systemd/engineos-dev-shell.service" ]] ||
+  [[ -f "$payload_dir/assets/systemd/engineos-dev-shell.service" ]] ||
     die "post-first-deploy payload missing dev shell service"
-  grep -F 'ENGINEOS_TERMINAL_REQUIRE_WAYLAND=true' "$ROOT/tools/post-install-payload/assets/systemd/engineos-dev-shell.service" >/dev/null ||
+  grep -F 'ENGINEOS_TERMINAL_REQUIRE_WAYLAND=true' "$payload_dir/assets/systemd/engineos-dev-shell.service" >/dev/null ||
     die "post-first-deploy dev shell service does not require Wayland terminal ownership"
-  grep -F 'ENGINEOS_TERMINAL_SESSION_CMD=tmux new -A -s engineos' "$ROOT/tools/post-install-payload/assets/systemd/engineos-dev-shell.service" >/dev/null ||
+  grep -F 'ENGINEOS_TERMINAL_SESSION_CMD=tmux new -A -s engineos' "$payload_dir/assets/systemd/engineos-dev-shell.service" >/dev/null ||
     die "post-first-deploy dev shell service does not launch tmux"
-  grep -F 'engineos-shell' "$ROOT/tools/post-install-payload/scripts/setup_dev_environment.sh" >/dev/null ||
+  grep -F 'engineos-shell' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not request engineos-shell"
-  grep -F 'engineos-tools' "$ROOT/tools/post-install-payload/scripts/setup_dev_environment.sh" >/dev/null ||
+  grep -F 'engineos-tools' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not request engineos-tools"
-  grep -F 'engineos-cube' "$ROOT/tools/post-install-payload/scripts/setup_dev_environment.sh" >/dev/null ||
+  grep -F 'engineos-cube' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not request engineos-cube"
+  grep -F 'codex-extractor' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not fetch codex-extractor"
+  grep -F 'session-extrator' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not fetch session-extrator"
+  grep -F 'opencode-autonomy' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not fetch opencode-autonomy"
+  grep -F 'agent' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not fetch agent"
+  grep -F 'skills' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not fetch skills"
+  grep -F 'Tango-Rocker' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not fetch from Tango-Rocker"
 
   printf 'post-first-deploy dry-run test passed\n'
 }
@@ -2256,6 +2358,15 @@ role = "terminal"
 command = "eos-app launch terminal"
 package = "foot"
 app_ids = ["foot"]
+log = "terminal.log"
+input = "normal"
+
+[apps.terminal-secondary]
+slot = "terminal-secondary"
+role = "terminal-secondary"
+command = "eos-app launch terminal-secondary"
+package = "foot"
+app_ids = ["engineos-terminal-secondary"]
 log = "terminal.log"
 input = "normal"
 

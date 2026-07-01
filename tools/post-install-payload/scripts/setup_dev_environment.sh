@@ -5,6 +5,7 @@ PAYLOAD=""
 RUN_CODEX=true
 RUN_DOCKER=true
 RUN_PACMAN=true
+RUN_DEV_REPOS=true
 FORCE_CONFIG=false
 TARGET_USER="${ENGINEOS_DEV_USER:-${USER:-dev}}"
 LOG_DIR="${ENGINEOS_LOG_DIR:-/var/log/engineos}"
@@ -20,6 +21,7 @@ Options:
   --skip-codex         Do not install/upgrade Codex CLI
   --skip-docker        Do not install/start Docker
   --skip-pacman        Do not install Arch packages
+  --skip-dev-repos     Do not clone/update EngineDev helper repos
   --force-config       Replace managed tmux/Docker config files
   -h, --help           Show this help
 HELP
@@ -352,6 +354,43 @@ install_codex() {
   run_as_user "$TARGET_USER" env HOME="$home" CODEX_NON_INTERACTIVE=1 sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | sh'
 }
 
+install_dev_repos() {
+  "$RUN_DEV_REPOS" || {
+    log "skip EngineDev helper repo fetch"
+    return
+  }
+
+  have_cmd git || die "git is required to fetch EngineDev helper repos"
+
+  local home repo_dir owner
+  home="$(user_home "$TARGET_USER")"
+  [[ -n "$home" ]] || die "cannot find home for user: $TARGET_USER"
+  repo_dir="${ENGINEOS_DEV_REPO_DIR:-$home/dev}"
+  owner="${ENGINEOS_DEV_REPO_OWNER:-Tango-Rocker}"
+
+  as_root install -d -m0755 -o "$TARGET_USER" -g "$TARGET_USER" "$repo_dir"
+
+  local repos=(
+    codex-extractor:session-extrator
+    opencode-autonomy:agent
+    skills:skills
+  )
+  local entry repo remote_repo dest url
+  for entry in "${repos[@]}"; do
+    repo="${entry%%:*}"
+    remote_repo="${entry#*:}"
+    dest="$repo_dir/$repo"
+    url="https://github.com/$owner/$remote_repo.git"
+    if [[ -d "$dest/.git" ]]; then
+      log "fetch repo: $dest"
+      run_as_user "$TARGET_USER" env HOME="$home" GIT_TERMINAL_PROMPT=0 git -C "$dest" fetch --prune
+    else
+      log "clone repo: $url -> $dest"
+      run_as_user "$TARGET_USER" env HOME="$home" GIT_TERMINAL_PROMPT=0 git clone "$url" "$dest"
+    fi
+  done
+}
+
 validate_setup() {
   local failures=0
 
@@ -400,6 +439,19 @@ validate_setup() {
     fi
   fi
 
+  if "$RUN_DEV_REPOS"; then
+    local home repo
+    home="$(user_home "$TARGET_USER")"
+    for repo in codex-extractor opencode-autonomy skills; do
+      if [[ -d "${ENGINEOS_DEV_REPO_DIR:-$home/dev}/$repo/.git" ]]; then
+        log "OK repo: ${ENGINEOS_DEV_REPO_DIR:-$home/dev}/$repo"
+      else
+        log "FAIL repo missing: ${ENGINEOS_DEV_REPO_DIR:-$home/dev}/$repo"
+        failures=$((failures + 1))
+      fi
+    done
+  fi
+
   if [[ "$failures" -gt 0 ]]; then
     die "dev environment setup completed with $failures failure(s)"
   fi
@@ -427,6 +479,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-pacman)
       RUN_PACMAN=false
+      shift
+      ;;
+    --skip-dev-repos)
+      RUN_DEV_REPOS=false
       shift
       ;;
     --force-config)
@@ -459,6 +515,7 @@ log "  payload: $PAYLOAD"
 log "  codex:   $RUN_CODEX"
 log "  docker:  $RUN_DOCKER"
 log "  pacman:  $RUN_PACMAN"
+log "  repos:   $RUN_DEV_REPOS"
 
 install_packages
 configure_tmux
@@ -466,6 +523,7 @@ configure_zsh
 configure_docker
 configure_dev_shell_autostart
 install_codex
+install_dev_repos
 validate_setup
 
 log "post-first-deploy setup completed"

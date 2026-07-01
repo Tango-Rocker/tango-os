@@ -16,6 +16,7 @@ BIN_SOURCE=""
 SMOKE=false
 ID1_PATH=""
 QUAKE_ARGS=()
+CLI_QUAKE_ARGS=()
 CHILD_PID=""
 
 ASSETS="$ROOT/tools/scripts/assets.sh"
@@ -53,6 +54,12 @@ append_configured_quake_args() {
   if [[ -n "${ENGINEOS_QUAKE_ARGS:-}" ]]; then
     # shellcheck disable=SC2206
     QUAKE_ARGS+=($ENGINEOS_QUAKE_ARGS)
+  fi
+}
+
+append_cli_quake_args() {
+  if [[ "${#CLI_QUAKE_ARGS[@]}" -gt 0 ]]; then
+    QUAKE_ARGS+=("${CLI_QUAKE_ARGS[@]}")
   fi
 }
 
@@ -137,15 +144,38 @@ while [[ $# -gt 0 ]]; do
       ;;
     --help|-h)
       cat <<'HELP'
-Usage: run.sh [--smoke]
+Usage: run.sh [--smoke] [--window|--fullscreen] [--width N] [--height N]
 
 Run QuakeSpasm through the EngineOS wrapper.
 
 Environment:
   QUAKESPASM_BIN          explicit binary or command override
   QUAKESPASM_UPSTREAM_DIR upstream source/build directory
+  ENGINEOS_QUAKE_ARGS     extra QuakeSpasm arguments from config/env
 HELP
       exit 0
+      ;;
+    --window)
+      CLI_QUAKE_ARGS+=("-window")
+      ;;
+    --fullscreen)
+      CLI_QUAKE_ARGS+=("-fullscreen")
+      ;;
+    --width)
+      shift
+      [[ -n "${1:-}" && "$1" =~ ^[0-9]+$ ]] || {
+        printf 'quakespasm run: --width expects a positive integer\n' >&2
+        exit 2
+      }
+      CLI_QUAKE_ARGS+=("-width" "$1")
+      ;;
+    --height)
+      shift
+      [[ -n "${1:-}" && "$1" =~ ^[0-9]+$ ]] || {
+        printf 'quakespasm run: --height expects a positive integer\n' >&2
+        exit 2
+      }
+      CLI_QUAKE_ARGS+=("-height" "$1")
       ;;
     *)
       printf 'quakespasm run: unknown option: %s\n' "$1" >&2
@@ -193,9 +223,13 @@ resolve_binary() {
 resolve_binary
 load_quake_config
 append_configured_quake_args
+append_cli_quake_args
 
 if [[ -n "${ENGINEOS_QUAKE_SDL_AUDIODRIVER:-}" && -z "${SDL_AUDIODRIVER:-}" ]]; then
   export SDL_AUDIODRIVER="$ENGINEOS_QUAKE_SDL_AUDIODRIVER"
+fi
+if [[ -n "${WAYLAND_DISPLAY:-}" && -z "${SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR:-}" ]]; then
+  export SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR=0
 fi
 
 if [[ "$SMOKE" == true ]]; then
@@ -233,6 +267,8 @@ ensure_quake_defaults "$ID1_PATH"
 printf 'QuakeSpasm binary=%s source=%s\n' "$BIN" "$BIN_SOURCE" | log_stream
 printf 'QuakeSpasm basedir=%s\n' "$BASE_DIR" | log_stream
 printf 'QuakeSpasm audio_driver=%s\n' "${SDL_AUDIODRIVER:-auto}" | log_stream
+printf 'QuakeSpasm video_driver=%s wayland_display=%s gl_integration=sdl2-client compositor=engineos-shell\n' \
+  "${SDL_VIDEODRIVER:-auto}" "${WAYLAND_DISPLAY:-missing}" | log_stream
 if [[ "${#QUAKE_ARGS[@]}" -gt 0 ]]; then
   printf 'QuakeSpasm configured_args=%s\n' "${QUAKE_ARGS[*]}" | log_stream
 fi

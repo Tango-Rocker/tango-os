@@ -255,6 +255,7 @@ check_package_inputs() {
       require_file "packages/engineos-tools/files/usr/lib/systemd/system/engineos-observe-exporter.service"
       require_file "packages/engineos-tools/files/usr/lib/systemd/system/engineos-agent-dispatcher@.service"
       require_file "AGENTS.md"
+      require_file "agentd.md"
       require_file "BACKLOG.md"
       require_file "CURRENT_STATUS.md"
       require_file "ROADMAP.md"
@@ -324,6 +325,12 @@ check_package_inputs() {
           grep -F 'ExecStartPre=/usr/bin/chown root:wheel /run/engineos /var/log/engineos /var/lib/engineos' \
           "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null &&
           grep -F 'ExecStartPre=/usr/bin/chmod 2775 /run/engineos /var/log/engineos /var/lib/engineos' \
+          "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null &&
+          grep -F 'ExecStartPre=/usr/bin/touch /var/log/engineos/engine-runner.log /var/log/engineos/engine.log' \
+          "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null &&
+          grep -F 'ExecStartPre=/usr/bin/chown root:wheel /var/log/engineos/engine-runner.log /var/log/engineos/engine.log' \
+          "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null &&
+          grep -F 'ExecStartPre=/usr/bin/chmod 0664 /var/log/engineos/engine-runner.log /var/log/engineos/engine.log' \
           "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null; then
         ok "engineos-engine-runner service preserves EngineOS log/state permissions"
       else
@@ -686,7 +693,9 @@ check_iso() {
       fail "$profile_dir does not write EngineOS version/profile/login banner"
     fi
     if grep -F 'chown root:wheel /var/log/engineos /var/lib/engineos' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null &&
-        grep -F 'chmod 2775 /var/log/engineos /var/lib/engineos' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null; then
+        grep -F 'chmod 2775 /var/log/engineos /var/lib/engineos' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null &&
+        grep -F '/var/log/engineos/engine-runner.log' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null &&
+        grep -F 'chmod 0664' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null; then
       ok "$profile_dir live setup repairs EngineOS state/log permissions"
     else
       fail "$profile_dir live setup does not repair EngineOS state/log permissions"
@@ -759,7 +768,9 @@ check_iso() {
       fail "$profile_dir does not write EngineOS version/profile/login banner"
     fi
     if grep -F 'chown root:wheel /var/log/engineos /var/lib/engineos' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null &&
-        grep -F 'chmod 2775 /var/log/engineos /var/lib/engineos' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null; then
+        grep -F 'chmod 2775 /var/log/engineos /var/lib/engineos' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null &&
+        grep -F '/var/log/engineos/engine-runner.log' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null &&
+        grep -F 'chmod 0664' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null; then
       ok "$profile_dir live setup repairs EngineOS state/log permissions"
     else
       fail "$profile_dir live setup does not repair EngineOS state/log permissions"

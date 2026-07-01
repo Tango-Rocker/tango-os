@@ -57,6 +57,7 @@ Use this before opening broad docs.
 | Inspect agent profiles | [docs/agent-profiles.md](docs/agent-profiles.md) | `eos-agent profile list` |
 | Clean agent-pack drift | [.agents/skills/cleaner/SKILL.md](.agents/skills/cleaner/SKILL.md) | `eos-agent hygiene check` |
 | Queue or dispatch agent work | [docs/engineos-agent-pack.md](docs/engineos-agent-pack.md) | `eos-agent dispatch status` |
+| Write a session record | [agentd.md](agentd.md) | [docs/session-archive/](docs/session-archive/) |
 | First-deploy EngineDev setup | [docs/dev-instance.md](docs/dev-instance.md) | [CURRENT_STATUS.md](CURRENT_STATUS.md) |
 | Navigate code or check LSP | [.agents/skills/code-navigation/SKILL.md](.agents/skills/code-navigation/SKILL.md) | [docs/agent-lsp.md](docs/agent-lsp.md) |
 | Build packages or repo | [docs/agent-harness.md](docs/agent-harness.md) | `packages/*/PKGBUILD` |

@@ -15,6 +15,17 @@ health = "terminal-owner-log"
 input = "normal"
 capture = "none"
 
+[apps.terminal-secondary]
+slot = "terminal-secondary"
+role = "terminal-secondary"
+command = "eos-app launch terminal-secondary"
+package = "foot"
+app_ids = ["engineos-terminal-secondary", "terminal-secondary"]
+log = "terminal.log"
+health = "terminal-owner-log"
+input = "normal"
+capture = "none"
+
 [apps.cube]
 slot = "cube"
 role = "cube"

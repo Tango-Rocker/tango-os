@@ -138,6 +138,10 @@ For local observability of agent work:
 
 External collectors can scrape the EngineOS exporter when needed.
 
+Session records are not part of the default work loop. When a user asks for
+one, read [../agentd.md](../agentd.md) for the archive path and writing style,
+then write only the focused handoff record needed for that session.
+
 Project-status/docs MCP is intentionally removed. CLI work uses direct
 `eos-*` commands plus skills. Future EngineOS MCP work belongs only to
 read-only live runtime state after observability and role routing are proven.

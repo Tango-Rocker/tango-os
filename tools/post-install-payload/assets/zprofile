@@ -3,7 +3,6 @@ if [[ -o interactive ]]; then
   printf 'Try: eos-doctor --vm\n'
   if command -v eos-observe >/dev/null 2>&1; then
     eos-observe prompt-login --shell zsh || true
-    eval "$(eos-observe hook zsh 2>/dev/null)" || true
   fi
   if [[ -r "$HOME/Tang-OS/tools/scripts/update_check.sh" ]]; then
     bash "$HOME/Tang-OS/tools/scripts/update_check.sh" --init || true

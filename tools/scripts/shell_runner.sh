@@ -6,10 +6,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$SCRIPT_DIR/common.sh"
 
 ROOT="$(engineos_root)"
+CALLER_ENGINEOS_LOG_DIR="${ENGINEOS_LOG_DIR-}"
+CALLER_ENGINEOS_STATE_DIR="${ENGINEOS_STATE_DIR-}"
+CALLER_ENGINEOS_PROFILE="${ENGINEOS_PROFILE-}"
 
 if [[ -r /etc/engineos/profile.conf ]]; then
   # shellcheck disable=SC1091
   source /etc/engineos/profile.conf
+fi
+if [[ -n "$CALLER_ENGINEOS_LOG_DIR" ]]; then
+  ENGINEOS_LOG_DIR="$CALLER_ENGINEOS_LOG_DIR"
+fi
+if [[ -n "$CALLER_ENGINEOS_STATE_DIR" ]]; then
+  ENGINEOS_STATE_DIR="$CALLER_ENGINEOS_STATE_DIR"
+fi
+if [[ -n "$CALLER_ENGINEOS_PROFILE" ]]; then
+  ENGINEOS_PROFILE="$CALLER_ENGINEOS_PROFILE"
 fi
 
 if engineos_is_source_root "$ROOT"; then
@@ -21,7 +33,13 @@ else
 fi
 
 MODE="${1:-help}"
-SHELL_BIN="${ENGINEOS_SHELL_BIN:-engineos-shell}"
+if [[ -n "${ENGINEOS_SHELL_BIN:-}" ]]; then
+  SHELL_BIN="$ENGINEOS_SHELL_BIN"
+elif engineos_is_source_root "$ROOT" && [[ -x "$ROOT/build/shell/engineos-shell" ]]; then
+  SHELL_BIN="$ROOT/build/shell/engineos-shell"
+else
+  SHELL_BIN="engineos-shell"
+fi
 LOG_FILE="$LOG_DIR/shell.log"
 export ENGINEOS_STATE_DIR="$STATE_DIR"
 
@@ -54,6 +72,7 @@ manifest_command_or_default() {
 }
 
 DEFAULT_TERMINAL="${ENGINEOS_TERMINAL_SLOT_CMD:-$(manifest_command_or_default terminal "$EOS_APP_CMD_STRING launch terminal")}"
+DEFAULT_TERMINAL_SECONDARY="${ENGINEOS_TERMINAL_SECONDARY_SLOT_CMD:-$(manifest_command_or_default terminal-secondary "$EOS_APP_CMD_STRING launch terminal-secondary")}"
 DEFAULT_CUBE="${ENGINEOS_CUBE_CMD:-$(manifest_command_or_default cube "$EOS_APP_CMD_STRING launch cube")}"
 DEFAULT_ENGINE="${ENGINEOS_ENGINE_CMD:-$(manifest_command_or_default quake "$EOS_APP_CMD_STRING launch quake")}"
 
@@ -89,6 +108,7 @@ run_real_shell_if_available() {
     smoke_args+=(--smoke)
   fi
   launch_args+=(--terminal "$DEFAULT_TERMINAL")
+  launch_args+=(--terminal-secondary "$DEFAULT_TERMINAL_SECONDARY")
   launch_args+=(--cube "$DEFAULT_CUBE")
   launch_args+=(--engine "$DEFAULT_ENGINE")
   if [[ -n "${ENGINEOS_SHELL_STARTUP:-}" ]]; then

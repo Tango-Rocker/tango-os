@@ -5,6 +5,7 @@ sidecar. It has these canonical source layers:
 
 ```text
 AGENTS.md                         always-loaded repository rules
+agentd.md                         progressive-disclosure directives
 docs/agent-roles.md               role boundaries and handoff rules
 .agents/index.toml                machine-readable role/path index
 .agents/roles/*/AGENTS.md         role-local ownership instructions
@@ -17,6 +18,7 @@ tools/scripts/agent_metadata.sh   profile and wrapper generator
 ```text
 .codex/config.toml
 .codex/hooks.example.json
+agentd.md
 docs/agent-roles.md
 docs/agent-profiles.md
 .agents/index.toml

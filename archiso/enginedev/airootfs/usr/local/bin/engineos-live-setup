@@ -5,6 +5,36 @@ install -d -m 2775 -o root -g wheel /var/log/engineos
 install -d -m 2775 -o root -g wheel /var/lib/engineos
 chown root:wheel /var/log/engineos /var/lib/engineos
 chmod 2775 /var/log/engineos /var/lib/engineos
+touch \
+  /var/log/engineos/app.log \
+  /var/log/engineos/cube.log \
+  /var/log/engineos/doctor-firstboot.log \
+  /var/log/engineos/engine-runner.log \
+  /var/log/engineos/engine.log \
+  /var/log/engineos/live-setup.log \
+  /var/log/engineos/runtime-start.log \
+  /var/log/engineos/shell.log \
+  /var/log/engineos/terminal.log
+chown root:wheel \
+  /var/log/engineos/app.log \
+  /var/log/engineos/cube.log \
+  /var/log/engineos/doctor-firstboot.log \
+  /var/log/engineos/engine-runner.log \
+  /var/log/engineos/engine.log \
+  /var/log/engineos/live-setup.log \
+  /var/log/engineos/runtime-start.log \
+  /var/log/engineos/shell.log \
+  /var/log/engineos/terminal.log
+chmod 0664 \
+  /var/log/engineos/app.log \
+  /var/log/engineos/cube.log \
+  /var/log/engineos/doctor-firstboot.log \
+  /var/log/engineos/engine-runner.log \
+  /var/log/engineos/engine.log \
+  /var/log/engineos/live-setup.log \
+  /var/log/engineos/runtime-start.log \
+  /var/log/engineos/shell.log \
+  /var/log/engineos/terminal.log
 
 for group in wheel input audio video render; do
   groupadd -f "$group"

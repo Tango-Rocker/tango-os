@@ -35,12 +35,20 @@ xdg_shell_protocol_header = custom_target(
   output: 'xdg-shell-protocol.h',
   command: [wayland_scanner, 'server-header', '@INPUT@', '@OUTPUT@'],
 )
+pointer_constraints_xml = wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir') / 'unstable/pointer-constraints/pointer-constraints-unstable-v1.xml'
+pointer_constraints_protocol_header = custom_target(
+  'pointer-constraints-protocol-header',
+  input: pointer_constraints_xml,
+  output: 'pointer-constraints-unstable-v1-protocol.h',
+  command: [wayland_scanner, 'server-header', '@INPUT@', '@OUTPUT@'],
+)
 
 executable(
   'engineos-shell',
   [
     'src/engineos-shell.c',
     xdg_shell_protocol_header,
+    pointer_constraints_protocol_header,
   ],
   c_args: ['-DWLR_USE_UNSTABLE'],
   dependencies: [
