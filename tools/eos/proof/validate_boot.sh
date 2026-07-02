@@ -63,7 +63,7 @@ service_check() {
 enabled_service_check() {
   local unit="$1"
   if ! have_cmd systemctl; then
-    warn "systemctl unavailable; cannot check $unit"
+    fail "systemctl unavailable; cannot check $unit"
     return
   fi
   if systemctl is-enabled "$unit" >/dev/null 2>&1; then
@@ -401,7 +401,7 @@ fi
 if [[ -d "$LOG_DIR" ]]; then
   ok "$LOG_DIR exists"
 else
-  warn "$LOG_DIR missing"
+  fail "$LOG_DIR missing"
 fi
 
 if [[ "$MODE" == "runtime" || "$MODE" == "bare-metal" ]]; then

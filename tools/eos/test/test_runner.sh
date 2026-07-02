@@ -2969,6 +2969,17 @@ FAKE
   if PATH="$fake_bin:$PATH" \
       ENGINEOS_RUNTIME_CONF="$runtime_conf" \
       ENGINEOS_APPS_MANIFEST="$apps_manifest" \
+      ENGINEOS_LOG_DIR="$tmp_dir/missing-logs" \
+      ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
+      "$PROOF_DIR/validate_boot.sh" --runtime >"$out" 2>&1; then
+    die "runtime boot validation accepted missing EngineOS log directory"
+  fi
+  grep -F "$tmp_dir/missing-logs missing" "$out" >/dev/null ||
+    die "runtime boot validation did not expose missing EngineOS log directory"
+
+  if PATH="$fake_bin:$PATH" \
+      ENGINEOS_RUNTIME_CONF="$runtime_conf" \
+      ENGINEOS_APPS_MANIFEST="$apps_manifest" \
       ENGINEOS_LOG_DIR="$log_dir" \
       ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
       ENGINEOS_FAKE_MISSING_PACKAGE="engineos-cube" \
