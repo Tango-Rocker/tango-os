@@ -2,7 +2,6 @@
 import argparse
 import json
 import os
-import signal
 import socket
 import stat
 import subprocess
@@ -288,24 +287,6 @@ def wait_then_hide(pid: int, owner: str, sock_path: str) -> int:
     return 0
 
 
-def hold_view_until_closed(owner: str, sock_path: str) -> int:
-    done = False
-
-    def stop(_signum: int, _frame: object) -> None:
-        nonlocal done
-        done = True
-
-    signal.signal(signal.SIGTERM, stop)
-    signal.signal(signal.SIGINT, stop)
-    parent_pid = mc_ancestor_pid() or os.getppid()
-    while not done and process_exists(parent_pid):
-        time.sleep(0.25)
-    _, ipc_error = send_request({"version": 1, "op": "hide", "owner": owner}, sock_path)
-    if ipc_error is not None:
-        return error(ipc_error, 1)
-    return 0
-
-
 def start_parent_watcher(parent_pid: int, owner: str, sock_path: str) -> None:
     subprocess.Popen(
         [
@@ -350,9 +331,7 @@ def main(argv: list[str]) -> int:
         print("engine-image-preview: shell preview IPC ready", file=sys.stderr)
         if caps:
             print("engine-image-preview: capabilities=" + ",".join(map(str, caps)), file=sys.stderr)
-    elif args.view and parent_looks_like_mc():
-        return hold_view_until_closed(str(request["owner"]), sock_path)
-    elif args.open and parent_looks_like_mc():
+    elif (args.view or args.open) and parent_looks_like_mc():
         start_parent_watcher(mc_ancestor_pid() or os.getppid(), str(request["owner"]), sock_path)
     return 0
 

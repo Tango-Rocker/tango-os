@@ -2681,6 +2681,13 @@ static bool handle_keybinding(struct engineos_shell_server *server,
 			return true;
 		}
 		return false;
+	case XKB_KEY_F3:
+		if (modifiers == 0 && server->preview.scene_buffer != NULL) {
+			wlr_log(WLR_INFO, "keybinding f3: close image preview");
+			hide_image_preview(server, "f3-close");
+			return true;
+		}
+		break;
 	default:
 		break;
 	}
@@ -2767,8 +2774,7 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
 	uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->keyboard);
 	bool handled = false;
 
-	if (((modifiers & WLR_MODIFIER_ALT) || (modifiers & WLR_MODIFIER_CTRL)) &&
-			event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+	if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
 		for (int i = 0; i < nsyms; i++) {
 			handled = handle_keybinding(server, syms[i], modifiers) || handled;
 		}
