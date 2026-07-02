@@ -2,10 +2,12 @@
 import argparse
 import json
 import os
+import signal
 import socket
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -26,6 +28,98 @@ def preview_socket_path() -> str:
     if runtime_dir:
         return os.path.join(runtime_dir, "engineos", "preview.sock")
     return "/tmp/engineos/preview.sock"
+
+
+def shell_state_path() -> Path:
+    state_dir = os.environ.get("ENGINEOS_STATE_DIR")
+    if state_dir:
+        return Path(state_dir) / "shell-state.json"
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime_dir:
+        return Path(runtime_dir) / "engineos" / "shell-state.json"
+    return Path("/tmp/engineos/shell-state.json")
+
+
+def shell_slot() -> str | None:
+    env_slot = os.environ.get("ENGINEOS_TERMINAL_ROLE") or os.environ.get("ENGINEOS_PREVIEW_SLOT")
+    if env_slot in {"terminal", "terminal-secondary"}:
+        return env_slot
+    try:
+        state = json.loads(shell_state_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    active = state.get("active_slot")
+    if active in {"terminal", "terminal-secondary"}:
+        return str(active)
+    return None
+
+
+def owner_token() -> str:
+    override = os.environ.get("ENGINEOS_PREVIEW_OWNER")
+    if override:
+        return override
+    pane = os.environ.get("TMUX_PANE") or "no-pane"
+    return f"{os.getppid()}:{os.getpid()}:{pane}"
+
+
+def process_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def parent_looks_like_mc() -> bool:
+    if mc_ancestor_pid() is not None:
+        return True
+    if os.environ.get("ENGINEOS_PREVIEW_HOLD") == "1":
+        return True
+    try:
+        command = Path(f"/proc/{os.getppid()}/comm").read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    return command == "mc"
+
+
+def parent_pid(pid: int) -> int | None:
+    try:
+        stat_text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    end = stat_text.rfind(")")
+    if end < 0:
+        return None
+    fields = stat_text[end + 2 :].split()
+    if len(fields) < 2:
+        return None
+    try:
+        return int(fields[1])
+    except ValueError:
+        return None
+
+
+def process_comm(pid: int) -> str | None:
+    try:
+        return Path(f"/proc/{pid}/comm").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
+def mc_ancestor_pid() -> int | None:
+    pid = os.getppid()
+    seen: set[int] = set()
+    while pid > 1 and pid not in seen:
+        seen.add(pid)
+        if process_comm(pid) == "mc":
+            return pid
+        next_pid = parent_pid(pid)
+        if next_pid is None:
+            return None
+        pid = next_pid
+    return None
 
 
 def detect_image_kind(path: Path) -> str | None:
@@ -107,7 +201,10 @@ def build_request(args: argparse.Namespace) -> tuple[dict[str, object] | None, s
     if args.ping:
         return {"version": 1, "op": "ping"}, None
     if args.hide:
-        return {"version": 1, "op": "hide"}, None
+        request: dict[str, object] = {"version": 1, "op": "hide"}
+        if args.owner:
+            request["owner"] = args.owner
+        return request, None
 
     raw_path = args.view or args.open
     if raw_path is None:
@@ -122,7 +219,11 @@ def build_request(args: argparse.Namespace) -> tuple[dict[str, object] | None, s
         "path": str(path),
         "anchor": "active-pane",
         "fit": "contain",
+        "owner": args.owner or owner_token(),
     }
+    slot = shell_slot()
+    if slot is not None:
+        request["slot"] = slot
     bounds = tmux_bounds()
     if bounds is not None:
         request["bounds"] = bounds
@@ -168,6 +269,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     action.add_argument("--hide", action="store_true", help="hide the active preview")
     action.add_argument("--ping", action="store_true", help="check shell preview IPC")
     parser.add_argument("--socket", help="override the shell preview socket path")
+    parser.add_argument("--owner", help=argparse.SUPPRESS)
+    parser.add_argument("--wait-pid", type=int, help=argparse.SUPPRESS)
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -176,8 +279,61 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def wait_then_hide(pid: int, owner: str, sock_path: str) -> int:
+    while process_exists(pid):
+        time.sleep(0.25)
+    _, ipc_error = send_request({"version": 1, "op": "hide", "owner": owner}, sock_path)
+    if ipc_error is not None:
+        return error(ipc_error, 1)
+    return 0
+
+
+def hold_view_until_closed(owner: str, sock_path: str) -> int:
+    done = False
+
+    def stop(_signum: int, _frame: object) -> None:
+        nonlocal done
+        done = True
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    parent_pid = mc_ancestor_pid() or os.getppid()
+    while not done and process_exists(parent_pid):
+        time.sleep(0.25)
+    _, ipc_error = send_request({"version": 1, "op": "hide", "owner": owner}, sock_path)
+    if ipc_error is not None:
+        return error(ipc_error, 1)
+    return 0
+
+
+def start_parent_watcher(parent_pid: int, owner: str, sock_path: str) -> None:
+    subprocess.Popen(
+        [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--hide",
+            "--owner",
+            owner,
+            "--wait-pid",
+            str(parent_pid),
+            "--socket",
+            sock_path,
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    sock_path = args.socket or preview_socket_path()
+    if args.wait_pid is not None:
+        if not args.owner:
+            return error("--wait-pid requires --owner", 2)
+        return wait_then_hide(args.wait_pid, args.owner, sock_path)
+
     request, request_error = build_request(args)
     if request_error is not None or request is None:
         return error(request_error or "failed to build request", 2)
@@ -186,7 +342,7 @@ def main(argv: list[str]) -> int:
         print(json.dumps(request, sort_keys=True, separators=(",", ":")))
         return 0
 
-    response, ipc_error = send_request(request, args.socket or preview_socket_path())
+    response, ipc_error = send_request(request, sock_path)
     if ipc_error is not None:
         return error(ipc_error, 1)
     if args.ping:
@@ -194,6 +350,10 @@ def main(argv: list[str]) -> int:
         print("engine-image-preview: shell preview IPC ready", file=sys.stderr)
         if caps:
             print("engine-image-preview: capabilities=" + ",".join(map(str, caps)), file=sys.stderr)
+    elif args.view and parent_looks_like_mc():
+        return hold_view_until_closed(str(request["owner"]), sock_path)
+    elif args.open and parent_looks_like_mc():
+        start_parent_watcher(mc_ancestor_pid() or os.getppid(), str(request["owner"]), sock_path)
     return 0
 
 

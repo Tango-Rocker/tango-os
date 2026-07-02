@@ -956,10 +956,17 @@ run_image_preview() {
   local out="$tmp_dir/out.txt"
   local err="$tmp_dir/err.txt"
   local png="$tmp_dir/sample.png"
+  local jpg="$tmp_dir/sample.jpg"
   local sock="$tmp_dir/preview.sock"
   local preview_bin="$ROOT/tools/engineos/engine-image-preview"
+  local shell_bin="$ROOT/build/shell/engineos-shell"
+  local shell_pid=""
 
   cleanup_image_preview() {
+    if [[ -n "$shell_pid" ]]; then
+      kill "$shell_pid" >/dev/null 2>&1 || true
+      wait "$shell_pid" >/dev/null 2>&1 || true
+    fi
     rm -rf "$tmp_dir"
   }
   trap cleanup_image_preview RETURN
@@ -970,21 +977,29 @@ run_image_preview() {
   fi
   [[ -x "$preview_bin" ]] || die "engine-image-preview helper is not executable"
 
-  python - "$png" <<'PY'
+  python - "$png" "$jpg" <<'PY'
 import base64
 import pathlib
 import sys
 pathlib.Path(sys.argv[1]).write_bytes(base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lw9Y4QAAAABJRU5ErkJggg=="
+    "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADAQMAAACOOjyFAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGUExURSJmzP///8VU6LMAAAABYktHRAH/Ai3eAAAAB3RJTUUH6gcCFi0VNn7nGQAAACV0RVh0ZGF0ZTpjcmVhdGUAMjAyNi0wNy0wMlQyMjo0NToyMSswMDowMIBjV7MAAAAldEVYdGRhdGU6bW9kaWZ5ADIwMjYtMDctMDJUMjI6NDU6MjErMDA6MDDxPu8PAAAAKHRFWHRkYXRlOnRpbWVzdGFtcAAyMDI2LTA3LTAyVDIyOjQ1OjIxKzAwOjAwpivO0AAAAAtJREFUCNdjYAABAAAGAAFm9MlsAAAAAElFTkSuQmCC"
+))
+pathlib.Path(sys.argv[2]).write_bytes(base64.b64decode(
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAADAAQDAREAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAAB//EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAVAQEBAAAAAAAAAAAAAAAAAAAHCP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/ACJUoPf/2Q=="
 ))
 PY
 
   PATH="$fake_bin:$PATH" \
+    ENGINEOS_PREVIEW_SLOT=terminal-secondary \
     "$preview_bin" --view "$png" --dry-run >"$out"
   grep -F '"op":"show"' "$out" >/dev/null ||
     die "image preview dry-run did not emit show op"
   grep -F '"anchor":"active-pane"' "$out" >/dev/null ||
     die "image preview dry-run did not request active pane anchor"
+  grep -F '"slot":"terminal-secondary"' "$out" >/dev/null ||
+    die "image preview dry-run did not include terminal slot"
+  grep -F '"owner":' "$out" >/dev/null ||
+    die "image preview dry-run did not include owner token"
   grep -F "\"path\":\"$png\"" "$out" >/dev/null ||
     die "image preview dry-run did not include resolved path"
 
@@ -1058,6 +1073,37 @@ PY
   wait "$server_pid"
   grep -F 'shell preview IPC ready' "$err" >/dev/null ||
     die "image preview ping success did not report readiness"
+
+  if [[ -x "$shell_bin" ]]; then
+    local shell_state="$tmp_dir/shell-state"
+    local shell_log="$tmp_dir/shell.log"
+    ENGINEOS_STATE_DIR="$shell_state" \
+      WLR_BACKENDS=headless \
+      WLR_HEADLESS_OUTPUTS=1 \
+      WLR_RENDERER_ALLOW_SOFTWARE=1 \
+      "$shell_bin" --headless --smoke-ms 3000 >"$shell_log" 2>&1 &
+    shell_pid=$!
+    for _ in {1..100}; do
+      [[ -S "$shell_state/preview.sock" ]] && break
+      sleep 0.03
+    done
+    [[ -S "$shell_state/preview.sock" ]] ||
+      die "compiled shell did not create preview IPC socket"
+
+    ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --ping >"$out" 2>"$err"
+    ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --view "$png" >"$out" 2>"$err"
+    ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --view "$jpg" >"$out" 2>"$err"
+    ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --hide >"$out" 2>"$err"
+    wait "$shell_pid"
+    shell_pid=""
+
+    grep -F "image preview shown path=$png" "$shell_log" | grep -F "image=4x3" >/dev/null ||
+      die "compiled shell did not decode and show PNG preview"
+    grep -F "image preview shown path=$jpg" "$shell_log" | grep -F "image=4x3" >/dev/null ||
+      die "compiled shell did not decode and show JPEG preview"
+    grep -F "image preview hidden reason=ipc-hide" "$shell_log" >/dev/null ||
+      die "compiled shell did not hide image preview"
+  fi
 
   printf 'image preview contract test passed\n'
 }

@@ -618,7 +618,8 @@ run_launch() {
       prepare_client_env
       write_app_state "$app" "launch-requested" "" "$@"
       log_line "launch app=terminal owner=engineos-shell display=${WAYLAND_DISPLAY:-missing}"
-      exec "$SCRIPT_DIR/terminal_launcher.sh" -- "$@"
+      ENGINEOS_TERMINAL_ROLE=terminal \
+        exec "$SCRIPT_DIR/terminal_launcher.sh" -- "$@"
       ;;
     terminal-secondary)
       require_shell_display "$app"
@@ -626,6 +627,7 @@ run_launch() {
       write_app_state "$app" "launch-requested" "" "$@"
       log_line "launch app=terminal-secondary owner=engineos-shell display=${WAYLAND_DISPLAY:-missing}"
       ENGINEOS_TERMINAL_APP_ID="${ENGINEOS_TERMINAL_APP_ID:-engineos-terminal-secondary}" \
+        ENGINEOS_TERMINAL_ROLE=terminal-secondary \
         ENGINEOS_TERMINAL_TITLE="${ENGINEOS_TERMINAL_TITLE:-EngineOS Side}" \
         ENGINEOS_TERMINAL_SESSION_CMD="${ENGINEOS_TERMINAL_SECONDARY_SESSION_CMD:-tmux new -A -s engineos-side}" \
         exec "$SCRIPT_DIR/terminal_launcher.sh" -- "$@"
