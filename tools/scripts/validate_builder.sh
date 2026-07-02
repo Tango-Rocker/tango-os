@@ -70,7 +70,7 @@ check_builder_filesystem() {
   if have_cmd findmnt; then
     fstype="$(findmnt -no FSTYPE -T "$ROOT" 2>/dev/null || true)"
     if [[ -z "$fstype" ]]; then
-      warn "could not determine filesystem type for $ROOT"
+      fail "could not determine filesystem type for $ROOT"
       return
     fi
     case "$fstype" in
@@ -81,11 +81,11 @@ check_builder_filesystem() {
         fail "builder repo is on $fstype; move it to a Linux filesystem such as /srv/engineos"
         ;;
       *)
-        warn "builder filesystem is unrecognized: $fstype"
+        fail "builder filesystem is unrecognized: $fstype"
         ;;
     esac
   else
-    warn "findmnt unavailable; cannot verify builder filesystem"
+    fail "findmnt unavailable; cannot verify builder filesystem"
   fi
 }
 
@@ -141,7 +141,7 @@ check_builder_resources() {
       warn "builder swap is low: $(kb_to_gib_label "$swap_kb"); use at least 4 GiB swap"
     fi
   else
-    warn "/proc/meminfo unavailable; cannot check RAM/swap"
+    fail "/proc/meminfo unavailable; cannot check RAM/swap"
   fi
 
   if have_cmd nproc; then
@@ -160,8 +160,10 @@ check_builder_resources() {
     elif [[ -n "$tmp_size" ]]; then
       warn "/tmp build space is below 8 GiB; eos-build iso will try sudo remount,size=8G"
     else
-      warn "could not determine /tmp size"
+      fail "could not determine /tmp size"
     fi
+  else
+    fail "findmnt unavailable; cannot check /tmp build space"
   fi
 
   if grep -E '"-processors"[[:space:]]+"[1-4]"' "$ROOT/archiso/enginedev/profiledef.sh" >/dev/null 2>&1; then

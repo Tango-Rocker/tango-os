@@ -56,13 +56,6 @@ package_artifact_exists() {
   local name
   local version
 
-  if ! have_cmd pacman; then
-    find "$REPO_DIR" -maxdepth 1 -type f \
-      \( -name "$pkg-*.pkg.tar.zst" -o -name "$pkg-*.pkg.tar.xz" -o -name "$pkg-*.pkg.tar.gz" \) \
-      -print -quit 2>/dev/null | grep -q .
-    return
-  fi
-
   while IFS= read -r artifact; do
     read -r name version < <(pacman -Qp "$artifact" 2>/dev/null || true)
     if [[ "$name" == "$pkg" && -n "${version:-}" ]]; then
@@ -193,6 +186,14 @@ fi
 
 check_repo_dir_matches_profiles
 
+for tool in pacman vercmp bsdtar; do
+  if have_cmd "$tool"; then
+    ok "$tool available for repo validation"
+  else
+    fail "$tool unavailable; cannot validate package artifacts and repo database"
+  fi
+done
+
 if [[ -d "$REPO_DIR" ]]; then
   ok "repo directory exists"
 else
@@ -235,18 +236,10 @@ if repo_db_exists && have_cmd pacman && have_cmd vercmp && have_cmd bsdtar; then
       fail "repo database has stale package entry: $pkg db=$db_version latest=$artifact_version"
     fi
   done < <(engineos_packages)
-else
-  warn "cannot compare repo database versions; pacman/vercmp/bsdtar unavailable"
 fi
 
 profile_uses_engineos_repo enginedev
 profile_uses_engineos_repo engineruntime
-
-if have_cmd pacman; then
-  ok "pacman available for repo consumers"
-else
-  warn "pacman unavailable; cannot query local repo from this environment"
-fi
 
 printf 'Repo validation summary: %s failure(s), %s warning(s)\n' "$FAILURES" "$WARNINGS"
 [[ "$FAILURES" -eq 0 ]]

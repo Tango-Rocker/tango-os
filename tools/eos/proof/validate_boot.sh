@@ -50,7 +50,7 @@ ok() {
 service_check() {
   local unit="$1"
   if ! have_cmd systemctl; then
-    warn "systemctl unavailable; cannot check $unit"
+    fail "systemctl unavailable; cannot check $unit"
     return
   fi
   if systemctl is-enabled "$unit" >/dev/null 2>&1; then

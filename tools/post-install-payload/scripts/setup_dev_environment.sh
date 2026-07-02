@@ -168,8 +168,7 @@ install_packages() {
   }
 
   if ! have_cmd pacman; then
-    log "pacman not available; skipping package install"
-    return
+    die "pacman not available; cannot install required packages without --skip-pacman"
   fi
 
   local packages=(
@@ -273,7 +272,7 @@ configure_tmux() {
     as_root install -Dm0755 "$PAYLOAD/scripts/engineos-tmux-pane-sync" /usr/local/bin/engineos-tmux-pane-sync
     log "installed: /usr/local/bin/engineos-tmux-pane-sync"
   else
-    log "WARN tmux pane sync helper payload missing"
+    die "tmux pane sync helper payload missing"
   fi
 }
 
@@ -325,8 +324,7 @@ configure_docker() {
 configure_dev_shell_autostart() {
   if [[ ! -f "$PAYLOAD/assets/systemd/engineos-dev-shell.service" ||
       ! -f "$PAYLOAD/scripts/engineos-dev-shell-start" ]]; then
-    log "WARN dev shell autostart payload assets missing"
-    return
+    die "dev shell autostart payload assets missing"
   fi
 
   as_root install -Dm0755 "$PAYLOAD/scripts/engineos-dev-shell-start" /usr/local/bin/engineos-dev-shell-start
@@ -334,16 +332,13 @@ configure_dev_shell_autostart() {
   log "installed dev shell autostart unit"
 
   if ! have_cmd systemctl; then
-    log "WARN systemctl unavailable; cannot enable dev shell autostart"
-    return
+    die "systemctl unavailable; cannot enable dev shell autostart"
   fi
 
   best_effort "reload systemd unit files" as_root systemctl daemon-reload
 
   if ! have_cmd engineos-shell; then
-    log "WARN engineos-shell unavailable; dev shell autostart installed but not enabled"
-    log "WARN rebuild EngineDev ISO or install engineos-shell from the local repo, then run: sudo systemctl enable --now engineos-dev-shell.service"
-    return
+    die "engineos-shell unavailable; dev shell autostart installed but not enabled"
   fi
 
   best_effort "enable engineos-dev-shell.service" as_root systemctl enable engineos-dev-shell.service
