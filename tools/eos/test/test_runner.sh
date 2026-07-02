@@ -2355,6 +2355,8 @@ run_proof() {
     die "launchpad proof did not validate app manifest"
   grep -F 'app=(terminal|cube|quake)' "$tmp_dir/launchpad.txt" >/dev/null ||
     die "launchpad proof did not check all app ownership markers"
+  grep -F "grep -F 'view mapped role=engine'" "$tmp_dir/launchpad.txt" >/dev/null ||
+    die "launchpad proof did not require a mapped engine slot"
 
   local launchpad_logs="$tmp_dir/launchpad-logs"
   local launchpad_state="$tmp_dir/launchpad-state"
@@ -2402,10 +2404,19 @@ JSON
     printf 'result=smoke-ok\n'
   } >"$launchpad_logs/cube.log"
   printf 'Quake assets missing: id1/pak0.pak was not found.\n' >"$launchpad_logs/engine.log"
+  if ENGINEOS_LOG_DIR="$launchpad_logs" ENGINEOS_STATE_DIR="$launchpad_state" \
+      "$PROOF_DIR/proof.sh" launchpad --runtime >"$tmp_dir/launchpad-real-missing-engine.txt" 2>&1; then
+    die "launchpad proof accepted missing Quake assets as engine proof"
+  fi
+  grep -F 'Quake asset/runtime guidance is not launchpad proof' "$tmp_dir/launchpad-real-missing-engine.txt" >/dev/null ||
+    die "launchpad proof failure did not explain missing engine mapping"
+
+  printf '[2026-01-01T00:00:09Z] view mapped role=engine title=QuakeSpasm app_id=quakespasm mapped_total=2\n' >>"$launchpad_logs/shell.log"
+  printf 'QuakeSpasm basedir=%s\n' "$tmp_dir/home/.local/share/engineos/quake" >"$launchpad_logs/engine.log"
   ENGINEOS_LOG_DIR="$launchpad_logs" ENGINEOS_STATE_DIR="$launchpad_state" \
     "$PROOF_DIR/proof.sh" launchpad --runtime >"$tmp_dir/launchpad-real.txt"
   grep -F 'Launchpad proof runner completed' "$tmp_dir/launchpad-real.txt" >/dev/null ||
-    die "launchpad proof did not pass with fixture logs"
+    die "launchpad proof did not pass with mapped engine fixture logs"
 
   if ! find "$tmp_dir/logs" -maxdepth 1 -type f -name 'proof-booted-iso-*.log' -size +0c -print -quit | grep -q .; then
     die "proof dry-run did not create non-empty proof logs"

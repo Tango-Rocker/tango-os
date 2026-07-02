@@ -626,7 +626,7 @@ proof_launchpad() {
     run_step "launchpad launch actions dry-run" printf '%s\n' "grep -E 'launch action label=bootstrap-(terminal|cube|engine)' $shell_log"
     run_step "launchpad app ownership dry-run" printf '%s\n' "grep -E 'app launch app=(terminal|cube|quake) owner=engineos-shell' $app_log"
     run_step "cube renderer dry-run" printf '%s\n' "grep -E 'gl_renderer=|frames=' $cube_log"
-    run_step "engine slot outcome dry-run" printf '%s\n' "grep -E 'view mapped role=engine|role=engine.*process-exited-before-map|Quake assets missing|QuakeSpasm basedir=' $shell_log $engine_log"
+    run_step "engine slot mapped dry-run" printf '%s\n' "grep -F 'view mapped role=engine' $shell_log"
     if [[ "$mode" == "bare-metal" ]]; then
       run_step "bare-metal output validation dry-run" printf '%s\n' "eos-outputs validate --single"
     fi
@@ -675,19 +675,9 @@ proof_launchpad() {
   grep -F 'frames=' "$cube_log" >/dev/null ||
     die "cube log does not show rendered frame evidence"
 
-  if grep -F 'view mapped role=engine' "$shell_log" >/dev/null; then
-    printf 'Engine slot mapped in shell log.\n'
-  elif grep -E 'role=engine.*process-exited-before-map|role=engine.*mapped=false' "$shell_log" >/dev/null; then
-    printf 'Engine slot did not map; shell log has launch lifecycle failure evidence.\n'
-    grep -F 'launchpad active slot=cube' "$shell_log" >/dev/null ||
-      die "cube did not remain the active slot while engine was unavailable"
-  elif [[ -r "$engine_log" ]] && grep -E 'Quake assets missing|QuakeSpasm basedir=' "$engine_log" >/dev/null; then
-    printf 'Engine slot did not map; engine log has Quake asset/runtime outcome evidence.\n'
-    grep -F 'launchpad active slot=cube' "$shell_log" >/dev/null ||
-      die "cube did not remain the active slot while engine was unavailable"
-  else
-    die "engine slot outcome is inconclusive: no mapped engine view and no Quake asset/runtime evidence"
-  fi
+  grep -F 'view mapped role=engine' "$shell_log" >/dev/null ||
+    die "engine slot did not map; Quake asset/runtime guidance is not launchpad proof"
+  printf 'Engine slot mapped in shell log.\n'
 
   if [[ "$mode" == "bare-metal" ]]; then
     run_step "bare-metal output validation" "$outputs_cmd" validate --single
