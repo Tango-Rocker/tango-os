@@ -2681,6 +2681,12 @@ run_post_first_deploy() {
     die "post-first-deploy payload setup script is not executable"
   [[ -x "$payload_dir/scripts/engineos-dev-shell-start" ]] ||
     die "post-first-deploy payload dev shell start script is not executable"
+  grep -F 'refresh_wayland_session' "$payload_dir/scripts/engineos-dev-shell-start" >/dev/null ||
+    die "post-first-deploy dev shell start does not refresh stale Wayland state"
+  grep -F 'pgrep -u "$(id -u)" -x engineos-shell' "$payload_dir/scripts/engineos-dev-shell-start" >/dev/null ||
+    die "post-first-deploy dev shell start does not terminate same-user stale shells"
+  grep -F 'wayland-*' "$payload_dir/scripts/engineos-dev-shell-start" >/dev/null ||
+    die "post-first-deploy dev shell start does not clear stale Wayland sockets"
   grep -F 'engineos-tmux-pane-sync' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not install tmux pane sync helper"
   [[ -f "$payload_dir/assets/systemd/engineos-dev-shell.service" ]] ||

@@ -5,6 +5,8 @@ LOG_DIR="${ENGINEOS_LOG_DIR:-/var/log/engineos}"
 LOG_FILE="$LOG_DIR/dev-shell-start.log"
 ENGINEOS_RUNTIME_CMD="${ENGINEOS_RUNTIME_CMD:-eos-runtime}"
 CMDLINE_FILE="${ENGINEOS_PROC_CMDLINE:-/proc/cmdline}"
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+REFRESH_WAYLAND_ON_START="${ENGINEOS_REFRESH_WAYLAND_ON_START:-true}"
 
 mkdir -p "$LOG_DIR"
 
@@ -17,6 +19,53 @@ if grep -qw 'engineos.nodevshell' "$CMDLINE_FILE" 2>/dev/null; then
   exit 0
 fi
 
+refresh_wayland_session() {
+  local pid
+  local stale_pids=()
+  local waited
+  local socket
+
+  if [[ "$REFRESH_WAYLAND_ON_START" != "true" ]]; then
+    log "wayland refresh skipped reason=disabled"
+    return
+  fi
+
+  while IFS= read -r pid; do
+    [[ -n "$pid" && "$pid" != "$$" ]] || continue
+    stale_pids+=("$pid")
+  done < <(pgrep -u "$(id -u)" -x engineos-shell 2>/dev/null || true)
+
+  if (( ${#stale_pids[@]} > 0 )); then
+    log "terminating stale engineos-shell processes pids=${stale_pids[*]}"
+    kill -TERM "${stale_pids[@]}" 2>/dev/null || true
+    for waited in {1..25}; do
+      local alive=()
+      for pid in "${stale_pids[@]}"; do
+        kill -0 "$pid" 2>/dev/null && alive+=("$pid")
+      done
+      (( ${#alive[@]} == 0 )) && break
+      sleep 0.2
+    done
+    local stubborn=()
+    for pid in "${stale_pids[@]}"; do
+      kill -0 "$pid" 2>/dev/null && stubborn+=("$pid")
+    done
+    if (( ${#stubborn[@]} > 0 )); then
+      log "killing stale engineos-shell processes pids=${stubborn[*]}"
+      kill -KILL "${stubborn[@]}" 2>/dev/null || true
+    fi
+  fi
+
+  if [[ -d "$RUNTIME_DIR" ]]; then
+    for socket in "$RUNTIME_DIR"/wayland-* "$RUNTIME_DIR"/wayland-*.lock; do
+      [[ -e "$socket" ]] || continue
+      rm -f "$socket"
+    done
+    log "refreshed wayland runtime dir=$RUNTIME_DIR"
+  fi
+}
+
+refresh_wayland_session
 log "starting EngineDev shell mode=--tty bootstrap=${ENGINEOS_SHELL_BOOTSTRAP:-terminal}"
 
 if "$ENGINEOS_RUNTIME_CMD" shell --tty >>"$LOG_FILE" 2>&1; then
