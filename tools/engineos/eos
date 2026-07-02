@@ -52,7 +52,7 @@ EngineOS split command dispatcher.
 
 Commands:
   eos-doctor, eos-logs, eos-crash-bundle
-  eos-build, eos-package, eos-lint, eos-preflight, eos-release, eos-artifacts
+  eos-build, eos-package, eos-lint, eos-preflight, eos-ci, eos-release, eos-artifacts
   eos-builder, eos-deploy, eos-install, eos-update
   eos-app, eos-terminal, eos-outputs, eos-runtime, eos-assets, eos-capture, eos-input
   eos-proof, eos-validate, eos-vm, eos-usb, eos-secureboot
@@ -330,6 +330,9 @@ cmd_agent() {
     profile|profiles)
       exec_script agent_profile.sh "$@"
       ;;
+    capabilities|capability)
+      exec_script agent_profile.sh capabilities "$@"
+      ;;
     hygiene)
       exec_script agent_hygiene.sh "$@"
       ;;
@@ -344,6 +347,7 @@ cmd_agent() {
 Usage:
   eos-agent route --dry-run "<request>"
   eos-agent profile list|show <role>
+  eos-agent capabilities
   eos-agent hygiene check [--json] [--fix-plan] [--enqueue]
   eos-agent queue add|list|show|cancel
   eos-agent dispatch drain|status|wake
@@ -465,6 +469,10 @@ main() {
     eos-preflight)
       record_eos_command "$tool" "$@"
       exec_script preflight.sh "$@"
+      ;;
+    eos-ci)
+      record_eos_command "$tool" "$@"
+      exec_script ci_loop.sh "$@"
       ;;
     eos-release)
       record_eos_command "$tool" "$@"

@@ -54,8 +54,8 @@ For `shell/src/engineos-shell.c`, this Windows/WSL harness can inspect text and 
 Use locally:
 
 ```bash
-./tools/engineos/eos-build shell --dry-run
-./tools/engineos/eos-package engineos-shell --dry-run
+./tools/engineos/eos-test shell
+./tools/engineos/eos-preflight repo --package engineos-shell
 ```
 
 Use on the Arch builder VM:

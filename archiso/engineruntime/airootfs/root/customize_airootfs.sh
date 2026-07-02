@@ -1,14 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+best_effort() {
+  local label="$1"
+  shift
+  if "$@"; then
+    printf 'ok: %s\n' "$label"
+    return 0
+  fi
+  printf 'WARN best-effort failed: %s:' "$label" >&2
+  printf ' %q' "$@" >&2
+  printf '\n' >&2
+}
+
 for group in wheel input audio video render; do
   groupadd -f "$group"
 done
 
-useradd -m -G wheel,input,audio,video,render -s /usr/bin/zsh engineos || true
-usermod -aG wheel,input,audio,video,render engineos || true
-usermod -s /usr/bin/zsh engineos || true
-printf 'engineos:engineos\n' | chpasswd || true
+useradd -m -G wheel,input,audio,video,render -s /usr/bin/zsh engineos
+usermod -aG wheel,input,audio,video,render engineos
+usermod -s /usr/bin/zsh engineos
+printf 'engineos:engineos\n' | chpasswd
 
 install -d -m 2775 -o root -g wheel /var/log/engineos
 install -d -m 2775 -o root -g wheel /var/lib/engineos
@@ -53,8 +65,8 @@ systemctl enable engineos-engine-runner.service
 systemctl enable engineos-runtime.service
 systemctl enable engineos-observe-exporter.service
 systemctl enable getty@tty2.service
-systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service || true
-loginctl enable-linger engineos || true
+best_effort "global PipeWire user units" systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service
+best_effort "engineos user linger" loginctl enable-linger engineos
 
 install -d -m 0755 /etc/ssh/sshd_config.d
 cat >/etc/ssh/sshd_config.d/10-engineos-live.conf <<'EOF'

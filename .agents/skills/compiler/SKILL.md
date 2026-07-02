@@ -5,8 +5,8 @@ description: Compile C/C++ apps, local EngineOS packages, kernel-adjacent tools,
 
 # Compiler
 
-Use the Arch builder VM for real compiler acceptance. Local work should prefer
-dry-runs, package lint, and syntax checks until builder proof is needed.
+Use the Arch builder VM for final compiler acceptance. Local work should prefer
+real package lint, preflight, and CI-loop checks that fail visibly.
 
 ## Workflow
 
@@ -18,8 +18,8 @@ dry-runs, package lint, and syntax checks until builder proof is needed.
 ## Commands
 
 ```bash
-eos-build repo --dry-run
-eos-package engineos-shell --dry-run
+eos-ci local --no-validate-repo --clean-generated
+eos-preflight repo
 eos-lint packages
-eos-build shell --dry-run
+eos-test shell
 ```

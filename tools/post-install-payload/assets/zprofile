@@ -1,13 +1,25 @@
 if [[ -o interactive ]]; then
+  engineos_profile_log() {
+    local state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/engineos"
+    mkdir -p "$state_dir" 2>/dev/null || return 0
+    printf '%s profile-warning %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$state_dir/profile.log" 2>/dev/null || true
+  }
+
+  engineos_profile_run() {
+    local label="$1"
+    shift
+    "$@" || engineos_profile_log "$label failed status=$?"
+  }
+
   printf 'EngineDev OS\n'
   printf 'Try: eos-doctor --vm\n'
   if command -v eos-observe >/dev/null 2>&1; then
-    eos-observe prompt-login --shell zsh || true
+    engineos_profile_run "eos-observe prompt-login" eos-observe prompt-login --shell zsh
   fi
   if [[ -r "$HOME/Tang-OS/tools/scripts/update_check.sh" ]]; then
-    bash "$HOME/Tang-OS/tools/scripts/update_check.sh" --init || true
+    engineos_profile_run "source update init" bash "$HOME/Tang-OS/tools/scripts/update_check.sh" --init
   elif command -v eos-update >/dev/null 2>&1; then
-    eos-update check --init || true
+    engineos_profile_run "eos-update init" eos-update check --init
   fi
   if [[ -z "${TMUX:-}" && "${ENGINEOS_AUTO_TMUX:-1}" == "1" ]] &&
       command -v tmux >/dev/null 2>&1; then

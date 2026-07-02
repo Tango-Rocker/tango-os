@@ -561,7 +561,7 @@ run_installer() {
     post_install_args+=(--skip-codex)
   fi
   run_step "run installed post-install payload" arch-chroot "$target" "$post_install_script" "${post_install_args[@]}"
-  run_step "validate installed builder shape" arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/eos-validate builder --mock
+  run_step "validate installed builder shape" arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/eos-validate builder
   run_step "validate installed local repo" arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/eos-validate repo
 
   cat <<EOF | sudo tee "$target/srv/ENGINEOS_INSTALL_HANDOFF.txt" >/dev/null
@@ -703,7 +703,7 @@ print_dev_plan() {
   quote_line arch-chroot "$target" chown -R "$user:$user" /srv/engineos
   quote_line arch-chroot "$target" runuser -u "$user" -- env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/eos-build repo
   quote_line arch-chroot "$target" "$PACKAGED_POST_INSTALL_PAYLOAD/scripts/setup_dev_environment.sh" --payload "$PACKAGED_POST_INSTALL_PAYLOAD" --user "$user"
-  quote_line arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/eos-validate builder --mock
+  quote_line arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/eos-validate builder
   quote_line arch-chroot "$target" env -u ENGINEOS_ROOT -u ENGINEOS_SCRIPT_DIR -u ENGINEOS_LOG_DIR /srv/engineos/tools/engineos/eos-validate repo
 
   printf '\nFirst boot handoff:\n'

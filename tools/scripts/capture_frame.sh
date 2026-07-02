@@ -14,9 +14,9 @@ usage() {
   cat <<'HELP'
 Usage: capture_frame.sh --target shell [--tool auto|grim|import|metadata]
 
-Capture a shell frame when a compositor screenshot tool is available. The
-command uses grim on Wayland, ImageMagick import on X11, and falls back to a
-metadata artifact in headless or unavailable environments.
+Capture a shell frame with grim on Wayland or ImageMagick import on X11.
+Explicit --tool metadata records environment metadata without claiming a frame
+capture succeeded.
 HELP
 }
 
@@ -82,7 +82,9 @@ write_metadata() {
       printf 'error=%s\n' "$ERROR_TEXT"
     fi
     if [[ "$RESULT" == "metadata" ]]; then
-      printf 'note=no compositor screenshot tool was available for this environment\n'
+      printf 'note=metadata-only capture was explicitly requested\n'
+    elif [[ "$RESULT" == "failed" ]]; then
+      printf 'note=frame capture failed; no image artifact was produced\n'
     fi
   } >"$META_FILE"
 }
@@ -136,7 +138,7 @@ case "$CAPTURE_TOOL" in
       if capture_grim; then
         RESULT="image"
       else
-        RESULT="metadata"
+        RESULT="failed"
         ERROR_TEXT="grim capture failed"
       fi
     elif [[ -n "${DISPLAY:-}" ]] && have_cmd import; then
@@ -144,12 +146,13 @@ case "$CAPTURE_TOOL" in
       if capture_import; then
         RESULT="image"
       else
-        RESULT="metadata"
+        RESULT="failed"
         ERROR_TEXT="import capture failed"
       fi
     else
-      RESULT="metadata"
+      RESULT="failed"
       TOOL_USED="metadata"
+      ERROR_TEXT="no compositor screenshot tool available"
     fi
     ;;
 esac
@@ -158,6 +161,9 @@ write_metadata
 
 if [[ "$RESULT" == "image" ]]; then
   printf '%s\n' "$IMAGE_FILE"
-else
+elif [[ "$RESULT" == "metadata" ]]; then
   printf '%s\n' "$META_FILE"
+else
+  printf 'frame capture failed; metadata: %s\n' "$META_FILE" >&2
+  exit 1
 fi

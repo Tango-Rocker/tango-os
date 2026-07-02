@@ -8,21 +8,21 @@ Future EngineOS MCP work is reserved for read-only live runtime state.
 ## Default Loop
 
 ```bash
-./tools/engineos/eos-doctor --mock
+./tools/engineos/eos-doctor --vm
 ./tools/engineos/eos-test agent
 ./tools/engineos/eos-agent hygiene check
 ./tools/engineos/eos-agent dispatch status
 ./tools/engineos/eos-builder bootstrap --dry-run
-./tools/engineos/eos-validate builder --mock
-./tools/engineos/eos-validate repo --dry-run
+./tools/engineos/eos-preflight repo --package engineos-tools
+./tools/engineos/eos-ci local --package engineos-tools --test agent-route --no-validate-repo --clean-generated
 ./tools/engineos/eos-proof build-lab --dry-run
-./tools/engineos/eos-build repo --dry-run
 ./tools/engineos/eos-build iso --dry-run
 ./tools/engineos/eos-test
 ```
 
-On the Arch builder VM, replace dry-runs with real builds only after the local
-proof path is clean:
+Dry-runs are previews for destructive or builder-only actions. On the Arch
+builder VM, replace dry-runs with real builds only after the local check path is
+clean:
 
 ```bash
 cd /srv/engineos
@@ -56,9 +56,9 @@ Validate it with:
 ./tools/engineos/eos-test agent-dispatcher
 ```
 
-Run local work through direct CLI commands such as `eos-test agent` or
-`eos-proof launchpad --runtime --dry-run`; do not add MCP tools just to
-mirror local commands.
+Run local work through direct CLI commands such as `eos-test agent`,
+`eos-test shell`, or `eos-ci local --no-validate-repo`; do not add MCP tools
+just to mirror local commands.
 
 Queued agent work is local and manual-drain in v0:
 

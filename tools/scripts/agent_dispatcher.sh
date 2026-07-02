@@ -420,12 +420,12 @@ run_agent_task() {
     codex)
       run_codex_adapter "$prompt_file" "$run_dir" || rc=$?
       ;;
-    mock-pass)
-      printf 'mock runner passed\n' >"$run_dir/stdout.log"
+    fixture-pass)
+      printf 'fixture runner passed\n' >"$run_dir/stdout.log"
       : >"$run_dir/stderr.log"
       ;;
-    mock-fail)
-      printf 'mock runner failed\n' >"$run_dir/stderr.log"
+    fixture-fail)
+      printf 'fixture runner failed\n' >"$run_dir/stderr.log"
       rc=17
       ;;
     *)
@@ -476,6 +476,7 @@ cmd_dispatch_drain() {
   local role_filter="all"
   local execute=false
   local drained=0
+  local failures=0
   local line
   local task_id
   local role
@@ -524,7 +525,9 @@ cmd_dispatch_drain() {
     proof="$(json_field "$line" proof)"
     if [[ "$execute" == true ]]; then
       append_ledger_event "$task_id" started running "$role" drain "manual drain"
-      run_agent_task "$task_id" "$role" "$summary" "$proof" || true
+      if ! run_agent_task "$task_id" "$role" "$summary" "$proof"; then
+        failures=$((failures + 1))
+      fi
     else
       printf 'dry-run task_id=%s role=%s proof=%s\n' "$task_id" "$role" "$proof"
     fi
@@ -532,7 +535,12 @@ cmd_dispatch_drain() {
     [[ "$drained" -lt "$limit" ]] || break
   done <"$QUEUE_FILE"
 
-  printf 'drain summary: %s task(s) considered\n' "$drained"
+  if [[ "$execute" == true ]]; then
+    printf 'drain summary: %s task(s) considered, %s failure(s)\n' "$drained" "$failures"
+    [[ "$failures" -eq 0 ]] || return 1
+  else
+    printf 'drain summary: %s task(s) considered\n' "$drained"
+  fi
 }
 
 cmd_dispatch_status() {

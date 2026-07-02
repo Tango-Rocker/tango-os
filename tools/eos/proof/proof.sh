@@ -117,7 +117,7 @@ proof_build_lab() {
   printf '  log:     %s\n' "$log_file"
 
   if [[ "$dry_run" == true ]]; then
-    run_step "validate builder mock" "$SCRIPT_DIR/validate_builder.sh" --mock
+    run_step "validate builder preview" printf '%s\n' "./tools/engineos/eos-validate builder"
   else
     run_step "validate builder" "$SCRIPT_DIR/validate_builder.sh"
   fi
@@ -137,10 +137,11 @@ proof_build_lab() {
     run_step "list ISO artifacts" "$SCRIPT_DIR/artifacts.sh" list "$out_dir"
   fi
 
-  printf '\nBuild-lab proof runner completed.\n'
   if [[ "$dry_run" == true ]]; then
+    printf '\nBuild-lab proof preview completed; no build-lab proof was executed.\n'
     printf 'Next Arch builder command: ./tools/engineos/eos-proof build-lab\n'
   else
+    printf '\nBuild-lab proof runner completed.\n'
     printf 'Next test VM command: ./tools/engineos/eos-vm boot enginedev\n'
     printf 'Next booted ISO command: eos-proof booted-iso --vm\n'
   fi
@@ -193,7 +194,7 @@ proof_release_candidate() {
 
   if [[ "$dry_run" == true ]]; then
     release_args+=(--dry-run)
-    run_step "validate builder mock" "$SCRIPT_DIR/validate_builder.sh" --mock
+    run_step "validate builder preview" printf '%s\n' "./tools/engineos/eos-validate builder"
     run_step "preflight all" "$SCRIPT_DIR/preflight.sh" all
     run_step "lint packages" "$SCRIPT_DIR/package_lint.sh"
     run_step "build shell dry-run" "$SCRIPT_DIR/build_shell.sh" --dry-run
@@ -221,10 +222,11 @@ proof_release_candidate() {
   fi
   run_step "release checklist" "$SCRIPT_DIR/release.sh" "${release_args[@]}"
 
-  printf '\nRelease-candidate proof runner completed.\n'
   if [[ "$dry_run" == true ]]; then
+    printf '\nRelease-candidate proof preview completed; no release-candidate proof was executed.\n'
     printf 'Next Arch builder command: ./tools/engineos/eos-proof release-candidate\n'
   else
+    printf '\nRelease-candidate proof runner completed.\n'
     printf 'Next test VM command: ./tools/engineos/eos-vm boot enginedev\n'
     printf 'Next runtime VM command: ./tools/engineos/eos-vm boot engineruntime\n'
     printf 'Next hardware proof: boot EngineRuntime on the AMD machine and run eos-proof booted-iso --bare-metal\n'
@@ -312,7 +314,11 @@ proof_hardware_ready() {
     fi
   fi
 
-  printf '\nHardware-ready proof runner completed.\n'
+  if [[ "$dry_run" == true ]]; then
+    printf '\nHardware-ready proof preview completed; no hardware-ready proof was executed.\n'
+  else
+    printf '\nHardware-ready proof runner completed.\n'
+  fi
   printf 'This proof does not write USB media or prove AMD hardware by itself.\n'
   printf 'After writing the ISO and booting the target AMD machine, run:\n'
   printf '  eos-proof booted-iso --bare-metal\n'
@@ -417,10 +423,11 @@ proof_booted_iso() {
     run_step "crash bundle" "$SCRIPT_DIR/crash_bundle.sh" "${crash_bundle_args[@]}"
   fi
 
-  printf '\nBooted-ISO proof runner completed.\n'
   if [[ "$dry_run" == true ]]; then
+    printf '\nBooted-ISO proof preview completed; no booted-ISO proof was executed.\n'
     printf 'Next booted ISO command: eos-proof booted-iso --%s\n' "$mode"
   else
+    printf '\nBooted-ISO proof runner completed.\n'
     printf 'Proof log: %s\n' "$log_file"
   fi
 }
@@ -497,7 +504,7 @@ proof_shell_launch() {
       run_step "bare-metal shell renderer dry-run" printf '%s\n' "grep -E 'renderer diagnostics|GLES2|EGL|wlr_renderer=(gles2|vulkan)' $shell_log && ! grep -Ei 'pixman|llvmpipe|softpipe|software renderer' $shell_log"
       run_step "bare-metal renderer rejection dry-run" printf '%s\n' "eos-validate boot --bare-metal"
     fi
-    printf '\nShell-launch proof dry-run completed.\n'
+    printf '\nShell-launch proof preview completed; no shell-launch proof was executed.\n'
     return
   fi
 
@@ -623,7 +630,7 @@ proof_launchpad() {
     if [[ "$mode" == "bare-metal" ]]; then
       run_step "bare-metal output validation dry-run" printf '%s\n' "eos-outputs validate --single"
     fi
-    printf '\nLaunchpad proof dry-run completed.\n'
+    printf '\nLaunchpad proof preview completed; no launchpad proof was executed.\n'
     return
   fi
 

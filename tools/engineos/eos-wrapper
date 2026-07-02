@@ -2,5 +2,13 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+root="$(cd "$script_dir/../.." && pwd -P)"
+if [[ "$root" == "/" && -d /usr/lib/engineos/scripts ]]; then
+  root="/usr"
+fi
+if [[ "$root" != /usr && "$root" != /usr/* && -d "$root/tools/scripts" ]]; then
+  unset ENGINEOS_SCRIPT_DIR ENGINEOS_EOS_DIR
+  export ENGINEOS_ROOT="$root"
+fi
 cmd="$(basename "$0")"
 exec "$script_dir/eos" "$cmd" "$@"

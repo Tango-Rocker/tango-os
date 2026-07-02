@@ -29,21 +29,20 @@ Read only the context the task needs:
 5. If validation cannot run, classify the blocker as repo-owned or
    environmental and record the exact rerun command.
 
-## Local Proof Ladder
+## Local Check Ladder
 
-Prefer these outside the Arch builder VM:
+Prefer these outside the Arch builder VM. Dry-runs are previews only, not proof.
 
 ```bash
-./tools/engineos/eos-doctor --mock
+./tools/engineos/eos-doctor
 ./tools/engineos/eos-test agent
 ./tools/engineos/eos-agent hygiene check
 ./tools/engineos/eos-agent dispatch status
 ./tools/engineos/eos-observe metrics
 ./tools/engineos/eos-observe tui --once
 ./tools/engineos/eos-preflight all
-./tools/engineos/eos-build repo --dry-run
-./tools/engineos/eos-build iso --dry-run
-./tools/engineos/eos-proof launchpad --runtime --dry-run
+./tools/engineos/eos-ci local --no-validate-repo --clean-generated
+./tools/engineos/eos-test shell
 ```
 
 Use real package/ISO builds only from `/srv/engineos` on the Arch builder VM.

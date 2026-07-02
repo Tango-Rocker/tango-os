@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+LOG=/var/log/engineos/live-setup.log
+
+log_line() {
+  printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG"
+}
+
+best_effort() {
+  local label="$1"
+  shift
+  if "$@"; then
+    log_line "ok: $label"
+    return 0
+  fi
+  log_line "WARN best-effort failed: $label: $*"
+}
+
 install -d -m 2775 -o root -g wheel /var/log/engineos
 install -d -m 2775 -o root -g wheel /var/lib/engineos
 chown root:wheel /var/log/engineos /var/lib/engineos
@@ -40,16 +56,18 @@ for group in wheel input audio video render; do
   groupadd -f "$group"
 done
 
-if id engineos >/dev/null 2>&1; then
-  usermod -aG wheel,input,audio,video,render engineos || true
-  usermod -s /usr/bin/zsh engineos || true
-fi
+id engineos >/dev/null 2>&1 || {
+  log_line "ERROR live user missing: engineos"
+  exit 1
+}
+usermod -aG wheel,input,audio,video,render engineos
+usermod -s /usr/bin/zsh engineos
 
 if command -v udevadm >/dev/null 2>&1; then
-  udevadm control --reload-rules || true
-  udevadm trigger --subsystem-match=input || true
-  udevadm trigger --subsystem-match=drm || true
-  udevadm trigger --subsystem-match=sound || true
+  best_effort "udev reload rules" udevadm control --reload-rules
+  best_effort "udev trigger input" udevadm trigger --subsystem-match=input
+  best_effort "udev trigger drm" udevadm trigger --subsystem-match=drm
+  best_effort "udev trigger sound" udevadm trigger --subsystem-match=sound
 fi
 
 {
@@ -59,11 +77,15 @@ fi
   if [[ -r /etc/engineos/version ]]; then
     cat /etc/engineos/version
   fi
-  id engineos || true
-  ls -l /dev/input/event* /dev/input/mouse* 2>/dev/null || true
+  id engineos
+  ls -l /dev/input/event* /dev/input/mouse* 2>/dev/null || printf 'WARN no input devices listed\n'
   uname -a
-} >/var/log/engineos/live-setup.log
+} >"$LOG"
 
-if command -v engineos >/dev/null 2>&1; then
-  eos-doctor >/var/log/engineos/doctor-firstboot.log 2>&1 || true
+if command -v eos-doctor >/dev/null 2>&1; then
+  if eos-doctor >/var/log/engineos/doctor-firstboot.log 2>&1; then
+    log_line "ok: eos-doctor firstboot"
+  else
+    log_line "WARN best-effort failed: eos-doctor firstboot"
+  fi
 fi

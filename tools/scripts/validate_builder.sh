@@ -8,11 +8,10 @@ source "$SCRIPT_DIR/common.sh"
 ROOT="$(engineos_root)"
 FAILURES=0
 WARNINGS=0
-MOCK=false
 
 usage() {
   cat <<'HELP'
-Usage: validate_builder.sh [--mock]
+Usage: validate_builder.sh
 
 Validate that the current machine is ready to run the Arch builder side of
 PoC 0: shell build, local package repo build, and mkarchiso ISO build.
@@ -174,9 +173,6 @@ check_builder_resources() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --mock)
-      MOCK=true
-      ;;
     help|--help|-h)
       usage
       exit 0
@@ -191,16 +187,6 @@ done
 printf 'EngineOS builder validation\n'
 printf '  root: %s\n' "$ROOT"
 printf '  timestamp_utc: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-if [[ "$MOCK" == true ]]; then
-  ok "mock Arch builder"
-  ok "mock repo root /srv/engineos"
-  ok "mock Linux-native filesystem"
-  ok "mock build commands"
-  ok "mock wlroots pkg-config modules"
-  printf 'Builder validation summary: 0 failure(s), 0 warning(s)\n'
-  exit 0
-fi
 
 if is_arch_linux; then
   ok "host is Arch Linux"

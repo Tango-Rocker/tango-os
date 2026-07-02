@@ -10,13 +10,12 @@ REPO_ARCH="${ENGINEOS_REPO_ARCH:-x86_64}"
 REPO_DIR="${ENGINEOS_REPO_DIR:-$ROOT/repo/$REPO_ARCH}"
 REPO_NAME="${ENGINEOS_REPO_NAME:-engineos}"
 DRY_RUN=false
-MOCK=false
 FAILURES=0
 WARNINGS=0
 
 usage() {
   cat <<'HELP'
-Usage: validate_repo.sh [--dry-run|--mock]
+Usage: validate_repo.sh [--dry-run]
 
 Validate the local EngineOS pacman repository after `eos-build repo`.
 HELP
@@ -160,9 +159,6 @@ while [[ $# -gt 0 ]]; do
     --dry-run)
       DRY_RUN=true
       ;;
-    --mock)
-      MOCK=true
-      ;;
     help|--help|-h)
       usage
       exit 0
@@ -178,14 +174,6 @@ printf 'EngineOS repo validation\n'
 printf '  root: %s\n' "$ROOT"
 printf '  repo: %s\n' "$REPO_DIR"
 printf '  name: %s\n' "$REPO_NAME"
-
-if [[ "$MOCK" == true ]]; then
-  ok "mock repo database"
-  ok "mock package artifacts"
-  ok "mock profile local repo configuration"
-  printf 'Repo validation summary: 0 failure(s), 0 warning(s)\n'
-  exit 0
-fi
 
 if [[ "$DRY_RUN" == true ]]; then
   printf 'Expected repo database: %s/%s.db\n' "$REPO_DIR" "$REPO_NAME"

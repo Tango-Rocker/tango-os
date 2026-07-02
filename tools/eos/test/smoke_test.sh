@@ -2,10 +2,13 @@
 set -euo pipefail
 
 MODULE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-if [[ -n "${ENGINEOS_SCRIPT_DIR:-}" ]]; then
+SOURCE_SCRIPT_DIR="$(cd "$MODULE_DIR/../../scripts" && pwd -P)"
+if [[ -d "$SOURCE_SCRIPT_DIR" && "${ENGINEOS_SCRIPT_DIR:-}" == /usr/lib/engineos/scripts* ]]; then
+  SCRIPT_DIR="$SOURCE_SCRIPT_DIR"
+elif [[ -n "${ENGINEOS_SCRIPT_DIR:-}" ]]; then
   SCRIPT_DIR="$ENGINEOS_SCRIPT_DIR"
 else
-  SCRIPT_DIR="$(cd "$MODULE_DIR/../../scripts" && pwd -P)"
+  SCRIPT_DIR="$SOURCE_SCRIPT_DIR"
 fi
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
@@ -28,13 +31,13 @@ run_eos() {
 }
 
 cleanup() {
-  ENGINEOS_STATE_DIR="$TMP_DIR/run" ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-runtime engine daemon-stop >/dev/null 2>&1 || true
+  ENGINEOS_ENGINE_RUNNER_ALLOW_PYTHON_FALLBACK=true ENGINEOS_STATE_DIR="$TMP_DIR/run" ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-runtime engine daemon-stop >/dev/null 2>&1 || true
   rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
 mkdir -p "$TMP_DIR"
 
-run_eos eos-doctor --mock >/dev/null
+run_eos eos-doctor --vm >/dev/null
 
 if [[ ! -d "$ROOT/tools/scripts" ]]; then
   ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-runtime quake --smoke >/dev/null
@@ -45,13 +48,11 @@ if [[ ! -d "$ROOT/tools/scripts" ]]; then
   exit 0
 fi
 
-run_eos eos-doctor --bare-metal >/dev/null
+run_eos eos-doctor --vm >/dev/null
 run_eos eos-builder bootstrap --dry-run >/dev/null
-run_eos eos-validate builder --mock >/dev/null
-run_eos eos-validate repo --mock >/dev/null
-run_eos eos-validate engine quake --mock >/dev/null
-run_eos eos-validate shell --mock >/dev/null
+run_eos eos-validate shell >/dev/null
 run_eos eos-preflight scripts >/dev/null
+run_eos eos-preflight repo --package engineos-tools >/dev/null
 run_eos eos-lint packages >/dev/null
 run_eos eos-build shell --dry-run >/dev/null
 run_eos eos-validate shell >/dev/null
@@ -66,7 +67,7 @@ ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-proof booted-iso --vm --dry-run >/d
 printf 'fake iso payload\n' >"$TMP_DIR/EngineDevOS-test-x86_64.iso"
 run_eos eos-vm boot enginedev --dry-run --iso "$TMP_DIR/EngineDevOS-test-x86_64.iso" --memory 1024 --cpus 1 --display none --no-kvm >/dev/null
 run_eos eos-test usb >/dev/null
-ENGINEOS_STATE_DIR="$TMP_DIR/run" ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-runtime engine status >/dev/null
+ENGINEOS_ENGINE_RUNNER_ALLOW_PYTHON_FALLBACK=true ENGINEOS_STATE_DIR="$TMP_DIR/run" ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-runtime engine status >/dev/null
 run_eos eos-assets explain quake >/dev/null
 ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-test assets >/dev/null
 ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-test reliability >/dev/null
@@ -74,12 +75,11 @@ ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-test logs >/dev/null
 ENGINEOS_OUT_DIR="$TMP_DIR/out" run_eos eos-test artifacts >/dev/null
 ENGINEOS_OUT_DIR="$TMP_DIR/out" run_eos eos-test release >/dev/null
 ENGINEOS_TERMINAL_CANDIDATES="missing-terminal" run_eos eos-terminal --dry-run >/dev/null
-ENGINEOS_LOG_DIR="$TMP_DIR/logs" ENGINEOS_SHELL_SMOKE=true run_eos eos-runtime shell --headless >/dev/null
-ENGINEOS_CAPTURE_DIR="$TMP_DIR/captures" run_eos eos-capture frame --target shell >/dev/null
+ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-test shell >/dev/null
+ENGINEOS_CAPTURE_DIR="$TMP_DIR/captures" ENGINEOS_CAPTURE_TOOL=metadata run_eos eos-capture frame --target shell >/dev/null
 run_eos eos-input record "$TMP_DIR/input.json" >/dev/null
 run_eos eos-input replay "$TMP_DIR/input.json" >/dev/null
 ENGINEOS_DRM_SYSFS="$TMP_DIR/sys/class/drm" run_eos eos-outputs list >/dev/null
-ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-test compositor --headless >/dev/null
 ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-test shell-actions >/dev/null
 ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-test terminal >/dev/null
 ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-test engine-runner-env >/dev/null

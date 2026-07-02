@@ -13,7 +13,7 @@ WARNINGS=0
 
 usage() {
   cat <<'HELP'
-Usage: validate_engine.sh quake [--mock]
+Usage: validate_engine.sh quake
 
 Validate EngineOS engine wrapper inputs and local smoke behavior.
 HELP
@@ -43,7 +43,6 @@ require_executable() {
 }
 
 validate_quake() {
-  local mock=false
   local upstream="${QUAKESPASM_UPSTREAM_DIR:-$ROOT/engines/quakespasm/upstream}"
   local build_dir="$upstream/Quake"
   local log_dir="${TMPDIR:-/tmp}/engineos-validate-engine-$$"
@@ -51,9 +50,6 @@ validate_quake() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --mock)
-        mock=true
-        ;;
       help|--help|-h)
         usage
         exit 0
@@ -68,13 +64,6 @@ validate_quake() {
   printf 'EngineOS Quake engine validation\n'
   printf '  root:     %s\n' "$ROOT"
   printf '  upstream: %s\n' "$upstream"
-
-  if [[ "$mock" == true ]]; then
-    ok "mock Quake wrapper inputs"
-    ok "mock Quake smoke wrapper"
-    printf 'Engine validation summary: 0 failure(s), 0 warning(s)\n'
-    exit 0
-  fi
 
   require_executable "$ROOT/engines/quakespasm/engineos/fetch.sh"
   require_executable "$ROOT/engines/quakespasm/engineos/build.sh"
@@ -112,6 +101,28 @@ validate_quake() {
     fail "smoke wrapper did not log expected marker"
   fi
 
+  if grep -F 'result=ok' "$log_dir/default-smoke/engine.log" >/dev/null 2>&1; then
+    ok "smoke wrapper reports real binary success"
+  else
+    fail "smoke wrapper did not report real binary success"
+  fi
+
+  if ENGINEOS_LOG_DIR="$log_dir/missing-smoke" \
+      ENGINEOS_LOG_TEE=false \
+      QUAKESPASM_BIN="$log_dir/missing-quakespasm" \
+      "$ROOT/engines/quakespasm/engineos/run.sh" --smoke >/dev/null 2>&1; then
+    fail "smoke wrapper should fail when QuakeSpasm binary is missing"
+  else
+    ok "smoke wrapper fails when QuakeSpasm binary is missing"
+  fi
+
+  if grep -F 'binary_status=missing' "$log_dir/missing-smoke/engine.log" >/dev/null 2>&1 &&
+      grep -F 'result=failed' "$log_dir/missing-smoke/engine.log" >/dev/null 2>&1; then
+    ok "smoke wrapper logs missing binary failure"
+  else
+    fail "smoke wrapper did not log missing binary failure"
+  fi
+
   local fake_upstream="$log_dir/fake-upstream"
   local fake_path="$log_dir/fake-path"
   mkdir -p "$fake_upstream/Quake" "$log_dir/upstream-smoke" "$fake_path"
@@ -145,15 +156,15 @@ FAKE
   if [[ -d "$upstream/.git" ]]; then
     ok "upstream git checkout exists"
   elif [[ -d "$upstream" ]]; then
-    warn "upstream directory exists but is not a git checkout: $upstream"
+    fail "upstream directory exists but is not a git checkout: $upstream"
   else
-    warn "upstream source not fetched yet; run eos-build engine quake --fetch on EngineDev"
+    fail "upstream source missing: run eos-build engine quake --fetch on EngineDev"
   fi
 
   if [[ -d "$build_dir" ]]; then
     ok "upstream build directory exists: $build_dir"
   else
-    warn "upstream build directory missing until QuakeSpasm is fetched: $build_dir"
+    fail "upstream build directory missing: $build_dir"
   fi
 
   printf 'Engine validation summary: %s failure(s), %s warning(s)\n' "$FAILURES" "$WARNINGS"

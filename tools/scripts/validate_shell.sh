@@ -8,11 +8,10 @@ source "$SCRIPT_DIR/common.sh"
 ROOT="$(engineos_root)"
 FAILURES=0
 WARNINGS=0
-MOCK=false
 
 usage() {
   cat <<'HELP'
-Usage: validate_shell.sh [--mock]
+Usage: validate_shell.sh
 
 Validate the EngineOS shell scaffold, runner wiring, and local smoke behavior.
 This does not prove wlroots runtime behavior; real headless/nested/TTY checks
@@ -78,40 +77,34 @@ validate_runner_smoke() {
 
   mkdir -p "$tmp_dir/bin" "$log_dir"
 
-  if ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_SHELL_BIN="$tmp_dir/missing-shell" "$SCRIPT_DIR/shell_runner.sh" --headless >/dev/null; then
-    ok "headless fallback smoke"
+  if ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_SHELL_BIN="$tmp_dir/missing-shell" "$SCRIPT_DIR/shell_runner.sh" --headless >/dev/null 2>&1; then
+    fail "headless missing shell should fail"
   else
-    fail "headless fallback smoke failed"
+    ok "headless missing shell fails closed"
   fi
 
-  if grep -F 'engineos-shell headless smoke backend=headless result=stub-ok' "$log_dir/shell.log" >/dev/null 2>&1; then
-    ok "headless fallback logged"
+  if grep -F 'engineos-shell headless backend=headless result=missing-shell' "$log_dir/shell.log" >/dev/null 2>&1; then
+    ok "headless missing shell logged"
   else
-    fail "headless fallback log marker missing"
+    fail "headless missing shell log marker missing"
   fi
 
-  if ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_SHELL_BIN="$tmp_dir/missing-shell" WAYLAND_DISPLAY="engineos-test" "$SCRIPT_DIR/shell_runner.sh" --nested >/dev/null; then
-    ok "nested fallback smoke"
+  if ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_SHELL_BIN="$tmp_dir/missing-shell" WAYLAND_DISPLAY="engineos-test" "$SCRIPT_DIR/shell_runner.sh" --nested >/dev/null 2>&1; then
+    fail "nested missing shell should fail"
   else
-    fail "nested fallback smoke failed"
+    ok "nested missing shell fails closed"
   fi
 
-  if grep -F 'engineos-shell nested smoke backend=nested display=available result=stub-ok' "$log_dir/shell.log" >/dev/null 2>&1; then
-    ok "nested fallback logged display availability"
+  if grep -F 'engineos-shell nested backend=nested display=available result=missing-shell' "$log_dir/shell.log" >/dev/null 2>&1; then
+    ok "nested missing shell logged display availability"
   else
-    fail "nested fallback display log marker missing"
+    fail "nested missing shell display log marker missing"
   fi
 
   if ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_SHELL_BIN="$tmp_dir/missing-shell" "$SCRIPT_DIR/shell_runner.sh" --tty >/dev/null 2>&1; then
-    fail "tty fallback should fail without ENGINEOS_ALLOW_TTY_STUB"
+    fail "tty missing shell should fail"
   else
-    ok "tty fallback fails closed without hardware shell"
-  fi
-
-  if ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_SHELL_BIN="$tmp_dir/missing-shell" ENGINEOS_ALLOW_TTY_STUB=true "$SCRIPT_DIR/shell_runner.sh" --tty >/dev/null; then
-    ok "tty explicit stub smoke"
-  else
-    fail "tty explicit stub smoke failed"
+    ok "tty missing shell fails closed"
   fi
 
   cat >"$fake_shell" <<'FAKE'
@@ -136,6 +129,17 @@ FAKE
   grep -Fx -- "--smoke" "$args_file" >/dev/null || fail "real shell pass-through missing --smoke"
   grep -Fx -- "WLR_BACKENDS=headless" "$env_file" >/dev/null || fail "headless pass-through missing WLR_BACKENDS"
   grep -Fx -- "WLR_HEADLESS_OUTPUTS=1" "$env_file" >/dev/null || fail "headless pass-through missing WLR_HEADLESS_OUTPUTS"
+
+  WLR_BACKENDS=drm,libinput \
+    ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_SHELL_BIN="$fake_shell" \
+    ENGINEOS_FAKE_SHELL_ARGS="$args_file" \
+    ENGINEOS_FAKE_SHELL_ENV="$env_file" \
+    ENGINEOS_SHELL_SMOKE=true \
+    "$SCRIPT_DIR/shell_runner.sh" --headless >/dev/null
+
+  grep -Fx -- "--headless" "$args_file" >/dev/null || fail "inherited-backend headless pass-through missing --headless"
+  grep -Fx -- "WLR_BACKENDS=headless" "$env_file" >/dev/null || fail "headless pass-through should force WLR_BACKENDS"
 
 	  env -u ENGINEOS_SHELL_BOOTSTRAP \
 	    -u ENGINEOS_SHELL_STARTUP \
@@ -180,9 +184,6 @@ FAKE
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --mock)
-      MOCK=true
-      ;;
     help|--help|-h)
       usage
       exit 0
@@ -196,13 +197,6 @@ done
 
 printf 'EngineOS shell validation\n'
 printf '  root: %s\n' "$ROOT"
-
-if [[ "$MOCK" == true ]]; then
-  ok "mock shell source"
-  ok "mock shell runner"
-  printf 'Shell validation summary: 0 failure(s), 0 warning(s)\n'
-  exit 0
-fi
 
 require_file "$ROOT/shell/meson.build"
 require_file "$ROOT/shell/src/engineos-shell.c"
@@ -300,10 +294,10 @@ if have_cmd pkg-config; then
   if pkg-config --exists wlroots-0.19 wayland-server xkbcommon 2>/dev/null; then
     ok "wlroots pkg-config modules available"
   else
-    warn "wlroots pkg-config modules unavailable here; real compile belongs on Arch builder VM"
+    fail "wlroots pkg-config modules unavailable; shell validation requires compositor build prerequisites"
   fi
 else
-  warn "pkg-config unavailable; cannot check wlroots modules"
+  fail "pkg-config unavailable; cannot check wlroots modules"
 fi
 
 printf 'Shell validation summary: %s failure(s), %s warning(s)\n' "$FAILURES" "$WARNINGS"

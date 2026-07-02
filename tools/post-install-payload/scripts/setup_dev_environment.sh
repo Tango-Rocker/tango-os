@@ -67,6 +67,17 @@ log() {
   printf '%s\n' "$*"
 }
 
+best_effort() {
+  local label="$1"
+  shift
+
+  if "$@"; then
+    log "ok: $label"
+  else
+    log "WARN best-effort failed: $label: $*"
+  fi
+}
+
 install_if_absent() {
   local dest="$1"
   local src="$2"
@@ -258,6 +269,12 @@ configure_tmux() {
   [[ -n "$home" ]] || die "cannot find home for user: $TARGET_USER"
 
   install_managed_tmux_config "$home/.tmux.conf" "$PAYLOAD/assets/tmux.conf" 0644 "$TARGET_USER:$TARGET_USER"
+  if [[ -f "$PAYLOAD/scripts/engineos-tmux-pane-sync" ]]; then
+    as_root install -Dm0755 "$PAYLOAD/scripts/engineos-tmux-pane-sync" /usr/local/bin/engineos-tmux-pane-sync
+    log "installed: /usr/local/bin/engineos-tmux-pane-sync"
+  else
+    log "WARN tmux pane sync helper payload missing"
+  fi
 }
 
 configure_zsh() {
@@ -268,7 +285,7 @@ configure_zsh() {
   install_if_absent "$home/.zshrc" "$PAYLOAD/assets/zshrc" 0644 "$TARGET_USER:$TARGET_USER"
   install_managed_zprofile "$home/.zprofile" "$PAYLOAD/assets/zprofile" 0644 "$TARGET_USER:$TARGET_USER"
   if have_cmd chsh && [[ "$(getent passwd "$TARGET_USER" | cut -d: -f7)" != "/usr/bin/zsh" ]]; then
-    as_root chsh -s /usr/bin/zsh "$TARGET_USER" || true
+    best_effort "set login shell for $TARGET_USER to zsh" as_root chsh -s /usr/bin/zsh "$TARGET_USER"
   fi
   as_root mkdir -p "$home/.config/engineos"
   as_root chown "$TARGET_USER:$TARGET_USER" "$home/.config" "$home/.config/engineos"
@@ -294,11 +311,11 @@ configure_docker() {
   fi
 
   if have_cmd systemctl; then
-    as_root systemctl enable docker.service >/dev/null 2>&1 || true
-    as_root systemctl enable engineos-observe-exporter.service >/dev/null 2>&1 || true
+    best_effort "enable docker.service" as_root systemctl enable docker.service
+    best_effort "enable engineos-observe-exporter.service" as_root systemctl enable engineos-observe-exporter.service
     if [[ -d /run/systemd/system ]]; then
       as_root systemctl restart docker.service
-      as_root systemctl restart engineos-observe-exporter.service >/dev/null 2>&1 || true
+      best_effort "restart engineos-observe-exporter.service" as_root systemctl restart engineos-observe-exporter.service
     else
       log "systemd is not running; docker and observability services enabled for next boot"
     fi
@@ -321,7 +338,7 @@ configure_dev_shell_autostart() {
     return
   fi
 
-  as_root systemctl daemon-reload || true
+  best_effort "reload systemd unit files" as_root systemctl daemon-reload
 
   if ! have_cmd engineos-shell; then
     log "WARN engineos-shell unavailable; dev shell autostart installed but not enabled"
@@ -329,8 +346,7 @@ configure_dev_shell_autostart() {
     return
   fi
 
-  as_root systemctl enable engineos-dev-shell.service >/dev/null 2>&1 || true
-  log "enabled engineos-dev-shell.service"
+  best_effort "enable engineos-dev-shell.service" as_root systemctl enable engineos-dev-shell.service
 }
 
 install_codex() {

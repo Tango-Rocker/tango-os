@@ -240,11 +240,13 @@ if [[ "$SMOKE" == true ]]; then
     printf 'upstream_binary=%s\n' "$BUILT_BIN"
     if binary_available "$BIN"; then
       printf 'binary_status=available\n'
+      printf 'result=ok\n'
     else
       printf 'binary_status=missing\n'
-      printf 'result=stub-ok\n'
+      printf 'result=failed\n'
     fi
   } | log_stream
+  binary_available "$BIN"
   exit 0
 fi
 

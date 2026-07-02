@@ -21,6 +21,6 @@ evidence. Do not start polish-heavy cockpit work before the MVP path asks for it
 ```bash
 eos-capture frame --target shell
 eos-test render --smoke
-eos-proof shell-launch --runtime --dry-run
-eos-build shell --dry-run
+eos-test shell
+eos-app manifest validate
 ```

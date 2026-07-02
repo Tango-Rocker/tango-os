@@ -18,10 +18,9 @@ evidence but does not replace bare-metal AMD validation.
 ## Checks
 
 ```bash
-./tools/engineos/eos-doctor --mock
+./tools/engineos/eos-doctor
 ./tools/engineos/eos-test render --smoke
 ./tools/engineos/eos-capture frame --target shell
-./tools/engineos/eos-proof launchpad --runtime --dry-run
 ```
 
 In a booted Runtime proof:
