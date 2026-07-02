@@ -2638,8 +2638,10 @@ run_post_first_deploy() {
     die "post-first-deploy setup does not request engineos-tools"
   grep -F 'engineos-cube' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not request engineos-cube"
-  grep -F 'best_effort()' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not expose best-effort failures"
+  if grep -F 'best_effort()' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+      grep -F 'WARN best-effort failed' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null; then
+    die "post-first-deploy setup still contains best-effort service handling"
+  fi
   if grep -F 'systemctl enable docker.service >/dev/null 2>&1 || true' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
       grep -F 'systemctl enable engineos-observe-exporter.service >/dev/null 2>&1 || true' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
       grep -F 'systemctl restart engineos-observe-exporter.service >/dev/null 2>&1 || true' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||

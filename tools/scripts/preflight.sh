@@ -637,6 +637,14 @@ check_iso() {
     check_bash_syntax "$profile_dir/airootfs/usr/local/bin/engineos-live-codex-setup"
     check_bash_syntax "$profile_dir/airootfs/usr/local/bin/codex"
     check_bash_syntax "$profile_dir/airootfs/usr/local/bin/engineos-dev-shell-start"
+    if grep -F 'best_effort()' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null ||
+        grep -F 'WARN best-effort failed' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null ||
+        grep -F 'best_effort()' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-codex-setup" >/dev/null ||
+        grep -F 'WARN best-effort failed' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-codex-setup" >/dev/null; then
+      fail "$profile_dir live setup scripts still hide required setup failures"
+    else
+      ok "$profile_dir live setup scripts fail closed for required setup"
+    fi
     if grep -F 'wheel,input,audio,video,render' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null; then
       ok "$profile_dir live user gets input/audio/video/render groups"
     else
@@ -659,6 +667,17 @@ check_iso() {
       ok "$profile_dir enables PipeWire user units globally"
     else
       fail "$profile_dir does not enable PipeWire user units globally"
+    fi
+    if grep -F ': >/var/lib/systemd/linger/dev' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null; then
+      ok "$profile_dir enables user linger in the image"
+    else
+      fail "$profile_dir does not enable user linger in the image"
+    fi
+    if grep -F 'best_effort()' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null ||
+        grep -F 'WARN best-effort failed' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null; then
+      fail "$profile_dir customize_airootfs still hides required setup failures"
+    else
+      ok "$profile_dir customize_airootfs fails closed for required setup"
     fi
     if grep -F 'systemctl enable engineos-dev-shell.service' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
         grep -F 'ENGINEOS_TERMINAL_REQUIRE_WAYLAND=true' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-dev-shell.service" >/dev/null &&
@@ -727,6 +746,12 @@ check_iso() {
     check_bash_syntax "$profile_dir/airootfs/usr/local/bin/engineos-live-setup"
     check_bash_syntax "$profile_dir/airootfs/usr/local/bin/engineos-recovery-help"
     check_bash_syntax "$profile_dir/airootfs/usr/local/bin/engineos-runtime-start"
+    if grep -F 'best_effort()' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null ||
+        grep -F 'WARN best-effort failed' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null; then
+      fail "$profile_dir live setup script still hides required setup failures"
+    else
+      ok "$profile_dir live setup script fails closed for required setup"
+    fi
     if grep -F 'wheel,input,audio,video,render' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null; then
       ok "$profile_dir live user gets input/audio/video/render groups"
     else
@@ -742,6 +767,17 @@ check_iso() {
       ok "$profile_dir enables PipeWire user units globally"
     else
       fail "$profile_dir does not enable PipeWire user units globally"
+    fi
+    if grep -F ': >/var/lib/systemd/linger/engineos' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null; then
+      ok "$profile_dir enables user linger in the image"
+    else
+      fail "$profile_dir does not enable user linger in the image"
+    fi
+    if grep -F 'best_effort()' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null ||
+        grep -F 'WARN best-effort failed' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null; then
+      fail "$profile_dir customize_airootfs still hides required setup failures"
+    else
+      ok "$profile_dir customize_airootfs fails closed for required setup"
     fi
     if grep -F "printf 'engineos:engineos\\n' | chpasswd" "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
         grep -F 'systemctl enable sshd.service' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&

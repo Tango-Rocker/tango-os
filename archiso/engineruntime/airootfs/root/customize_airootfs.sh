@@ -1,18 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-best_effort() {
-  local label="$1"
-  shift
-  if "$@"; then
-    printf 'ok: %s\n' "$label"
-    return 0
-  fi
-  printf 'WARN best-effort failed: %s:' "$label" >&2
-  printf ' %q' "$@" >&2
-  printf '\n' >&2
-}
-
 for group in wheel input audio video render; do
   groupadd -f "$group"
 done
@@ -65,8 +53,9 @@ systemctl enable engineos-engine-runner.service
 systemctl enable engineos-runtime.service
 systemctl enable engineos-observe-exporter.service
 systemctl enable getty@tty2.service
-best_effort "global PipeWire user units" systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service
-best_effort "engineos user linger" loginctl enable-linger engineos
+systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service
+install -d -m 0755 /var/lib/systemd/linger
+: >/var/lib/systemd/linger/engineos
 
 install -d -m 0755 /etc/ssh/sshd_config.d
 cat >/etc/ssh/sshd_config.d/10-engineos-live.conf <<'EOF'

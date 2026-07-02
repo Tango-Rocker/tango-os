@@ -11,14 +11,13 @@ log() {
   printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" | tee -a "$LOG"
 }
 
-best_effort() {
-  local label="$1"
-  shift
-  if "$@"; then
-    log "ok: $label"
-    return 0
-  fi
-  log "WARN best-effort failed: $label: $*"
+repair_codex_ownership() {
+  local path
+  for path in "$TARGET_HOME/.codex" "$TARGET_HOME/.local"; do
+    if [[ -e "$path" ]]; then
+      chown -R "$TARGET_USER:$TARGET_USER" "$path"
+    fi
+  done
 }
 
 if ! install -d -m 2775 -o root -g wheel "$LOG_DIR" 2>/dev/null; then
@@ -27,19 +26,19 @@ fi
 touch "$LOG"
 
 if [[ -x "$CODEX_BIN" ]]; then
-  best_effort "codex ownership repair" chown -R "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.codex" "$TARGET_HOME/.local"
+  repair_codex_ownership
   log "codex already installed: $CODEX_BIN"
-  best_effort "codex version probe" "$CODEX_BIN" --version
+  "$CODEX_BIN" --version | tee -a "$LOG"
   exit 0
 fi
 
 EMBEDDED_CODEX="$TARGET_HOME/.codex/packages/standalone/current/bin/codex"
 if [[ -f "$EMBEDDED_CODEX" ]]; then
-  best_effort "embedded codex executable bit" chmod 0755 "$EMBEDDED_CODEX"
-  best_effort "codex ownership repair" chown -R "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.codex" "$TARGET_HOME/.local"
+  chmod 0755 "$EMBEDDED_CODEX"
+  repair_codex_ownership
   if [[ -x "$CODEX_BIN" ]]; then
     log "codex repaired from embedded payload: $CODEX_BIN"
-    best_effort "codex version probe" "$CODEX_BIN" --version
+    "$CODEX_BIN" --version | tee -a "$LOG"
     exit 0
   fi
 fi
