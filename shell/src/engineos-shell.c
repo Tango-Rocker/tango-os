@@ -3,12 +3,14 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <gdk-pixbuf/gdk-pixbuf.h>
 #include <getopt.h>
 #include <limits.h>
+#include <png.h>
+#include <setjmp.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +21,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <drm_fourcc.h>
+#include <jpeglib.h>
 #include <wayland-server-core.h>
 #include <wlr/interfaces/wlr_buffer.h>
 #include <wlr/backend.h>
@@ -111,6 +114,7 @@ struct engineos_preview_surface {
 	struct wlr_scene_buffer *scene_buffer;
 	struct wlr_buffer *buffer;
 	char *path;
+	char *owner;
 	int x;
 	int y;
 	int width;
@@ -1117,17 +1121,8 @@ static const struct wlr_buffer_impl pixel_buffer_impl = {
 	.end_data_ptr_access = pixel_buffer_end_data_ptr_access,
 };
 
-static struct wlr_buffer *create_pixel_buffer_from_pixbuf(GdkPixbuf *pixbuf) {
-	int width = gdk_pixbuf_get_width(pixbuf);
-	int height = gdk_pixbuf_get_height(pixbuf);
-	int channels = gdk_pixbuf_get_n_channels(pixbuf);
-	int source_stride = gdk_pixbuf_get_rowstride(pixbuf);
-	const unsigned char *source = gdk_pixbuf_read_pixels(pixbuf);
-	if (width <= 0 || height <= 0 || source == NULL ||
-			(channels != 3 && channels != 4)) {
-		return NULL;
-	}
-
+static struct wlr_buffer *create_pixel_buffer_from_rgba(
+		const unsigned char *source, int width, int height, size_t source_stride) {
 	struct engineos_pixel_buffer *buffer = calloc(1, sizeof(*buffer));
 	if (buffer == NULL) {
 		return NULL;
@@ -1142,75 +1137,234 @@ static struct wlr_buffer *create_pixel_buffer_from_pixbuf(GdkPixbuf *pixbuf) {
 	}
 
 	for (int y = 0; y < height; y++) {
-		const unsigned char *src = source + (size_t)y * (size_t)source_stride;
+		const unsigned char *src = source + (size_t)y * source_stride;
 		unsigned char *dst = buffer->data + (size_t)y * buffer->stride;
-		for (int x = 0; x < width; x++) {
-			dst[(size_t)x * 4 + 0] = src[(size_t)x * (size_t)channels + 0];
-			dst[(size_t)x * 4 + 1] = src[(size_t)x * (size_t)channels + 1];
-			dst[(size_t)x * 4 + 2] = src[(size_t)x * (size_t)channels + 2];
-			dst[(size_t)x * 4 + 3] = channels == 4 ?
-				src[(size_t)x * 4 + 3] : 255;
-		}
+		memcpy(dst, src, buffer->stride);
 	}
 
 	wlr_buffer_init(&buffer->base, &pixel_buffer_impl, width, height);
 	return &buffer->base;
 }
 
-static struct wlr_buffer *decode_image_preview(const char *path,
-		int *image_width, int *image_height, char *error, size_t error_size) {
-	int source_width = 0;
-	int source_height = 0;
-	GdkPixbufFormat *format =
-		gdk_pixbuf_get_file_info(path, &source_width, &source_height);
-	if (format == NULL || source_width <= 0 || source_height <= 0) {
-		snprintf(error, error_size, "unsupported or unreadable image");
-		return NULL;
+static bool image_dimensions_allowed(int width, int height,
+		char *error, size_t error_size) {
+	if (width <= 0 || height <= 0) {
+		snprintf(error, error_size, "image dimensions are invalid");
+		return false;
 	}
-	if (source_width > 8192 || source_height > 8192 ||
-			(int64_t)source_width * (int64_t)source_height > 67108864) {
+	if (width > 4096 || height > 4096 ||
+			(int64_t)width * (int64_t)height > 16777216) {
 		snprintf(error, error_size, "image dimensions too large: %dx%d",
-			source_width, source_height);
+			width, height);
+		return false;
+	}
+	return true;
+}
+
+static struct wlr_buffer *decode_png_preview(FILE *file,
+		int *image_width, int *image_height, char *error, size_t error_size) {
+	unsigned char signature[8];
+	if (fread(signature, 1, sizeof(signature), file) != sizeof(signature) ||
+			png_sig_cmp(signature, 0, sizeof(signature)) != 0) {
+		snprintf(error, error_size, "not a PNG image");
 		return NULL;
 	}
 
-	int load_width = source_width;
-	int load_height = source_height;
-	const int max_decode_edge = 4096;
-	if (source_width > max_decode_edge || source_height > max_decode_edge) {
-		double scale = source_width > source_height ?
-			(double)max_decode_edge / (double)source_width :
-			(double)max_decode_edge / (double)source_height;
-		load_width = (int)((double)source_width * scale);
-		load_height = (int)((double)source_height * scale);
-		if (load_width <= 0) {
-			load_width = 1;
-		}
-		if (load_height <= 0) {
-			load_height = 1;
-		}
+	png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING,
+		NULL, NULL, NULL);
+	if (png == NULL) {
+		snprintf(error, error_size, "failed to initialize PNG decoder");
+		return NULL;
 	}
-
-	GError *gerror = NULL;
-	GdkPixbuf *pixbuf = gdk_pixbuf_new_from_file_at_scale(path,
-		load_width, load_height, true, &gerror);
-	if (pixbuf == NULL) {
-		snprintf(error, error_size, "image decode failed: %s",
-			gerror != NULL && gerror->message != NULL ?
-				gerror->message : "unknown error");
-		if (gerror != NULL) {
-			g_error_free(gerror);
-		}
+	png_infop info = png_create_info_struct(png);
+	if (info == NULL) {
+		png_destroy_read_struct(&png, NULL, NULL);
+		snprintf(error, error_size, "failed to initialize PNG info");
+		return NULL;
+	}
+	if (setjmp(png_jmpbuf(png))) {
+		png_destroy_read_struct(&png, &info, NULL);
+		snprintf(error, error_size, "PNG decode failed");
 		return NULL;
 	}
 
-	struct wlr_buffer *buffer = create_pixel_buffer_from_pixbuf(pixbuf);
-	*image_width = gdk_pixbuf_get_width(pixbuf);
-	*image_height = gdk_pixbuf_get_height(pixbuf);
-	g_object_unref(pixbuf);
+	png_init_io(png, file);
+	png_set_sig_bytes(png, sizeof(signature));
+	png_read_info(png, info);
+
+	png_uint_32 width = png_get_image_width(png, info);
+	png_uint_32 height = png_get_image_height(png, info);
+	int bit_depth = png_get_bit_depth(png, info);
+	int color_type = png_get_color_type(png, info);
+	if (width > INT_MAX || height > INT_MAX ||
+			!image_dimensions_allowed((int)width, (int)height,
+				error, error_size)) {
+		png_destroy_read_struct(&png, &info, NULL);
+		return NULL;
+	}
+
+	if (bit_depth == 16) {
+		png_set_strip_16(png);
+	}
+	if (color_type == PNG_COLOR_TYPE_PALETTE) {
+		png_set_palette_to_rgb(png);
+	}
+	if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8) {
+		png_set_expand_gray_1_2_4_to_8(png);
+	}
+	if (png_get_valid(png, info, PNG_INFO_tRNS)) {
+		png_set_tRNS_to_alpha(png);
+	}
+	if (color_type == PNG_COLOR_TYPE_GRAY ||
+			color_type == PNG_COLOR_TYPE_GRAY_ALPHA) {
+		png_set_gray_to_rgb(png);
+	}
+	if ((color_type & PNG_COLOR_MASK_ALPHA) == 0 &&
+			!png_get_valid(png, info, PNG_INFO_tRNS)) {
+		png_set_filler(png, 0xff, PNG_FILLER_AFTER);
+	}
+
+	png_read_update_info(png, info);
+	size_t stride = png_get_rowbytes(png, info);
+	if (stride != (size_t)width * 4) {
+		png_destroy_read_struct(&png, &info, NULL);
+		snprintf(error, error_size, "PNG decoder did not produce RGBA pixels");
+		return NULL;
+	}
+
+	unsigned char *pixels = malloc(stride * (size_t)height);
+	png_bytep *rows = calloc((size_t)height, sizeof(*rows));
+	if (pixels == NULL || rows == NULL) {
+		free(pixels);
+		free(rows);
+		png_destroy_read_struct(&png, &info, NULL);
+		snprintf(error, error_size, "failed to allocate PNG pixels");
+		return NULL;
+	}
+	for (png_uint_32 y = 0; y < height; y++) {
+		rows[y] = pixels + (size_t)y * stride;
+	}
+	png_read_image(png, rows);
+	png_read_end(png, NULL);
+	free(rows);
+	png_destroy_read_struct(&png, &info, NULL);
+
+	struct wlr_buffer *buffer =
+		create_pixel_buffer_from_rgba(pixels, (int)width, (int)height, stride);
+	free(pixels);
 	if (buffer == NULL) {
 		snprintf(error, error_size, "failed to allocate image buffer");
+		return NULL;
 	}
+	*image_width = (int)width;
+	*image_height = (int)height;
+	return buffer;
+}
+
+struct engineos_jpeg_error {
+	struct jpeg_error_mgr pub;
+	jmp_buf jump;
+};
+
+static void jpeg_error_exit(j_common_ptr cinfo) {
+	struct engineos_jpeg_error *error =
+		(struct engineos_jpeg_error *)cinfo->err;
+	longjmp(error->jump, 1);
+}
+
+static struct wlr_buffer *decode_jpeg_preview(FILE *file,
+		int *image_width, int *image_height, char *error, size_t error_size) {
+	struct jpeg_decompress_struct cinfo = {0};
+	struct engineos_jpeg_error jpeg_error = {0};
+	cinfo.err = jpeg_std_error(&jpeg_error.pub);
+	jpeg_error.pub.error_exit = jpeg_error_exit;
+	if (setjmp(jpeg_error.jump)) {
+		jpeg_destroy_decompress(&cinfo);
+		snprintf(error, error_size, "JPEG decode failed");
+		return NULL;
+	}
+
+	jpeg_create_decompress(&cinfo);
+	jpeg_stdio_src(&cinfo, file);
+	jpeg_read_header(&cinfo, TRUE);
+	cinfo.out_color_space = JCS_RGB;
+	jpeg_start_decompress(&cinfo);
+
+	if (cinfo.output_width > INT_MAX || cinfo.output_height > INT_MAX ||
+			!image_dimensions_allowed((int)cinfo.output_width,
+				(int)cinfo.output_height, error, error_size)) {
+		jpeg_destroy_decompress(&cinfo);
+		return NULL;
+	}
+
+	int width = (int)cinfo.output_width;
+	int height = (int)cinfo.output_height;
+	size_t stride = (size_t)width * 4;
+	unsigned char *pixels = malloc(stride * (size_t)height);
+	JSAMPARRAY scanline = (*cinfo.mem->alloc_sarray)((j_common_ptr)&cinfo,
+		JPOOL_IMAGE, (JDIMENSION)width * 3, 1);
+	if (pixels == NULL || scanline == NULL) {
+		free(pixels);
+		jpeg_destroy_decompress(&cinfo);
+		snprintf(error, error_size, "failed to allocate JPEG pixels");
+		return NULL;
+	}
+
+	while (cinfo.output_scanline < cinfo.output_height) {
+		JDIMENSION y = cinfo.output_scanline;
+		jpeg_read_scanlines(&cinfo, scanline, 1);
+		unsigned char *dst = pixels + (size_t)y * stride;
+		for (int x = 0; x < width; x++) {
+			dst[(size_t)x * 4 + 0] = scanline[0][(size_t)x * 3 + 0];
+			dst[(size_t)x * 4 + 1] = scanline[0][(size_t)x * 3 + 1];
+			dst[(size_t)x * 4 + 2] = scanline[0][(size_t)x * 3 + 2];
+			dst[(size_t)x * 4 + 3] = 255;
+		}
+	}
+	jpeg_finish_decompress(&cinfo);
+	jpeg_destroy_decompress(&cinfo);
+
+	struct wlr_buffer *buffer =
+		create_pixel_buffer_from_rgba(pixels, width, height, stride);
+	free(pixels);
+	if (buffer == NULL) {
+		snprintf(error, error_size, "failed to allocate image buffer");
+		return NULL;
+	}
+	*image_width = width;
+	*image_height = height;
+	return buffer;
+}
+
+static struct wlr_buffer *decode_image_preview(const char *path,
+		int *image_width, int *image_height, char *error, size_t error_size) {
+	FILE *file = fopen(path, "rb");
+	if (file == NULL) {
+		snprintf(error, error_size, "failed to open image: %s",
+			strerror(errno));
+		return NULL;
+	}
+
+	unsigned char signature[8] = {0};
+	if (fread(signature, 1, sizeof(signature), file) != sizeof(signature)) {
+		fclose(file);
+		snprintf(error, error_size, "image file is too short");
+		return NULL;
+	}
+	rewind(file);
+
+	struct wlr_buffer *buffer = NULL;
+	if (png_sig_cmp(signature, 0, sizeof(signature)) == 0) {
+		buffer = decode_png_preview(file, image_width, image_height,
+			error, error_size);
+	} else if (signature[0] == 0xff && signature[1] == 0xd8 &&
+			signature[2] == 0xff) {
+		buffer = decode_jpeg_preview(file, image_width, image_height,
+			error, error_size);
+	} else {
+		snprintf(error, error_size, "unsupported image type");
+	}
+	fclose(file);
 	return buffer;
 }
 
@@ -1338,11 +1492,49 @@ static void clamp_box_to_output(struct engineos_view_geometry *box,
 	}
 }
 
+static enum engineos_surface_role parse_surface_role(const char *value) {
+	if (value == NULL) {
+		return ENGINEOS_SURFACE_UNKNOWN;
+	}
+	if (strcmp(value, "terminal") == 0) {
+		return ENGINEOS_SURFACE_TERMINAL;
+	}
+	if (strcmp(value, "terminal-secondary") == 0) {
+		return ENGINEOS_SURFACE_TERMINAL_SECONDARY;
+	}
+	if (strcmp(value, "cube") == 0) {
+		return ENGINEOS_SURFACE_CUBE;
+	}
+	if (strcmp(value, "engine") == 0) {
+		return ENGINEOS_SURFACE_ENGINE;
+	}
+	return ENGINEOS_SURFACE_UNKNOWN;
+}
+
+static enum engineos_surface_role preview_anchor_role(
+		struct engineos_shell_server *server, const char *slot) {
+	enum engineos_surface_role role = parse_surface_role(slot);
+	if (is_terminal_role(role)) {
+		return role;
+	}
+	if (server->focused_view != NULL && server->focused_view->mapped &&
+			is_terminal_role(server->focused_view->role)) {
+		return server->focused_view->role;
+	}
+	if (is_terminal_role(server->active_slot)) {
+		return server->active_slot;
+	}
+	return ENGINEOS_SURFACE_TERMINAL;
+}
+
 static bool compute_preview_box(struct engineos_shell_server *server,
+		const char *slot,
 		const struct engineos_preview_bounds *bounds,
 		struct engineos_view_geometry *box) {
+	enum engineos_surface_role anchor_role = preview_anchor_role(server, slot);
+	bool explicit_anchor = is_terminal_role(parse_surface_role(slot));
 	struct engineos_view_geometry output = {0};
-	output_geometry_for_role(server, ENGINEOS_SURFACE_TERMINAL,
+	output_geometry_for_role(server, anchor_role,
 		&output.x, &output.y, &output.width, &output.height);
 
 	*box = output;
@@ -1362,7 +1554,7 @@ static bool compute_preview_box(struct engineos_shell_server *server,
 		if (!apply_pane_geometry(&request, &output, box)) {
 			return false;
 		}
-	} else if (server->focused_view != NULL &&
+	} else if (!explicit_anchor && server->focused_view != NULL &&
 			is_terminal_role(server->focused_view->role)) {
 		struct engineos_view_geometry focused = {0};
 		if (compute_view_geometry(server->focused_view, &focused) &&
@@ -1388,6 +1580,8 @@ static void hide_image_preview(struct engineos_shell_server *server,
 	}
 	free(server->preview.path);
 	server->preview.path = NULL;
+	free(server->preview.owner);
+	server->preview.owner = NULL;
 	server->preview.x = 0;
 	server->preview.y = 0;
 	server->preview.width = 0;
@@ -1400,8 +1594,9 @@ static void hide_image_preview(struct engineos_shell_server *server,
 }
 
 static bool show_image_preview(struct engineos_shell_server *server,
-		const char *path, const struct engineos_preview_bounds *bounds,
-		char *error, size_t error_size) {
+		const char *path, const char *slot, const char *owner,
+		const struct engineos_preview_bounds *bounds, char *error,
+		size_t error_size) {
 	if (path == NULL || path[0] != '/') {
 		snprintf(error, error_size, "preview path must be absolute");
 		return false;
@@ -1413,7 +1608,7 @@ static bool show_image_preview(struct engineos_shell_server *server,
 	}
 
 	struct engineos_view_geometry box = {0};
-	if (!compute_preview_box(server, bounds, &box)) {
+	if (!compute_preview_box(server, slot, bounds, &box)) {
 		snprintf(error, error_size, "preview bounds are outside the active output");
 		return false;
 	}
@@ -1451,6 +1646,8 @@ static bool show_image_preview(struct engineos_shell_server *server,
 	}
 
 	server->preview.path = strdup(path);
+	server->preview.owner = owner != NULL && owner[0] != '\0' ?
+		strdup(owner) : NULL;
 	server->preview.x = box.x + (box.width - (int)dest_width) / 2;
 	server->preview.y = box.y + (box.height - (int)dest_height) / 2;
 	server->preview.width = (int)dest_width;
@@ -1463,8 +1660,11 @@ static bool show_image_preview(struct engineos_shell_server *server,
 		server->preview.x, server->preview.y);
 	wlr_scene_node_raise_to_top(&server->preview.scene_buffer->node);
 	wlr_log(WLR_INFO,
-		"image preview shown path=%s image=%dx%d x=%d y=%d size=%dx%d bounds=%dx%d",
-		path, image_width, image_height, server->preview.x,
+		"image preview shown path=%s owner=%s slot=%s image=%dx%d x=%d y=%d size=%dx%d bounds=%dx%d",
+		path,
+		server->preview.owner != NULL ? server->preview.owner : "",
+		slot != NULL ? slot : "",
+		image_width, image_height, server->preview.x,
 		server->preview.y, server->preview.width, server->preview.height,
 		box.width, box.height);
 	schedule_outputs(server);
@@ -1511,6 +1711,16 @@ static void handle_preview_request(struct engineos_shell_server *server,
 		return;
 	}
 	if (strcmp(op, "hide") == 0) {
+		char owner[128] = {0};
+		json_extract_string(request, "owner", owner, sizeof(owner));
+		if (owner[0] != '\0' && server->preview.owner != NULL &&
+				strcmp(owner, server->preview.owner) != 0) {
+			wlr_log(WLR_INFO,
+				"image preview hide ignored owner=%s current_owner=%s reason=stale-owner",
+				owner, server->preview.owner);
+			preview_write_response(client_fd, "ok", NULL);
+			return;
+		}
 		hide_image_preview(server, "ipc-hide");
 		preview_write_response(client_fd, "ok", NULL);
 		return;
@@ -1525,10 +1735,14 @@ static void handle_preview_request(struct engineos_shell_server *server,
 		preview_write_response(client_fd, "error", "missing path");
 		return;
 	}
+	char slot[64] = {0};
+	json_extract_string(request, "slot", slot, sizeof(slot));
+	char owner[128] = {0};
+	json_extract_string(request, "owner", owner, sizeof(owner));
 	struct engineos_preview_bounds bounds = {0};
 	request_preview_bounds(request, &bounds);
 	char error[512] = {0};
-	if (!show_image_preview(server, path, &bounds, error, sizeof(error))) {
+	if (!show_image_preview(server, path, slot, owner, &bounds, error, sizeof(error))) {
 		wlr_log(WLR_ERROR, "image preview show failed path=%s error=%s",
 			path, error[0] != '\0' ? error : "unknown");
 		preview_write_response(client_fd, "error",
@@ -3468,7 +3682,6 @@ static void destroy_server(struct engineos_shell_server *server) {
 		server->preview_socket_fd = -1;
 	}
 	if (server->preview_socket_path != NULL) {
-		unlink(server->preview_socket_path);
 		free(server->preview_socket_path);
 		server->preview_socket_path = NULL;
 	}

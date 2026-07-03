@@ -150,12 +150,25 @@ e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeO
   visible-failure JSON requests to the shell preview socket. `engineos-shell`
   listens on `$ENGINEOS_STATE_DIR/preview.sock` or
   `$XDG_RUNTIME_DIR/engineos/preview.sock`, handles `ping/show/hide`, decodes
-  images with gdk-pixbuf, clamps decoded dimensions, wraps pixels in a wlroots
-  scene buffer, and renders the preview contained inside the active pane/output
-  bounds. Local source validation passed for helper syntax, helper contract
-  tests, shell build dry-run, and a real Meson compile. Headless IPC `ping`
-  worked against the compiled shell; local image `show` failed visibly because
-  this host's gdk-pixbuf loader registry does not expose PNG/JPEG loaders.
+  images with libpng/libjpeg-turbo, clamps decoded dimensions, wraps pixels in
+  a wlroots scene buffer, and renders the preview contained inside the active
+  pane/output bounds. Local source validation passed for helper syntax, helper
+  contract tests, shell build dry-run, real Meson compile, and a headless shell
+  IPC proof that successfully showed PNG and JPEG previews and hid them again.
+  The current live `dev` user also has `~/.config/mc/mc.ext.ini` PNG/JPEG
+  `Open`/`View` rules pointing at `engine-image-preview`; rebuilt
+  `/usr/bin/engineos-shell` and `/usr/bin/engine-image-preview` binaries are
+  installed on bare-metal EngineDev.
+- The MC image preview live bugfix is deployed on bare-metal EngineDev:
+  `engine-image-preview` now tags requests with the owning terminal slot and an
+  owner token, shell preview anchoring honors `terminal` vs
+  `terminal-secondary`, stale owner-scoped `hide` requests are ignored after a
+  newer image replaces the preview, MC/process-exit watcher hides clean up the
+  matching preview, and shell shutdown no longer unlinks the shared
+  `preview.sock` path during restart races. Live proof showed
+  `terminal-secondary` preview placement at `x=1920` on the second output,
+  stale-owner hide rejection, watcher-triggered hide, and working
+  `engine-image-preview --ping`.
 - The launchpad app registry is now packaged at `/etc/engineos/apps.toml` from `packages/engineos-config/files/etc/engineos/apps.toml`. `eos-app manifest validate` checks the terminal, cube, and Quake slot contract, `eos-runtime shell` reads the manifest for default slot commands, and `eos-proof launchpad` validates the manifest before checking runtime logs.
 - The first rebuilt EngineRuntime ISO booted in builder-hosted QEMU far enough to mount the 50% cowspace and reach login, but exposed two runtime-proof blockers: `engineos-live-setup.service` was ordered after `multi-user.target`, creating a cycle that skipped `engineos-engine-runner.service`, and Runtime did not yet enable explicit SSH password access for automated VM proof. The profile now runs live setup before the runtime services and configures `engineos` / `engineos` SSH validation access.
 - A clean generated EngineRuntime ISO now passes `eos-proof booted-iso --runtime` in builder-hosted QEMU through SSH port 2223 with 0 boot-validation failures and 0 warnings. The final proven ISO is `EngineRuntimeOS-2026.06.15-x86_64.iso`, checksum `e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2`.
@@ -208,10 +221,8 @@ e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeO
 - Real audible output is not proven in the current Hyper-V/basic QEMU path. Hyper-V is not presenting a sound device to Linux, and the QEMU HDA proof uses an audio discard backend; prove audible output on hardware or an audio-forwarding VM/RDP path.
 - Accelerated VM graphics are not available in the current lab VM paths: the builder QEMU GL path fails without a host DRM render node, and the Hyper-V test guest reports llvmpipe.
 - Visible hardware/frame-capture proof of the Runtime shell is still missing; the current Runtime proof is headless QEMU evidence from logs, state JSON, and app renderer/frame logs.
-- MC image preview still needs a runtime proof with PNG/JPEG gdk-pixbuf loaders
-  available, MC `View`/`Open` rules installed in the target user/system
-  `mc.ext.ini`, and a captured shell frame showing a known image rendered in the
-  active pane.
+- MC image preview still needs an interactive live MC acceptance pass and a
+  captured shell frame showing a known image rendered in the active MC pane.
 - Runtime launchpad with user-provided Quake assets is not proven yet, so the engine slot has not mapped as a live Quake surface in Runtime.
 - Real USB writing to removable media.
 - Secure Boot signed-ISO boot with an enrolled EngineOS db certificate. The signed ISO artifact exists and verifies locally, but target firmware enrollment and a real USB boot have not been executed yet.
