@@ -22,5 +22,5 @@ Escalation:
 - Escalate stale agent-pack docs or package harness drift to `cleaner`.
 
 Proof commands:
-- `eos-build repo --dry-run`
+- `eos-ci local --no-validate-repo --clean-generated`
 - `eos-agent profile show compiler`

@@ -12,10 +12,9 @@ and commercial assets must stay outside the repo and ISO.
 
 ```bash
 ./tools/engineos/eos-build fetch engine quake --status
-./tools/engineos/eos-build engine quake --dry-run
-./tools/engineos/eos-validate engine quake --mock
 ./tools/engineos/eos-runtime quake --smoke
 ./tools/engineos/eos-assets check quake
+./tools/engineos/eos-lint packages --package engineos-quakespasm
 ./tools/engineos/eos-logs engine --last 200
 ```
 
@@ -23,7 +22,7 @@ For Runtime launchpad routing:
 
 ```bash
 ./tools/engineos/eos-app manifest validate
-./tools/engineos/eos-proof launchpad --runtime --dry-run
+./tools/engineos/eos-test app
 ```
 
 ## Files

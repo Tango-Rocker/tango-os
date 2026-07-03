@@ -8,7 +8,7 @@ usage() {
 Usage:
   agent_route.sh route [--dry-run] "<request>"
 
-Print role, confidence, risk, reason, and the smallest direct EngineOS proof.
+Print role, confidence, risk, reason, and the smallest direct EngineOS check.
 Route metadata is recorded only when observability is enabled.
 HELP
 }
@@ -36,7 +36,7 @@ route_request() {
   local risk="low"
   local reason="broad request needs Oracle clarification"
   local reason_code="broad-router"
-  local proof='eos-agent route --dry-run "<request>"'
+  local proof="eos-test agent-route"
 
   lower="$(printf '%s' "$request" | tr '[:upper:]' '[:lower:]')"
 
@@ -63,7 +63,7 @@ route_request() {
     confidence="0.86"
     reason="request is source/package build work"
     reason_code="source-build"
-    proof="eos-build repo --dry-run"
+    proof="eos-ci local --no-validate-repo --clean-generated"
   elif contains_any "$lower" "wayland" "wlroots" "gl shell" "desktop" "window" "tiling" "app slot" "launchpad" "focus" "input routing" "register window" "swap window"; then
     role="admin-shell"
     confidence="0.84"
@@ -81,7 +81,7 @@ route_request() {
     confidence="0.83"
     reason="request is OS maintenance or troubleshooting"
     reason_code="os-maintenance"
-    proof="eos-doctor --mock"
+    proof="eos-doctor"
   fi
 
   printf 'role=%s\n' "$role"

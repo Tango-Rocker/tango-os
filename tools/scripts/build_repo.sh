@@ -129,15 +129,20 @@ repo_add_current_artifacts() {
 
 create_local_dep_pacman_wrapper() {
   local wrapper_dir="$1"
+  local real_pacman="$2"
+  local repo_dir="$3"
   local wrapper="$wrapper_dir/pacman"
 
   mkdir -p "$wrapper_dir"
-  cat >"$wrapper" <<'WRAPPER'
+  {
+    cat <<'WRAPPER_HEAD'
 #!/usr/bin/env bash
 set -euo pipefail
 
-real_pacman="${ENGINEOS_REAL_PACMAN:?}"
-repo_dir="${ENGINEOS_REPO_DIR:?}"
+WRAPPER_HEAD
+    printf 'real_pacman=%q\n' "$real_pacman"
+    printf 'repo_dir=%q\n' "$repo_dir"
+    cat <<'WRAPPER_TAIL'
 is_deptest=false
 
 local_artifact_exists() {
@@ -177,7 +182,8 @@ if [[ "$has_target" != true ]]; then
 fi
 
 exec "$real_pacman" "${filtered[@]}"
-WRAPPER
+WRAPPER_TAIL
+  } >"$wrapper"
   chmod +x "$wrapper"
   printf '%s\n' "$wrapper"
 }
@@ -217,7 +223,7 @@ mkdir -p "$PACKAGE_SOURCE_DIR"
 mkdir -p "$PACKAGE_BUILD_DIR"
 REAL_PACMAN="$(command -v pacman)"
 PACMAN_WRAPPER_DIR="$(mktemp -d "${TMPDIR:-/tmp}/engineos-pacman-wrapper.XXXXXX")"
-PACMAN_WRAPPER="$(create_local_dep_pacman_wrapper "$PACMAN_WRAPPER_DIR")"
+PACMAN_WRAPPER="$(create_local_dep_pacman_wrapper "$PACMAN_WRAPPER_DIR" "$REAL_PACMAN" "$REPO_DIR")"
 cleanup_pacman_wrapper() {
   rm -rf "$PACMAN_WRAPPER_DIR"
 }

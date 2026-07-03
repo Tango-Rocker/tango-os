@@ -11,7 +11,6 @@ if [[ -r /etc/engineos/profile.conf ]]; then
   source /etc/engineos/profile.conf
 fi
 MODE="host"
-MOCK=false
 virt=""
 lspci_output=""
 glx_output=""
@@ -20,7 +19,7 @@ vk_output=""
 
 usage() {
   cat <<'HELP'
-Usage: doctor.sh [--vm|--bare-metal|--mock]
+Usage: doctor.sh [--vm|--bare-metal]
 
 Collect EngineOS diagnostics for the builder VM, test VM, or bare-metal host.
 HELP
@@ -200,10 +199,6 @@ bare_metal_summary() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --mock)
-      MOCK=true
-      MODE="mock"
-      ;;
     --vm)
       MODE="vm"
       ;;
@@ -225,16 +220,6 @@ printf 'EngineOS doctor\n'
 print_kv "root" "$ROOT"
 print_kv "mode" "$MODE"
 print_kv "timestamp_utc" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-if [[ "$MOCK" == true ]]; then
-  print_kv "virt" "mock-virt"
-  print_kv "kernel" "mock-kernel"
-  print_kv "archiso" "mock-archiso"
-  print_kv "mesa" "mock-mesa"
-  print_kv "wlroots" "mock-wlroots"
-  print_kv "result" "ok"
-  exit 0
-fi
 
 section "Host and Virtualization"
 if have_cmd systemd-detect-virt; then

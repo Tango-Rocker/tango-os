@@ -89,7 +89,7 @@ class EngineRunner:
     def _known_pid(self):
         try:
             return self.pid_file.read_text(encoding="utf-8").strip()
-        except FileNotFoundError:
+        except OSError:
             return ""
 
     def _write_state(self, pid, target, args):
@@ -97,16 +97,23 @@ class EngineRunner:
         self.target_file.write_text(f"{target}\n", encoding="utf-8")
         self.args_file.write_text(json.dumps(args), encoding="utf-8")
 
+    def _clear_state(self):
+        for path in (self.pid_file, self.target_file, self.args_file):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
     def _read_previous(self):
         target = ""
         args = []
         try:
             target = self.target_file.read_text(encoding="utf-8").strip()
-        except FileNotFoundError:
+        except OSError:
             pass
         try:
             args = json.loads(self.args_file.read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError):
             args = []
         return target, args
 
@@ -184,7 +191,23 @@ class EngineRunner:
         self.process = process
         self.target = target
         self.args = args
-        self._write_state(process.pid, target, args)
+        try:
+            self._write_state(process.pid, target, args)
+        except OSError as exc:
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except OSError:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+            process.wait()
+            self.process = None
+            self._clear_state()
+            return {
+                "ok": False,
+                "message": f"launch failed to record engine state: {exc}",
+            }
         return {
             "ok": True,
             "state": "running",
@@ -228,10 +251,10 @@ class EngineRunner:
             time.sleep(0.1)
 
         return {
-            "ok": True,
+            "ok": False,
             "state": "stopping",
             "pid": pid,
-            "message": f"engine stop requested; pid may still be exiting: {pid}",
+            "message": f"engine stop requested but pid is still running: {pid}",
         }
 
     def restart(self, target, args, client_env=None):
@@ -239,7 +262,14 @@ class EngineRunner:
             target, args = self._read_previous()
         if not target:
             return {"ok": False, "message": "no previous engine target to restart"}
-        self.quit()
+        stop = self.quit()
+        if not stop.get("ok"):
+            return {
+                "ok": False,
+                "state": stop.get("state"),
+                "pid": stop.get("pid"),
+                "message": f"engine restart aborted: {stop.get('message', 'previous engine did not stop')}",
+            }
         return self.launch(target, args, client_env)
 
     def handle(self, request):
@@ -253,7 +283,14 @@ class EngineRunner:
         if method == "engine.restart":
             return self.restart(request.get("target", ""), request.get("args", []), request.get("env", {}))
         if method == "engine.daemon.stop":
-            self.quit()
+            stop = self.quit()
+            if not stop.get("ok"):
+                return {
+                    "ok": False,
+                    "state": stop.get("state"),
+                    "pid": stop.get("pid"),
+                    "message": f"engine runner daemon stop failed: {stop.get('message', 'engine did not stop')}",
+                }
             return {"ok": True, "message": "engine runner daemon stopping", "_shutdown": True}
         return {"ok": False, "message": f"unknown method: {method}"}
 

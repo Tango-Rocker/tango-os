@@ -22,5 +22,5 @@ Escalation:
 - Escalate docs/index drift to `cleaner`.
 
 Proof commands:
-- `eos-doctor --mock`
+- `eos-doctor`
 - `eos-agent profile show overseer`

@@ -51,7 +51,7 @@ def main() -> int:
     print(excerpt(root / "CURRENT_STATUS.md"))
     print()
     print("Next local proof starts with:")
-    print("  ./tools/engineos/eos-doctor --mock")
+    print("  ./tools/engineos/eos-doctor --vm")
     print("  ./tools/engineos/eos-test agent")
     return 0
 

@@ -2,10 +2,13 @@
 set -euo pipefail
 
 MODULE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-if [[ -n "${ENGINEOS_SCRIPT_DIR:-}" ]]; then
+SOURCE_SCRIPT_DIR="$(cd "$MODULE_DIR/../../scripts" && pwd -P)"
+if [[ -d "$SOURCE_SCRIPT_DIR" && "${ENGINEOS_SCRIPT_DIR:-}" == /usr/lib/engineos/scripts* ]]; then
+  SCRIPT_DIR="$SOURCE_SCRIPT_DIR"
+elif [[ -n "${ENGINEOS_SCRIPT_DIR:-}" ]]; then
   SCRIPT_DIR="$ENGINEOS_SCRIPT_DIR"
 else
-  SCRIPT_DIR="$(cd "$MODULE_DIR/../../scripts" && pwd -P)"
+  SCRIPT_DIR="$SOURCE_SCRIPT_DIR"
 fi
 BUILDER_DIR="$(cd "$MODULE_DIR/../builder" && pwd -P)"
 BARE_METAL_DIR="$(cd "$MODULE_DIR/../bare-metal" && pwd -P)"
@@ -30,6 +33,7 @@ Usage: test_runner.sh [smoke|all]
        test_runner.sh compositor --headless
        test_runner.sh shell-actions
        test_runner.sh engine-runner-env
+       test_runner.sh image-preview
        test_runner.sh app
        test_runner.sh assets
        test_runner.sh reliability
@@ -45,6 +49,7 @@ Usage: test_runner.sh [smoke|all]
        test_runner.sh install
        test_runner.sh proof
        test_runner.sh installed-preflight
+       test_runner.sh ci
        test_runner.sh builder-handoff
        test_runner.sh builder-doctor
        test_runner.sh post-first-deploy
@@ -82,6 +87,7 @@ run_all() {
   run_all_step compositor --headless
   run_all_step shell-actions
   run_all_step engine-runner-env
+  run_all_step image-preview
   run_all_step app
   run_all_step assets
   run_all_step reliability
@@ -97,6 +103,7 @@ run_all() {
   run_all_step install
   run_all_step proof
   run_all_step installed-preflight
+  run_all_step ci
   run_all_step builder-handoff
   run_all_step builder-doctor
   run_all_step post-first-deploy
@@ -153,8 +160,11 @@ run_agent() {
   "$SCRIPT_DIR/package_lint.sh" --package engineos-tools >/dev/null
   "$SCRIPT_DIR/agent_hygiene.sh" check >/dev/null
 
-  if grep -R -n 'engineos_mcp_server.py\|project_status\|read_status' \
-      "$ROOT/.codex" "$ROOT/packages/engineos-tools" >/dev/null 2>&1; then
+  if find "$ROOT/.codex" "$ROOT/packages/engineos-tools" \
+      -path '*/pkg/*' -prune -o \
+      -path '*/src/*' -prune -o \
+      -type f -print0 |
+      xargs -0 grep -n 'engineos_mcp_server.py\|project_status\|read_status' >/dev/null 2>&1; then
     die "project-status MCP references remain in Codex config or agent package"
   fi
   [[ ! -e "$ROOT/tools/mcp/engineos_mcp_server.py" ]] ||
@@ -249,6 +259,15 @@ run_agent() {
     die "agent profile show does not print pergame-quake"
   "$SCRIPT_DIR/agent_profile.sh" show cleaner | grep -F 'role = "cleaner"' >/dev/null ||
     die "agent profile show does not print cleaner"
+  "$ROOT/tools/engineos/eos-agent" capabilities >"$tmp_dir/capabilities.txt"
+  grep -F 'schema=engineos-agent-capabilities-v0' "$tmp_dir/capabilities.txt" >/dev/null ||
+    die "agent capabilities output missing schema"
+  grep -F 'role=oracle' "$tmp_dir/capabilities.txt" >/dev/null ||
+    die "agent capabilities output does not include oracle"
+  grep -F 'role=cleaner' "$tmp_dir/capabilities.txt" >/dev/null ||
+    die "agent capabilities output does not include cleaner"
+  grep -F 'skill=.agents/skills/oracle/SKILL.md' "$tmp_dir/capabilities.txt" >/dev/null ||
+    die "agent capabilities output does not include skill path"
 
   printf 'agent harness smoke test passed\n'
 }
@@ -393,14 +412,36 @@ run_agent_dispatcher() {
   fi
 
   ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
-    ENGINEOS_AGENT_RUNNER=mock-pass \
+    ENGINEOS_AGENT_RUNNER=fixture-pass \
     "$SCRIPT_DIR/agent_dispatcher.sh" dispatch drain --execute --limit 1 >"$out"
   grep -F "completed task_id=$task_id" "$out" >/dev/null ||
-    die "agent dispatcher mock execution did not complete task"
+    die "agent dispatcher fixture execution did not complete task"
 
   ENGINEOS_AGENT_LEDGER_DIR="$ledger" "$SCRIPT_DIR/agent_dispatcher.sh" queue list --status done >"$out"
   grep -F "$task_id state=done role=cleaner" "$out" >/dev/null ||
     die "agent dispatcher did not list completed task as done"
+
+  ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
+    "$SCRIPT_DIR/agent_dispatcher.sh" queue add \
+      --role cleaner \
+      --reason fail \
+      --summary "fail this task" \
+      --proof "true" \
+      --source test >"$out"
+  task_id="$(sed -n 's/.*task_id=\([^ ]*\).*/\1/p' "$out")"
+  [[ -n "$task_id" ]] || die "agent dispatcher did not print failing task id"
+  if ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
+      ENGINEOS_AGENT_RUNNER=fixture-fail \
+      "$SCRIPT_DIR/agent_dispatcher.sh" dispatch drain --execute --limit 1 >"$out"; then
+    die "agent dispatcher fixture failure did not fail drain"
+  fi
+  grep -F "failed task_id=$task_id reason=runner-failed rc=17" "$out" >/dev/null ||
+    die "agent dispatcher fixture failure did not report runner failure"
+  grep -F 'drain summary: 1 task(s) considered, 1 failure(s)' "$out" >/dev/null ||
+    die "agent dispatcher drain failure summary was not explicit"
+  ENGINEOS_AGENT_LEDGER_DIR="$ledger" "$SCRIPT_DIR/agent_dispatcher.sh" queue list --status failed >"$out"
+  grep -F "$task_id state=failed role=cleaner" "$out" >/dev/null ||
+    die "agent dispatcher did not list failed task as failed"
 
   if ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
       "$SCRIPT_DIR/agent_dispatcher.sh" queue add \
@@ -442,8 +483,12 @@ run_observability() {
   local export_file="$tmp_dir/export/events.jsonl"
   local events="$tmp_dir/state/events.jsonl"
   local ledger="$tmp_dir/ledger"
+  local stubborn_pid=""
 
   cleanup_observability() {
+    if [[ -n "$stubborn_pid" ]]; then
+      kill -KILL "$stubborn_pid" >/dev/null 2>&1 || true
+    fi
     rm -rf "$tmp_dir"
   }
   trap cleanup_observability RETURN
@@ -479,10 +524,10 @@ run_observability() {
   fi
 
   ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-    "$ROOT/tools/engineos/eos-doctor" --mock >/dev/null
+    "$ROOT/tools/engineos/eos-doctor" --vm >/dev/null
   grep -F '"kind":"engineos-command"' "$events" >/dev/null ||
     die "observability did not record eos command metadata"
-  if grep -F 'eos-doctor --mock' "$events" >/dev/null; then
+  if grep -F 'eos-doctor --vm' "$events" >/dev/null; then
     die "observability stored raw eos command"
   fi
 
@@ -507,7 +552,7 @@ run_observability() {
       --source test >/dev/null
   ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
     ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
-    ENGINEOS_AGENT_RUNNER=mock-pass \
+    ENGINEOS_AGENT_RUNNER=fixture-pass \
     "$SCRIPT_DIR/agent_dispatcher.sh" dispatch drain --execute --limit 1 >/dev/null
 
   ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
@@ -534,6 +579,37 @@ run_observability() {
     "$SCRIPT_DIR/observability.sh" exporter once >"$out"
   grep -F 'engineos_agent_tasks_current' "$out" >/dev/null ||
     die "observability exporter one-shot missing task metric"
+
+  if ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
+      "$SCRIPT_DIR/observability.sh" exporter start --host 192.0.2.1 --port 19109 >"$out" 2>&1; then
+    die "observability exporter start succeeded for an unbindable host"
+  fi
+  grep -E 'observability exporter (failed to start|did not become healthy)' "$out" >/dev/null ||
+    die "observability exporter start failure was not explicit"
+  [[ ! -f "$tmp_dir/state/observability-exporter.pid" ]] ||
+    die "observability exporter start left a pid file after startup failure"
+
+  if ! command -v setsid >/dev/null 2>&1; then
+    die "setsid unavailable; cannot test observability exporter stop failure"
+  fi
+  setsid sh -c 'trap "" TERM; while :; do sleep 1; done' >/dev/null 2>&1 &
+  stubborn_pid="$!"
+  printf '%s\n' "$stubborn_pid" >"$tmp_dir/state/observability-exporter.pid"
+  if ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
+      "$SCRIPT_DIR/observability.sh" exporter stop >"$out" 2>&1; then
+    die "observability exporter stop succeeded while process ignored SIGTERM"
+  fi
+  grep -F 'stop requested but pid is still running' "$out" >/dev/null ||
+    die "observability exporter stop did not expose stubborn process"
+  [[ -f "$tmp_dir/state/observability-exporter.pid" ]] ||
+    die "observability exporter stop removed pid file for still-running process"
+  kill -KILL "$stubborn_pid" >/dev/null 2>&1 || true
+  wait "$stubborn_pid" 2>/dev/null || true
+  stubborn_pid=""
+  ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
+    "$SCRIPT_DIR/observability.sh" exporter stop >"$out"
+  grep -F 'observability exporter not running' "$out" >/dev/null ||
+    die "observability exporter stop did not clean stale pid after forced kill"
 
   ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
     ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
@@ -585,7 +661,7 @@ run_agent_route() {
     die "agent route did not select compiler"
   grep -F 'risk=medium' "$out" >/dev/null ||
     die "agent route did not assign compiler risk"
-  grep -F 'proof=eos-build repo --dry-run' "$out" >/dev/null ||
+  grep -F 'proof=eos-ci local --no-validate-repo --clean-generated' "$out" >/dev/null ||
     die "agent route did not suggest compiler proof"
 
   "$SCRIPT_DIR/agent_route.sh" route --dry-run "quake generator needs pak assets and input defaults" >"$out"
@@ -606,6 +682,8 @@ run_agent_route() {
     "$SCRIPT_DIR/agent_route.sh" route --dry-run "troubleshoot service startup logs" >"$out"
   grep -F 'role=overseer' "$out" >/dev/null ||
     die "agent route did not select overseer"
+  grep -F 'proof=eos-doctor' "$out" >/dev/null ||
+    die "agent route did not suggest overseer proof"
   grep -F '"kind":"agent-route"' "$events" >/dev/null ||
     die "agent route did not record metadata when observability enabled"
   grep -F '"request_hash":"' "$events" >/dev/null ||
@@ -660,6 +738,45 @@ run_installed_preflight() {
     die "installed preflight did not pass"
 
   printf 'installed preflight test passed\n'
+}
+
+run_ci() {
+  local tmp_dir="${TMPDIR:-/tmp}/engineos-ci-test-$$"
+  local out="$tmp_dir/ci.txt"
+
+  cleanup_ci() {
+    rm -rf "$tmp_dir"
+  }
+  trap cleanup_ci RETURN
+  mkdir -p "$tmp_dir"
+
+  "$ROOT/tools/engineos/eos-ci" local --dry-run --package engineos-tools --test agent --install --clean-generated >"$out"
+  grep -F 'EngineOS local CI pipeline' "$out" >/dev/null ||
+    die "ci dry-run did not print pipeline header"
+  grep -F 'DRY-RUN ' "$out" >/dev/null ||
+    die "ci dry-run did not print commands"
+  grep -F 'eos-test agent' "$out" >/dev/null ||
+    die "ci dry-run did not include requested test scope"
+  grep -F 'eos-build repo --package engineos-tools' "$out" >/dev/null ||
+    die "ci dry-run did not include real package rebuild command"
+  grep -F 'sudo -n pacman -U --noconfirm' "$out" >/dev/null ||
+    die "ci dry-run did not include reinstall command"
+  grep -F 'eos-validate repo' "$out" >/dev/null ||
+    die "ci dry-run did not include real repo validation command"
+
+  if "$ROOT/tools/engineos/eos-ci" local --package not-a-package >"$out" 2>&1; then
+    die "ci accepted an unknown package"
+  fi
+  grep -F 'unknown EngineOS package: not-a-package' "$out" >/dev/null ||
+    die "ci unknown package error was not clear"
+
+  if "$ROOT/tools/engineos/eos-ci" local --package engineos-tools --test ci >"$out" 2>&1; then
+    die "ci real mode should reject repo validation outside /srv/engineos"
+  fi
+  grep -F 'real repo validation must run from /srv/engineos' "$out" >/dev/null ||
+    die "ci repo validation location error was not clear"
+
+  printf 'ci loop smoke test passed\n'
 }
 
 run_shell_actions() {
@@ -724,14 +841,32 @@ FAKE
 run_engine_runner_env() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-runner-env-$$"
   local out="$tmp_dir/out.txt"
+  local stubborn_pid=""
 
   cleanup_engine_runner_env() {
+    if [[ -n "$stubborn_pid" ]]; then
+      kill -KILL "-$stubborn_pid" >/dev/null 2>&1 || kill -KILL "$stubborn_pid" >/dev/null 2>&1 || true
+    fi
     ENGINEOS_STATE_DIR="$tmp_dir/run" ENGINEOS_LOG_DIR="$tmp_dir/logs" "$SCRIPT_DIR/engine_runner.sh" daemon-stop >/dev/null 2>&1 || true
     rm -rf "$tmp_dir"
   }
   trap cleanup_engine_runner_env RETURN
 
   mkdir -p "$tmp_dir/run" "$tmp_dir/logs"
+
+  mkdir -p "$tmp_dir/not-a-source-root"
+  if ENGINEOS_ROOT="$tmp_dir/not-a-source-root" \
+      ENGINEOS_STATE_DIR="$tmp_dir/fail-run" \
+      ENGINEOS_LOG_DIR="$tmp_dir/fail-logs" \
+      ENGINEOS_ENGINE_RUNNER_DAEMON="$tmp_dir/missing-daemon" \
+      "$SCRIPT_DIR/engine_runner.sh" status >"$out" 2>&1; then
+    die "engine runner used Python fallback without explicit opt-in"
+  fi
+  grep -F 'ENGINEOS_ENGINE_RUNNER_ALLOW_PYTHON_FALLBACK=true' "$out" >/dev/null ||
+    die "engine runner fallback failure did not require explicit opt-in"
+
+  local ENGINEOS_ENGINE_RUNNER_ALLOW_PYTHON_FALLBACK=true
+  export ENGINEOS_ENGINE_RUNNER_ALLOW_PYTHON_FALLBACK
 
   ENGINEOS_STATE_DIR="$tmp_dir/run" \
     ENGINEOS_LOG_DIR="$tmp_dir/logs" \
@@ -746,6 +881,37 @@ run_engine_runner_env() {
   fi
   grep -F 'no previous engine target to restart' "$out" >/dev/null ||
     die "engine runner restart without target did not explain the failure"
+
+  if ! command -v setsid >/dev/null 2>&1; then
+    die "setsid unavailable; cannot test stubborn engine stop behavior"
+  fi
+  setsid sh -c 'trap "" TERM; while :; do sleep 1; done' >/dev/null 2>&1 &
+  stubborn_pid="$!"
+  printf '%s\n' "$stubborn_pid" >"$tmp_dir/run/engine.pid"
+  printf 'quake\n' >"$tmp_dir/run/engine.target"
+  printf '["--smoke"]' >"$tmp_dir/run/engine.args.json"
+  if ENGINEOS_STATE_DIR="$tmp_dir/run" \
+      ENGINEOS_LOG_DIR="$tmp_dir/logs" \
+      "$SCRIPT_DIR/engine_runner.sh" restart >"$out" 2>&1; then
+    die "engine runner restart succeeded while previous engine ignored SIGTERM"
+  fi
+  grep -F 'engine restart aborted: engine stop requested but pid is still running' "$out" >/dev/null ||
+    die "engine runner restart did not expose previous engine stop failure"
+  kill -KILL "-$stubborn_pid" >/dev/null 2>&1 || kill -KILL "$stubborn_pid" >/dev/null 2>&1 || true
+  wait "$stubborn_pid" 2>/dev/null || true
+  stubborn_pid=""
+  rm -f "$tmp_dir/run/engine.pid" "$tmp_dir/run/engine.target" "$tmp_dir/run/engine.args.json"
+
+  mkdir "$tmp_dir/run/engine.pid"
+  if ENGINEOS_STATE_DIR="$tmp_dir/run" \
+      ENGINEOS_LOG_DIR="$tmp_dir/logs" \
+      WAYLAND_DISPLAY="engineos-test-wayland" \
+      "$SCRIPT_DIR/engine_runner.sh" launch quake --smoke >"$out" 2>&1; then
+    die "engine runner launch succeeded when engine state could not be recorded"
+  fi
+  grep -F 'launch failed to record engine state' "$out" >/dev/null ||
+    die "engine runner launch did not expose state recording failure"
+  rm -rf "$tmp_dir/run/engine.pid"
 
   ENGINEOS_STATE_DIR="$tmp_dir/run" \
     ENGINEOS_LOG_DIR="$tmp_dir/logs" \
@@ -783,6 +949,119 @@ run_engine_runner_env() {
   printf 'engine runner lifecycle smoke test passed\n'
 }
 
+run_image_preview() {
+  local tmp_dir="${TMPDIR:-/tmp}/engineos-image-preview-test-$$"
+  local fake_bin="$tmp_dir/bin"
+  local tool_bin="$tmp_dir/tool-bin"
+  local out="$tmp_dir/out.txt"
+  local err="$tmp_dir/err.txt"
+  local png="$tmp_dir/sample.png"
+  local sock="$tmp_dir/preview.sock"
+  local preview_bin="$ROOT/tools/engineos/engine-image-preview"
+
+  cleanup_image_preview() {
+    rm -rf "$tmp_dir"
+  }
+  trap cleanup_image_preview RETURN
+
+  mkdir -p "$fake_bin" "$tmp_dir/dir"
+  if [[ ! -x "$preview_bin" ]]; then
+    preview_bin="${ENGINEOS_INSTALLED_BIN_DIR:-/usr/bin}/engine-image-preview"
+  fi
+  [[ -x "$preview_bin" ]] || die "engine-image-preview helper is not executable"
+
+  python - "$png" <<'PY'
+import base64
+import pathlib
+import sys
+pathlib.Path(sys.argv[1]).write_bytes(base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lw9Y4QAAAABJRU5ErkJggg=="
+))
+PY
+
+  PATH="$fake_bin:$PATH" \
+    "$preview_bin" --view "$png" --dry-run >"$out"
+  grep -F '"op":"show"' "$out" >/dev/null ||
+    die "image preview dry-run did not emit show op"
+  grep -F '"anchor":"active-pane"' "$out" >/dev/null ||
+    die "image preview dry-run did not request active pane anchor"
+  grep -F "\"path\":\"$png\"" "$out" >/dev/null ||
+    die "image preview dry-run did not include resolved path"
+
+  cat >"$fake_bin/tmux" <<'FAKE'
+#!/usr/bin/env bash
+if [[ "$1" == "display-message" ]]; then
+  printf '10 5 80 24 160 48\n'
+  exit 0
+fi
+exit 1
+FAKE
+  chmod +x "$fake_bin/tmux"
+
+  PATH="$fake_bin:$PATH" \
+    TMUX_PANE="%1" \
+    "$preview_bin" --open "$png" --dry-run >"$out"
+  for field in '"x":10' '"y":5' '"width":80' '"height":24' '"window_width":160' '"window_height":48'; do
+    grep -F "$field" "$out" >/dev/null ||
+      die "image preview dry-run did not include tmux bounds field $field"
+  done
+
+  if "$preview_bin" --view "$tmp_dir/missing.png" --dry-run >"$out" 2>"$err"; then
+    die "image preview accepted missing path"
+  fi
+  grep -F 'cannot read image path' "$err" >/dev/null ||
+    die "image preview missing path error was not visible"
+
+  if "$preview_bin" --view "$tmp_dir/dir" --dry-run >"$out" 2>"$err"; then
+    die "image preview accepted directory"
+  fi
+  grep -F 'image path is a directory' "$err" >/dev/null ||
+    die "image preview directory error was not visible"
+
+  printf 'not an image\n' >"$tmp_dir/not-image.txt"
+  if "$preview_bin" --view "$tmp_dir/not-image.txt" --dry-run >"$out" 2>"$err"; then
+    die "image preview accepted unsupported image"
+  fi
+  grep -F 'unsupported image type' "$err" >/dev/null ||
+    die "image preview unsupported type error was not visible"
+
+  if ENGINEOS_PREVIEW_SOCKET="$sock" "$preview_bin" --ping >"$out" 2>"$err"; then
+    die "image preview ping should fail when IPC socket is missing"
+  fi
+  grep -F 'shell preview IPC unavailable' "$err" >/dev/null ||
+    die "image preview missing IPC error was not visible"
+
+  python - "$sock" <<'PY' &
+import os
+import socket
+import sys
+path = sys.argv[1]
+try:
+    os.unlink(path)
+except FileNotFoundError:
+    pass
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(path)
+server.listen(1)
+client, _ = server.accept()
+client.recv(4096)
+client.sendall(b'{"version":1,"status":"ok","capabilities":["ping"]}\n')
+client.close()
+server.close()
+PY
+  local server_pid=$!
+  for _ in {1..50}; do
+    [[ -S "$sock" ]] && break
+    sleep 0.02
+  done
+  ENGINEOS_PREVIEW_SOCKET="$sock" "$preview_bin" --ping >"$out" 2>"$err"
+  wait "$server_pid"
+  grep -F 'shell preview IPC ready' "$err" >/dev/null ||
+    die "image preview ping success did not report readiness"
+
+  printf 'image preview contract test passed\n'
+}
+
 run_app() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-app-test-$$"
   local fake_bin="$tmp_dir/bin"
@@ -813,7 +1092,15 @@ if [[ "$1" == "display-message" ]]; then
 fi
 exit 1
 FAKE
-  chmod +x "$fake_bin/eos-runtime" "$fake_bin/engineos-cube" "$fake_bin/tmux"
+  cat >"$fake_bin/pkill" <<'FAKE'
+#!/usr/bin/env bash
+exit 1
+FAKE
+  cat >"$fake_bin/pgrep" <<'FAKE'
+#!/usr/bin/env bash
+exit 1
+FAKE
+  chmod +x "$fake_bin/eos-runtime" "$fake_bin/engineos-cube" "$fake_bin/tmux" "$fake_bin/pkill" "$fake_bin/pgrep"
 
   PATH="$fake_bin:$PATH" \
     ENGINEOS_LOG_DIR="$log_dir" \
@@ -897,6 +1184,20 @@ FAKE
     die "app pane sync did not report refreshed cube bounds"
   grep -F 'app pane sync role=cube source=tmux pane=%1 bounds=20 6 70 20 160 48' "$log_dir/app.log" >/dev/null ||
     die "app pane sync did not log refreshed cube bounds"
+
+  if PATH="$fake_bin:$PATH" \
+      ENGINEOS_LOG_DIR="$log_dir" \
+      ENGINEOS_STATE_DIR="$tmp_dir/run" \
+      ENGINEOS_FAKE_TMUX_GEOMETRY="25 8 66 19 160 48" \
+      TMUX="$tmp_dir/tmux-socket,1,0" \
+      TMUX_PANE="%1" \
+      "$SCRIPT_DIR/app.sh" pane sync cube >"$out" 2>&1; then
+    die "app pane sync succeeded when shell notification could not be delivered"
+  fi
+  grep -F 'pane_left=25' "$tmp_dir/run/launch-bounds/cube.env" >/dev/null ||
+    die "app pane sync failure path did not refresh cube pane bounds before notifying"
+  grep -F 'pane sync notify=failed reason=shell-not-running' "$log_dir/app.log" >/dev/null ||
+    die "app pane sync did not log failed shell notification"
 
   PATH="$fake_bin:$PATH" \
     ENGINEOS_LOG_DIR="$log_dir" \
@@ -1053,6 +1354,8 @@ FAKE
     die "quake installed-mode smoke did not write to configured log dir"
   grep -F 'QuakeSpasm smoke wrapper' "$installed_log_dir/engine.log" >/dev/null ||
     die "quake installed-mode smoke did not log expected marker"
+  grep -F 'result=ok' "$installed_log_dir/engine.log" >/dev/null ||
+    die "quake installed-mode smoke did not report real binary success"
   if [[ -e /usr/artifacts ]]; then
     die "quake installed-mode smoke created /usr/artifacts"
   fi
@@ -1095,7 +1398,10 @@ run_reliability() {
 
   cleanup_reliability() {
     ENGINEOS_STATE_DIR="$tmp_dir/run" ENGINEOS_LOG_DIR="$log_dir" "$SCRIPT_DIR/engine_runner.sh" daemon-stop >/dev/null 2>&1 || true
-    rm -rf "$tmp_dir"
+    rm -rf "$tmp_dir" || {
+      sleep 0.2
+      rm -rf "$tmp_dir"
+    }
   }
   trap cleanup_reliability RETURN
 
@@ -1254,6 +1560,10 @@ JSON
 
   rm -f "$fake_bin/eos-runtime"
   HOME="$tmp_dir/home" \
+    XDG_CONFIG_HOME="$tmp_dir/home/.config" \
+    GOCACHE="$tmp_dir/go-build-cache" \
+    GOMODCACHE="$tmp_dir/go-mod-cache" \
+    GOTELEMETRY=off \
     ENGINEOS_STATE_DIR="$tmp_dir/run" \
     ENGINEOS_LOG_DIR="$log_dir" \
     ENGINEOS_CRASH_BUNDLE_DIR="$bundle_dir" \
@@ -1994,11 +2304,15 @@ run_proof() {
     die "release-candidate proof did not include EngineRuntime ISO dry-run"
   grep -F 'release checklist' "$tmp_dir/release-candidate.txt" >/dev/null ||
     die "release-candidate proof did not run release checklist"
+  grep -F 'Release-candidate proof preview completed; no release-candidate proof was executed.' "$tmp_dir/release-candidate.txt" >/dev/null ||
+    die "release-candidate dry-run did not clearly identify itself as a preview"
   ENGINEOS_LOG_DIR="$tmp_dir/logs" "$PROOF_DIR/proof.sh" hardware-ready --dry-run --profile engineruntime --out-dir "$tmp_dir/out" --device /dev/engineos-test-usb >"$tmp_dir/hardware-ready.txt"
   grep -F 'eos-usb write --profile engineruntime' "$tmp_dir/hardware-ready.txt" >/dev/null ||
     die "hardware-ready proof did not include runtime USB write dry-run"
   grep -F 'eos-proof booted-iso --bare-metal' "$tmp_dir/hardware-ready.txt" >/dev/null ||
     die "hardware-ready proof did not point to bare-metal proof"
+  grep -F 'Hardware-ready proof preview completed; no hardware-ready proof was executed.' "$tmp_dir/hardware-ready.txt" >/dev/null ||
+    die "hardware-ready dry-run did not clearly identify itself as a preview"
   ENGINEOS_LOG_DIR="$tmp_dir/logs" "$PROOF_DIR/proof.sh" booted-iso --vm --dry-run >"$tmp_dir/booted-vm.txt"
   grep -F 'Quake smoke dry-run' "$tmp_dir/booted-vm.txt" >/dev/null ||
     die "booted VM proof did not include Quake smoke step"
@@ -2006,6 +2320,8 @@ run_proof() {
     die "booted VM proof did not include engine log step"
   grep -F 'eos-crash-bundle --vm' "$tmp_dir/booted-vm.txt" >/dev/null ||
     die "booted VM proof did not include VM crash bundle mode"
+  grep -F 'Booted-ISO proof preview completed; no booted-ISO proof was executed.' "$tmp_dir/booted-vm.txt" >/dev/null ||
+    die "booted VM dry-run did not clearly identify itself as a preview"
   ENGINEOS_LOG_DIR="$tmp_dir/logs" "$PROOF_DIR/proof.sh" booted-iso --runtime --dry-run >"$tmp_dir/booted-runtime.txt"
   grep -F 'runtime reliability dry-run' "$tmp_dir/booted-runtime.txt" >/dev/null ||
     die "booted runtime proof did not include runtime reliability step"
@@ -2019,8 +2335,8 @@ run_proof() {
   grep -F 'eos-crash-bundle --bare-metal' "$tmp_dir/booted-bare-metal.txt" >/dev/null ||
     die "booted bare-metal proof did not include bare-metal crash bundle mode"
   ENGINEOS_LOG_DIR="$tmp_dir/logs" "$PROOF_DIR/proof.sh" shell-launch --runtime --dry-run >"$tmp_dir/shell-launch.txt"
-  grep -F 'Shell-launch proof dry-run completed' "$tmp_dir/shell-launch.txt" >/dev/null ||
-    die "shell-launch proof dry-run did not complete"
+  grep -F 'Shell-launch proof preview completed; no shell-launch proof was executed.' "$tmp_dir/shell-launch.txt" >/dev/null ||
+    die "shell-launch dry-run did not clearly identify itself as a preview"
   grep -F 'grep -E' "$tmp_dir/shell-launch.txt" | grep -F 'renderer diagnostics' >/dev/null ||
     die "shell-launch proof did not check renderer diagnostics"
   grep -F 'app launch app=terminal owner=engineos-shell' "$tmp_dir/shell-launch.txt" >/dev/null ||
@@ -2031,8 +2347,8 @@ run_proof() {
   grep -F 'wlr_renderer=(gles2|vulkan)' "$tmp_dir/shell-launch-bare-metal.txt" >/dev/null ||
     die "bare-metal shell-launch proof did not require GL-capable renderer evidence"
   ENGINEOS_LOG_DIR="$tmp_dir/logs" "$PROOF_DIR/proof.sh" launchpad --runtime --dry-run >"$tmp_dir/launchpad.txt"
-  grep -F 'Launchpad proof dry-run completed' "$tmp_dir/launchpad.txt" >/dev/null ||
-    die "launchpad proof dry-run did not complete"
+  grep -F 'Launchpad proof preview completed; no launchpad proof was executed.' "$tmp_dir/launchpad.txt" >/dev/null ||
+    die "launchpad dry-run did not clearly identify itself as a preview"
   grep -F 'eos-app status --json' "$tmp_dir/launchpad.txt" >/dev/null ||
     die "launchpad proof did not check structured app status"
   grep -F 'eos-app manifest validate' "$tmp_dir/launchpad.txt" >/dev/null ||
@@ -2105,8 +2421,28 @@ JSON
 }
 
 run_builder() {
-  "$SCRIPT_DIR/validate_builder.sh" --mock >/dev/null
-  printf 'builder validation mock test passed\n'
+  local tmp_dir="${TMPDIR:-/tmp}/engineos-builder-test-$$"
+  local out="$tmp_dir/builder.txt"
+
+  cleanup_builder() {
+    rm -rf "$tmp_dir"
+  }
+  trap cleanup_builder RETURN
+  mkdir -p "$tmp_dir"
+
+  if is_arch_linux && [[ "$ROOT" == "/srv/engineos" ]]; then
+    "$SCRIPT_DIR/validate_builder.sh" >"$out"
+    grep -F 'Builder validation summary: 0 failure(s)' "$out" >/dev/null ||
+      die "real builder validation did not report clean summary"
+  else
+    if "$SCRIPT_DIR/validate_builder.sh" >"$out" 2>&1; then
+      die "builder validation passed outside the real builder context"
+    fi
+    grep -E 'real builder validation must run on Arch Linux|repo root must be /srv/engineos' "$out" >/dev/null ||
+      die "builder validation failure did not explain the real builder requirement"
+  fi
+
+  printf 'builder validation contract test passed\n'
 }
 
 run_builder_handoff() {
@@ -2247,10 +2583,18 @@ run_post_first_deploy() {
     die "post-first-deploy tmux config does not set the EngineOS color status style"
   grep -F '#{pane_current_path}' "$payload_dir/assets/tmux.conf" >/dev/null ||
     die "post-first-deploy tmux config status line does not show pane path"
-  grep -F 'eos-app pane sync --all' "$payload_dir/assets/tmux.conf" >/dev/null ||
+  grep -F 'engineos-tmux-pane-sync --all' "$payload_dir/assets/tmux.conf" >/dev/null ||
     die "post-first-deploy tmux config does not wire EngineOS pane sync hooks"
   grep -F 'after-select-pane' "$payload_dir/assets/tmux.conf" >/dev/null ||
     die "post-first-deploy tmux config does not sync after pane selection"
+  if grep -F 'eos-app pane sync --all >/dev/null 2>&1 || true' "$payload_dir/assets/tmux.conf" >/dev/null ||
+      grep -F 'eos-app pane sync >/dev/null 2>&1 || true' "$payload_dir/assets/tmux.conf" >/dev/null; then
+    die "post-first-deploy tmux config silently ignores pane sync failures"
+  fi
+  [[ -x "$payload_dir/scripts/engineos-tmux-pane-sync" ]] ||
+    die "post-first-deploy payload missing tmux pane sync helper"
+  grep -F 'tmux-warning' "$payload_dir/scripts/engineos-tmux-pane-sync" >/dev/null ||
+    die "post-first-deploy tmux pane sync helper does not log failures"
   [[ -f "$payload_dir/assets/zshrc" ]] ||
     die "post-first-deploy payload missing zsh config"
   [[ -f "$payload_dir/assets/zprofile" ]] ||
@@ -2265,12 +2609,23 @@ run_post_first_deploy() {
     die "post-first-deploy zprofile does not run source update init check"
   grep -F 'eos-update check --init' "$payload_dir/assets/zprofile" >/dev/null ||
     die "post-first-deploy zprofile does not run update init check"
+  grep -F 'engineos_profile_run()' "$payload_dir/assets/zprofile" >/dev/null ||
+    die "post-first-deploy zprofile does not expose login hook failures"
+  grep -F 'profile-warning' "$payload_dir/assets/zprofile" >/dev/null ||
+    die "post-first-deploy zprofile does not log login hook warnings"
+  if grep -F 'eos-observe prompt-login --shell zsh || true' "$payload_dir/assets/zprofile" >/dev/null ||
+      grep -F 'update_check.sh" --init || true' "$payload_dir/assets/zprofile" >/dev/null ||
+      grep -F 'eos-update check --init || true' "$payload_dir/assets/zprofile" >/dev/null; then
+    die "post-first-deploy zprofile silently ignores login hook failures"
+  fi
   [[ -f "$payload_dir/assets/docker/daemon.json" ]] ||
     die "post-first-deploy payload missing Docker config"
   [[ -x "$payload_dir/scripts/setup_dev_environment.sh" ]] ||
     die "post-first-deploy payload setup script is not executable"
   [[ -x "$payload_dir/scripts/engineos-dev-shell-start" ]] ||
     die "post-first-deploy payload dev shell start script is not executable"
+  grep -F 'engineos-tmux-pane-sync' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not install tmux pane sync helper"
   [[ -f "$payload_dir/assets/systemd/engineos-dev-shell.service" ]] ||
     die "post-first-deploy payload missing dev shell service"
   grep -F 'ENGINEOS_TERMINAL_REQUIRE_WAYLAND=true' "$payload_dir/assets/systemd/engineos-dev-shell.service" >/dev/null ||
@@ -2283,6 +2638,15 @@ run_post_first_deploy() {
     die "post-first-deploy setup does not request engineos-tools"
   grep -F 'engineos-cube' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not request engineos-cube"
+  grep -F 'best_effort()' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not expose best-effort failures"
+  if grep -F 'systemctl enable docker.service >/dev/null 2>&1 || true' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+      grep -F 'systemctl enable engineos-observe-exporter.service >/dev/null 2>&1 || true' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+      grep -F 'systemctl restart engineos-observe-exporter.service >/dev/null 2>&1 || true' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+      grep -F 'systemctl daemon-reload || true' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+      grep -F 'chsh -s /usr/bin/zsh "$TARGET_USER" || true' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null; then
+    die "post-first-deploy setup silently ignores service or shell setup failures"
+  fi
   grep -F 'codex-extractor' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not fetch codex-extractor"
   grep -F 'session-extrator' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
@@ -2333,6 +2697,20 @@ run_update_check() {
   grep -F 'engine-os: skipped; Git checkout not found' "$out" >/dev/null ||
     die "update check did not skip missing engine-os checkout"
 
+  if ENGINEOS_ENGINE_OS_ROOT="$tmp_dir/missing-engine" \
+      "$SCRIPT_DIR/update_check.sh" --component engine-os --no-fetch --dry-run --yes --skip-post-install >"$out" 2>&1; then
+    die "update check accepted an explicitly requested missing engine-os checkout"
+  fi
+  grep -F 'engine-os checkout not found at' "$out" >/dev/null ||
+    die "update check did not fail explicit missing engine-os checkout clearly"
+
+  if ENGINEOS_TANGO_OS_ROOT="$repo" \
+      "$SCRIPT_DIR/update_check.sh" --component tango-os --dry-run --yes --skip-post-install >"$out" 2>&1; then
+    die "update check succeeded when tag fetch failed"
+  fi
+  grep -F 'could not fetch tags from origin' "$out" >/dev/null ||
+    die "update check fetch failure was not explicit"
+
   ENGINEOS_TANGO_OS_ROOT="$repo" \
     "$SCRIPT_DIR/update_check.sh" --component tango-os --no-fetch --yes --skip-post-install >"$out"
   [[ "$(git -C "$repo" describe --tags --exact-match)" == "v0.2.0" ]] ||
@@ -2378,16 +2756,23 @@ run_repo() {
   grep -F 'packages/engineos-quakespasm' "$out" >/dev/null ||
     die "repo dry-run did not include engineos-quakespasm"
 
-  "$SCRIPT_DIR/validate_repo.sh" --mock >/dev/null
   "$SCRIPT_DIR/validate_repo.sh" --dry-run >"$out"
   grep -F 'engineos-quakespasm-*.pkg.tar.*' "$out" >/dev/null ||
     die "repo validation dry-run did not expect engineos-quakespasm artifact"
+  if [[ "$ROOT" != "/srv/engineos" ]]; then
+    if "$SCRIPT_DIR/validate_repo.sh" >"$out" 2>&1; then
+      die "repo validation passed outside /srv/engineos"
+    fi
+    grep -F 'repo directory mismatch: archiso expects /srv/engineos/repo' "$out" >/dev/null ||
+      die "repo validation did not explain /srv/engineos requirement"
+  fi
   printf 'repo validation smoke test passed\n'
 }
 
 run_boot() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-boot-test-$$"
   local fake_bin="$tmp_dir/bin"
+  local tool_bin="$tmp_dir/tool-bin"
   local log_dir="$tmp_dir/logs"
   local runtime_conf="$tmp_dir/runtime.conf"
   local apps_manifest="$tmp_dir/apps.toml"
@@ -2401,7 +2786,10 @@ run_boot() {
   }
   trap cleanup_boot RETURN
 
-  mkdir -p "$fake_bin" "$log_dir" "$drm_sysfs/card0-HDMI-A-1" "$dri_dir"
+  mkdir -p "$fake_bin" "$tool_bin" "$log_dir" "$drm_sysfs/card0-HDMI-A-1" "$dri_dir"
+  for tool in bash date dirname grep; do
+    ln -s "$(command -v "$tool")" "$tool_bin/$tool"
+  done
   {
     printf 'ENGINEOS_SHELL_BOOTSTRAP=launchpad\n'
     printf 'ENGINEOS_CUBE_CMD="eos-app launch cube"\n'
@@ -2476,7 +2864,12 @@ FAKE
 
   cat >"$fake_bin/pacman" <<'FAKE'
 #!/usr/bin/env bash
-[[ "$1" == "-Q" ]] && exit 0
+if [[ "$1" == "-Q" ]]; then
+  if [[ -n "${ENGINEOS_FAKE_MISSING_PACKAGE:-}" && "${2:-}" == "$ENGINEOS_FAKE_MISSING_PACKAGE" ]]; then
+    exit 1
+  fi
+  exit 0
+fi
 printf 'fake pacman: %s\n' "$*" >&2
 exit 2
 FAKE
@@ -2512,6 +2905,14 @@ printf 'eos-crash-bundle\n'
 printf 'engineos.noautostart\n'
 FAKE
   chmod +x "$fake_bin/engineos-recovery-help"
+  cat >"$fake_bin/engineos-recovery-help-fail" <<'FAKE'
+#!/usr/bin/env bash
+printf 'eos-logs runtime --last 200\n'
+printf 'eos-crash-bundle\n'
+printf 'engineos.noautostart\n'
+exit 8
+FAKE
+  chmod +x "$fake_bin/engineos-recovery-help-fail"
 
   cat >"$fake_bin/lspci" <<'FAKE'
 #!/usr/bin/env bash
@@ -2526,6 +2927,12 @@ printf 'EngineOS doctor fixture\n'
 printf 'OpenGL core profile renderer: AMD RADV\n'
 FAKE
   chmod +x "$fake_bin/doctor-ok"
+  cat >"$fake_bin/doctor-fail" <<'FAKE'
+#!/usr/bin/env bash
+printf 'doctor fixture failed\n' >&2
+exit 9
+FAKE
+  chmod +x "$fake_bin/doctor-fail"
 
   PATH="$fake_bin:$PATH" \
     ENGINEOS_RUNTIME_CONF="$runtime_conf" \
@@ -2533,7 +2940,7 @@ FAKE
     ENGINEOS_LOG_DIR="$log_dir" \
     ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
     ENGINEOS_FAKE_DOCTOR_ARGS="$doctor_log" \
-    "$PROOF_DIR/validate_boot.sh" --runtime >"$out"
+    "$PROOF_DIR/validate_boot.sh" --runtime >"$out" 2>&1
   grep -F "app manifest exists: $apps_manifest" "$out" >/dev/null ||
     die "runtime boot validation did not require app manifest"
   grep -F 'app manifest validates' "$out" >/dev/null ||
@@ -2557,6 +2964,70 @@ FAKE
   grep -Fx -- '--vm' "$doctor_log" >/dev/null ||
     die "runtime boot validation did not call doctor in VM mode"
 
+  if PATH="$fake_bin:$PATH" \
+      ENGINEOS_RUNTIME_CONF="$runtime_conf" \
+      ENGINEOS_APPS_MANIFEST="$apps_manifest" \
+      ENGINEOS_LOG_DIR="$log_dir" \
+      ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
+      ENGINEOS_FAKE_MISSING_PACKAGE="engineos-cube" \
+      "$PROOF_DIR/validate_boot.sh" --runtime >"$out" 2>&1; then
+    die "runtime boot validation accepted missing required package"
+  fi
+  grep -F 'package missing: engineos-cube' "$out" >/dev/null ||
+    die "runtime boot validation did not expose missing required package"
+
+  mv "$fake_bin/engineos-cube" "$fake_bin/engineos-cube-ok"
+  if PATH="$fake_bin:$tool_bin" \
+      ENGINEOS_RUNTIME_CONF="$runtime_conf" \
+      ENGINEOS_APPS_MANIFEST="$apps_manifest" \
+      ENGINEOS_LOG_DIR="$log_dir" \
+      ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
+      bash "$PROOF_DIR/validate_boot.sh" --runtime >"$out" 2>&1; then
+    die "runtime boot validation accepted missing package command"
+  fi
+  grep -F 'command unavailable: engineos-cube' "$out" >/dev/null ||
+    die "runtime boot validation did not expose missing package command"
+  mv "$fake_bin/engineos-cube-ok" "$fake_bin/engineos-cube"
+
+  if PATH="$fake_bin:$PATH" \
+      ENGINEOS_RUNTIME_CONF="$tmp_dir/missing-runtime.conf" \
+      ENGINEOS_APPS_MANIFEST="$apps_manifest" \
+      ENGINEOS_LOG_DIR="$log_dir" \
+      ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
+      "$PROOF_DIR/validate_boot.sh" --runtime >"$out" 2>&1; then
+    die "runtime boot validation accepted missing runtime config"
+  fi
+  grep -F 'missing-runtime.conf missing' "$out" >/dev/null ||
+    die "runtime boot validation did not expose missing runtime config"
+
+  if PATH="$fake_bin:$PATH" \
+      ENGINEOS_RUNTIME_CONF="$runtime_conf" \
+      ENGINEOS_APPS_MANIFEST="$apps_manifest" \
+      ENGINEOS_LOG_DIR="$log_dir" \
+      ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-fail" \
+      ENGINEOS_VALIDATE_DOCTOR_OUT="$tmp_dir/runtime-doctor-fail.out" \
+      "$PROOF_DIR/validate_boot.sh" --runtime >"$out" 2>&1; then
+    die "runtime boot validation accepted failing doctor"
+  fi
+  grep -F 'doctor failed' "$out" >/dev/null ||
+    die "runtime boot validation did not expose failing doctor"
+
+  mv "$fake_bin/engineos-recovery-help" "$fake_bin/engineos-recovery-help-ok"
+  cp "$fake_bin/engineos-recovery-help-fail" "$fake_bin/engineos-recovery-help"
+  chmod +x "$fake_bin/engineos-recovery-help"
+  if PATH="$fake_bin:$PATH" \
+      ENGINEOS_RUNTIME_CONF="$runtime_conf" \
+      ENGINEOS_APPS_MANIFEST="$apps_manifest" \
+      ENGINEOS_LOG_DIR="$log_dir" \
+      ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
+      ENGINEOS_FAKE_DOCTOR_ARGS="$doctor_log" \
+      "$PROOF_DIR/validate_boot.sh" --runtime >"$out" 2>&1; then
+    die "runtime boot validation accepted failing recovery help"
+  fi
+  grep -F 'recovery help command failed' "$out" >/dev/null ||
+    die "runtime boot validation did not expose failing recovery help"
+  mv "$fake_bin/engineos-recovery-help-ok" "$fake_bin/engineos-recovery-help"
+
   printf '[2026-01-01T00:00:00Z] starting EngineOS shell mode=--tty recovery=tty2\n' >"$log_dir/runtime-start.log"
   printf '[2026-01-01T00:00:00Z] renderer diagnostics backend=drm,libinput wlr_renderer=pixman\n' >"$log_dir/shell.log"
   PATH="$fake_bin:$PATH" \
@@ -2565,7 +3036,7 @@ FAKE
     ENGINEOS_LOG_DIR="$log_dir" \
     ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
     ENGINEOS_FAKE_DOCTOR_ARGS="$doctor_log" \
-    "$PROOF_DIR/validate_boot.sh" --runtime >"$out"
+    "$PROOF_DIR/validate_boot.sh" --runtime >"$out" 2>&1
   grep -F 'runtime shell service active: engineos-runtime.service' "$out" >/dev/null ||
     die "runtime boot validation did not accept active runtime shell service"
   if grep -F 'runtime autostart appears to still be running' "$out" >/dev/null; then
@@ -2597,6 +3068,22 @@ FAKE
     die "bare-metal boot validation did not require GL-capable shell evidence"
   grep -Fx -- '--bare-metal' "$doctor_log" >/dev/null ||
     die "bare-metal boot validation did not call doctor in bare-metal mode"
+  grep -F 'bare-metal doctor completed' "$out" >/dev/null ||
+    die "bare-metal boot validation did not require doctor success"
+
+  if PATH="$fake_bin:$PATH" \
+      ENGINEOS_RUNTIME_CONF="$runtime_conf" \
+      ENGINEOS_APPS_MANIFEST="$apps_manifest" \
+      ENGINEOS_LOG_DIR="$log_dir" \
+      ENGINEOS_DRI_DIR="$dri_dir" \
+      ENGINEOS_DRM_SYSFS="$drm_sysfs" \
+      ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-fail" \
+      ENGINEOS_VALIDATE_DOCTOR_OUT="$tmp_dir/doctor-fail.out" \
+      "$PROOF_DIR/validate_boot.sh" --bare-metal >"$out" 2>&1; then
+    die "bare-metal boot validation accepted failing doctor"
+  fi
+  grep -F 'bare-metal doctor failed' "$out" >/dev/null ||
+    die "bare-metal boot validation did not expose failing doctor"
 
   printf '[2026-01-01T00:00:00Z] renderer diagnostics backend=drm,libinput wlr_renderer=pixman\n' >"$log_dir/shell.log"
   if PATH="$fake_bin:$PATH" \
@@ -2649,14 +3136,41 @@ run_engine() {
   grep -F 'VORBISLIB=vorbis' "$fetch_out" >/dev/null ||
     die "engine build dry-run did not select vorbis"
 
-  "$SCRIPT_DIR/validate_engine.sh" quake --mock >/dev/null
+  if QUAKESPASM_UPSTREAM_DIR="$tmp_dir/upstream" \
+      "$SCRIPT_DIR/validate_engine.sh" quake >"$fetch_out" 2>&1; then
+    die "engine validation accepted missing QuakeSpasm upstream checkout"
+  fi
+  grep -F 'upstream directory exists but is not a git checkout' "$fetch_out" >/dev/null ||
+    die "engine validation did not fail missing upstream checkout explicitly"
+
   "$SCRIPT_DIR/validate_engine.sh" quake >/dev/null
   printf 'engine validation smoke test passed\n'
 }
 
 run_shell() {
-  "$SCRIPT_DIR/validate_shell.sh" --mock >/dev/null
+  local tmp_dir="${TMPDIR:-/tmp}/engineos-shell-test-$$"
+  local fake_bin="$tmp_dir/bin"
+  local out="$tmp_dir/out.txt"
+
+  cleanup_shell() {
+    rm -rf "$tmp_dir"
+  }
+  trap cleanup_shell RETURN
+  mkdir -p "$fake_bin"
+
+  cat >"$fake_bin/pkg-config" <<'FAKE'
+#!/usr/bin/env bash
+exit 1
+FAKE
+  chmod +x "$fake_bin/pkg-config"
+  if PATH="$fake_bin:$PATH" "$SCRIPT_DIR/validate_shell.sh" >"$out" 2>&1; then
+    die "shell validation accepted missing wlroots pkg-config modules"
+  fi
+  grep -F 'wlroots pkg-config modules unavailable' "$out" >/dev/null ||
+    die "shell validation did not fail missing wlroots modules explicitly"
+
   "$SCRIPT_DIR/validate_shell.sh" >/dev/null
+  ENGINEOS_ROOT=/usr "$SCRIPT_DIR/validate_shell.sh" >/dev/null
   printf 'shell validation smoke test passed\n'
 }
 
@@ -2759,6 +3273,7 @@ run_render() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-render-test-$$"
   local captured=""
   local fallback=""
+  local failed_capture=""
   [[ "$mode" == "--smoke" ]] || die "render test currently supports only --smoke"
 
   cleanup_render() {
@@ -2791,6 +3306,22 @@ FAKE
   [[ -f "$fallback" ]] || die "render fallback did not create metadata artifact"
   grep -F 'result=metadata' "$fallback" >/dev/null ||
     die "render fallback metadata did not record metadata result"
+
+  cat >"$tmp_dir/bin/grim" <<'FAKE'
+#!/usr/bin/env bash
+exit 12
+FAKE
+  chmod +x "$tmp_dir/bin/grim"
+  if PATH="$tmp_dir/bin:$PATH" \
+      WAYLAND_DISPLAY="engineos-test-wayland" \
+      ENGINEOS_CAPTURE_DIR="$tmp_dir/captures" \
+      "$SCRIPT_DIR/capture_frame.sh" --target shell >"$tmp_dir/failed-capture.out" 2>&1; then
+    die "render capture auto mode succeeded when grim failed"
+  fi
+  failed_capture="$(sed -n 's/^frame capture failed; metadata: //p' "$tmp_dir/failed-capture.out" | tail -n 1)"
+  [[ -f "$failed_capture" ]] || die "render capture failure did not create metadata artifact"
+  grep -F 'result=failed' "$failed_capture" >/dev/null ||
+    die "render capture failure metadata did not record failed result"
 
   printf 'render smoke test passed\n'
 }
@@ -2825,6 +3356,9 @@ case "$SCOPE" in
     ;;
   engine-runner-env)
     run_engine_runner_env
+    ;;
+  image-preview)
+    run_image_preview
     ;;
   app)
     run_app
@@ -2870,6 +3404,9 @@ case "$SCOPE" in
     ;;
   installed-preflight)
     run_installed_preflight
+    ;;
+  ci)
+    run_ci
     ;;
   builder-handoff)
     run_builder_handoff

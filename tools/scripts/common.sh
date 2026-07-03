@@ -2,14 +2,21 @@
 set -euo pipefail
 
 engineos_root() {
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+  local source_root
+  source_root="$(cd "$script_dir/../.." && pwd -P)"
+
   if [[ -n "${ENGINEOS_ROOT:-}" ]]; then
+    if [[ "$script_dir" != /usr/lib/engineos/scripts && "$script_dir" != /usr/lib/engineos/scripts/* &&
+        "$ENGINEOS_ROOT" == /usr* && -d "$source_root/tools/scripts" ]]; then
+      printf '%s\n' "$source_root"
+      return
+    fi
     cd "$ENGINEOS_ROOT"
     pwd -P
     return
   fi
-
-  local script_dir
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
   case "$script_dir" in
     /usr/lib/engineos/scripts|/usr/lib/engineos/scripts/*)
@@ -18,8 +25,7 @@ engineos_root() {
       ;;
   esac
 
-  cd "$script_dir/../.."
-  pwd -P
+  printf '%s\n' "$source_root"
 }
 
 engineos_is_source_root() {
@@ -145,6 +151,7 @@ engineos_eos_commands() {
     eos-build \
     eos-builder \
     eos-capture \
+    eos-ci \
     eos-crash-bundle \
     eos-deploy \
     eos-doctor \

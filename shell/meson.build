@@ -23,6 +23,7 @@ wayland_server_dep = dependency('wayland-server', required: true)
 wayland_protocols_dep = dependency('wayland-protocols', required: true)
 wayland_scanner_dep = dependency('wayland-scanner', required: true)
 xkbcommon_dep = dependency('xkbcommon', required: true)
+gdk_pixbuf_dep = dependency('gdk-pixbuf-2.0', required: true)
 
 wayland_scanner = find_program(
   wayland_scanner_dep.get_variable(pkgconfig: 'wayland_scanner'),
@@ -55,6 +56,7 @@ executable(
     wlroots_dep,
     wayland_server_dep,
     xkbcommon_dep,
+    gdk_pixbuf_dep,
   ],
   install: true,
 )

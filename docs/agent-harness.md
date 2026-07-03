@@ -33,20 +33,20 @@ rg --files --hidden
 
 ## Command Policy
 
-Use dry-runs outside the Arch builder VM:
+Use real local checks first. Keep dry-runs for destructive, remote, USB, and
+builder-only previews:
 
 ```bash
-./tools/engineos/eos-doctor --mock
+./tools/engineos/eos-doctor --vm
 ./tools/engineos/eos-test agent
 ./tools/engineos/eos-builder handoff --dry-run --host dev@<builder-vm-ip>
 ./tools/engineos/eos-builder handoff --dry-run --host dev@<builder-vm-ip> --run-proof
 ./tools/engineos/eos-builder doctor-proof --dry-run --host dev@<builder-vm-ip>
 ./tools/engineos/eos-deploy first --dry-run --host dev@127.0.0.1 --port 2222
 ./tools/engineos/eos-builder bootstrap --dry-run
-./tools/engineos/eos-validate builder --mock
-./tools/engineos/eos-validate repo --dry-run
 ./tools/engineos/eos-agent hygiene check
 ./tools/engineos/eos-agent dispatch status
+./tools/engineos/eos-ci local --package engineos-tools --test agent-route --no-validate-repo --clean-generated
 ./tools/engineos/eos-preflight all
 ./tools/engineos/eos-lint packages
 ./tools/engineos/eos-proof build-lab --dry-run
@@ -54,8 +54,6 @@ Use dry-runs outside the Arch builder VM:
 ./tools/engineos/eos-release checklist --dry-run
 ./tools/engineos/eos-test vm
 ./tools/engineos/eos-test usb
-./tools/engineos/eos-build shell --dry-run
-./tools/engineos/eos-build repo --dry-run
 ./tools/engineos/eos-build iso --dry-run
 ./tools/engineos/eos-build iso enginedev --fast --dry-run
 ```
@@ -118,6 +116,18 @@ For agent harness changes, run:
 ./tools/engineos/eos-test agent-dispatcher
 ./tools/engineos/eos-preflight repo --package engineos-tools
 ```
+
+For the post-change rebuild/reinstall/cleanup loop, use `eos-ci local`.
+It runs real preflight, tests, package rebuilds, and repo validation by default;
+`--dry-run` is only a command preview and does not count as validation.
+
+```bash
+./tools/engineos/eos-ci local --package engineos-tools --test agent --install --clean-generated
+```
+
+When working from a non-`/srv/engineos` checkout on EngineDev, use
+`--no-validate-repo` for a package-only reinstall loop, then run the full
+command from `/srv/engineos` for repo acceptance.
 
 Agent work may queue follow-up Cleaner tasks only through explicit queue
 commands or validation hooks. The v0 dispatcher is local, repo-scoped, durable

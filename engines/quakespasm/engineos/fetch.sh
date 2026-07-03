@@ -5,6 +5,7 @@ ROOT="${ENGINEOS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)
 UPSTREAM="${QUAKESPASM_UPSTREAM_DIR:-$ROOT/engines/quakespasm/upstream}"
 REPO_URL="${QUAKESPASM_REPO_URL:-https://github.com/sezero/quakespasm.git}"
 GIT_DEPTH="${QUAKESPASM_GIT_DEPTH:-1}"
+GIT_REF="${QUAKESPASM_GIT_REF:-master}"
 DRY_RUN=false
 STATUS=false
 
@@ -19,6 +20,7 @@ Environment:
   QUAKESPASM_REPO_URL      upstream Git URL
   QUAKESPASM_UPSTREAM_DIR  checkout path
   QUAKESPASM_GIT_DEPTH     clone/fetch depth, default 1
+  QUAKESPASM_GIT_REF       upstream branch/ref, default master
 HELP
 }
 
@@ -66,7 +68,8 @@ if [[ "$DRY_RUN" == true ]]; then
   printf 'QuakeSpasm fetch dry-run\n'
   printf '  repo:     %s\n' "$REPO_URL"
   printf '  upstream: %s\n' "$UPSTREAM"
-  printf '  command:  git clone --depth %s %s %s\n' "$GIT_DEPTH" "$REPO_URL" "$UPSTREAM"
+  printf '  ref:      %s\n' "$GIT_REF"
+  printf '  command:  git clone --branch %s --depth %s %s %s\n' "$GIT_REF" "$GIT_DEPTH" "$REPO_URL" "$UPSTREAM"
   printf '  status:   fetch.sh --status\n'
   exit 0
 fi
@@ -82,16 +85,16 @@ command -v git >/dev/null 2>&1 || {
 }
 
 if [[ -d "$UPSTREAM/.git" ]]; then
-  git -C "$UPSTREAM" fetch --depth "$GIT_DEPTH" origin
-  git -C "$UPSTREAM" pull --ff-only
+  git -C "$UPSTREAM" fetch --depth "$GIT_DEPTH" origin "$GIT_REF"
+  git -C "$UPSTREAM" checkout -B "$GIT_REF" "origin/$GIT_REF"
 elif [[ -d "$UPSTREAM" ]] && ! find "$UPSTREAM" -mindepth 1 -print -quit | grep -q .; then
-  git clone --depth "$GIT_DEPTH" "$REPO_URL" "$UPSTREAM"
+  git clone --branch "$GIT_REF" --depth "$GIT_DEPTH" "$REPO_URL" "$UPSTREAM"
 elif [[ -e "$UPSTREAM" ]]; then
   printf 'QuakeSpasm upstream path exists but is not a git checkout: %s\n' "$UPSTREAM" >&2
   exit 1
 else
   mkdir -p "$(dirname "$UPSTREAM")"
-  git clone --depth "$GIT_DEPTH" "$REPO_URL" "$UPSTREAM"
+  git clone --branch "$GIT_REF" --depth "$GIT_DEPTH" "$REPO_URL" "$UPSTREAM"
 fi
 
 printf 'QuakeSpasm upstream ready: %s\n' "$UPSTREAM"

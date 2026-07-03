@@ -2,6 +2,8 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <gdk-pixbuf/gdk-pixbuf.h>
 #include <getopt.h>
 #include <limits.h>
 #include <signal.h>
@@ -10,14 +12,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <drm_fourcc.h>
 #include <wayland-server-core.h>
+#include <wlr/interfaces/wlr_buffer.h>
 #include <wlr/backend.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
+#include <wlr/types/wlr_buffer.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_data_device.h>
@@ -90,6 +97,28 @@ struct engineos_layout_request {
 	char source[32];
 };
 
+struct engineos_preview_bounds {
+	bool set;
+	int x;
+	int y;
+	int width;
+	int height;
+	int window_width;
+	int window_height;
+};
+
+struct engineos_preview_surface {
+	struct wlr_scene_buffer *scene_buffer;
+	struct wlr_buffer *buffer;
+	char *path;
+	int x;
+	int y;
+	int width;
+	int height;
+	int image_width;
+	int image_height;
+};
+
 struct engineos_shell_server {
 	struct wl_display *display;
 	struct wlr_backend *backend;
@@ -130,6 +159,10 @@ struct engineos_shell_server {
 	const char *engine_cmd;
 	char *state_dir;
 	char *state_file;
+	char *preview_socket_path;
+	struct wl_event_source *preview_socket_source;
+	int preview_socket_fd;
+	struct engineos_preview_surface preview;
 	enum engineos_bootstrap_mode bootstrap_mode;
 	enum engineos_input_mode input_mode;
 	enum engineos_surface_role active_slot;
@@ -194,12 +227,20 @@ struct engineos_shell_view {
 	bool fullscreen;
 };
 
+struct engineos_pixel_buffer {
+	struct wlr_buffer base;
+	unsigned char *data;
+	size_t stride;
+	uint32_t format;
+};
+
 static const char *view_title(struct engineos_shell_view *view);
 static const char *view_app_id(struct engineos_shell_view *view);
 static const char *surface_role_name(enum engineos_surface_role role);
 static bool is_launchpad_role(enum engineos_surface_role role);
 static bool is_terminal_role(enum engineos_surface_role role);
 static char *join_state_path(const char *dir, const char *name);
+static bool mkdir_p(const char *path, mode_t mode);
 static bool compute_view_geometry(struct engineos_shell_view *view,
 	struct engineos_view_geometry *geometry);
 static bool is_persistent_panel_geometry(enum engineos_surface_role role,
@@ -221,6 +262,8 @@ static void focus_matching_role(struct engineos_shell_server *server,
 static void set_active_slot(struct engineos_shell_server *server,
 	enum engineos_surface_role role, const char *reason);
 static void apply_launchpad_visibility(struct engineos_shell_server *server,
+	const char *reason);
+static void hide_image_preview(struct engineos_shell_server *server,
 	const char *reason);
 static void launch_or_activate_slot(struct engineos_shell_server *server,
 	enum engineos_surface_role role, const char *reason);
@@ -1041,6 +1084,552 @@ static bool mkdir_p(const char *path, mode_t mode) {
 	bool ok = mkdir(copy, mode) == 0 || errno == EEXIST;
 	free(copy);
 	return ok;
+}
+
+static void pixel_buffer_destroy(struct wlr_buffer *wlr_buffer) {
+	struct engineos_pixel_buffer *buffer =
+		wl_container_of(wlr_buffer, buffer, base);
+	free(buffer->data);
+	wlr_buffer_finish(&buffer->base);
+	free(buffer);
+}
+
+static bool pixel_buffer_begin_data_ptr_access(struct wlr_buffer *wlr_buffer,
+		uint32_t flags, void **data, uint32_t *format, size_t *stride) {
+	struct engineos_pixel_buffer *buffer =
+		wl_container_of(wlr_buffer, buffer, base);
+	if ((flags & WLR_BUFFER_DATA_PTR_ACCESS_READ) == 0) {
+		return false;
+	}
+	*data = buffer->data;
+	*format = buffer->format;
+	*stride = buffer->stride;
+	return true;
+}
+
+static void pixel_buffer_end_data_ptr_access(struct wlr_buffer *wlr_buffer) {
+	(void)wlr_buffer;
+}
+
+static const struct wlr_buffer_impl pixel_buffer_impl = {
+	.destroy = pixel_buffer_destroy,
+	.begin_data_ptr_access = pixel_buffer_begin_data_ptr_access,
+	.end_data_ptr_access = pixel_buffer_end_data_ptr_access,
+};
+
+static struct wlr_buffer *create_pixel_buffer_from_pixbuf(GdkPixbuf *pixbuf) {
+	int width = gdk_pixbuf_get_width(pixbuf);
+	int height = gdk_pixbuf_get_height(pixbuf);
+	int channels = gdk_pixbuf_get_n_channels(pixbuf);
+	int source_stride = gdk_pixbuf_get_rowstride(pixbuf);
+	const unsigned char *source = gdk_pixbuf_read_pixels(pixbuf);
+	if (width <= 0 || height <= 0 || source == NULL ||
+			(channels != 3 && channels != 4)) {
+		return NULL;
+	}
+
+	struct engineos_pixel_buffer *buffer = calloc(1, sizeof(*buffer));
+	if (buffer == NULL) {
+		return NULL;
+	}
+	buffer->format = DRM_FORMAT_ABGR8888;
+	buffer->stride = (size_t)width * 4;
+	size_t data_size = buffer->stride * (size_t)height;
+	buffer->data = malloc(data_size);
+	if (buffer->data == NULL) {
+		free(buffer);
+		return NULL;
+	}
+
+	for (int y = 0; y < height; y++) {
+		const unsigned char *src = source + (size_t)y * (size_t)source_stride;
+		unsigned char *dst = buffer->data + (size_t)y * buffer->stride;
+		for (int x = 0; x < width; x++) {
+			dst[(size_t)x * 4 + 0] = src[(size_t)x * (size_t)channels + 0];
+			dst[(size_t)x * 4 + 1] = src[(size_t)x * (size_t)channels + 1];
+			dst[(size_t)x * 4 + 2] = src[(size_t)x * (size_t)channels + 2];
+			dst[(size_t)x * 4 + 3] = channels == 4 ?
+				src[(size_t)x * 4 + 3] : 255;
+		}
+	}
+
+	wlr_buffer_init(&buffer->base, &pixel_buffer_impl, width, height);
+	return &buffer->base;
+}
+
+static struct wlr_buffer *decode_image_preview(const char *path,
+		int *image_width, int *image_height, char *error, size_t error_size) {
+	int source_width = 0;
+	int source_height = 0;
+	GdkPixbufFormat *format =
+		gdk_pixbuf_get_file_info(path, &source_width, &source_height);
+	if (format == NULL || source_width <= 0 || source_height <= 0) {
+		snprintf(error, error_size, "unsupported or unreadable image");
+		return NULL;
+	}
+	if (source_width > 8192 || source_height > 8192 ||
+			(int64_t)source_width * (int64_t)source_height > 67108864) {
+		snprintf(error, error_size, "image dimensions too large: %dx%d",
+			source_width, source_height);
+		return NULL;
+	}
+
+	int load_width = source_width;
+	int load_height = source_height;
+	const int max_decode_edge = 4096;
+	if (source_width > max_decode_edge || source_height > max_decode_edge) {
+		double scale = source_width > source_height ?
+			(double)max_decode_edge / (double)source_width :
+			(double)max_decode_edge / (double)source_height;
+		load_width = (int)((double)source_width * scale);
+		load_height = (int)((double)source_height * scale);
+		if (load_width <= 0) {
+			load_width = 1;
+		}
+		if (load_height <= 0) {
+			load_height = 1;
+		}
+	}
+
+	GError *gerror = NULL;
+	GdkPixbuf *pixbuf = gdk_pixbuf_new_from_file_at_scale(path,
+		load_width, load_height, true, &gerror);
+	if (pixbuf == NULL) {
+		snprintf(error, error_size, "image decode failed: %s",
+			gerror != NULL && gerror->message != NULL ?
+				gerror->message : "unknown error");
+		if (gerror != NULL) {
+			g_error_free(gerror);
+		}
+		return NULL;
+	}
+
+	struct wlr_buffer *buffer = create_pixel_buffer_from_pixbuf(pixbuf);
+	*image_width = gdk_pixbuf_get_width(pixbuf);
+	*image_height = gdk_pixbuf_get_height(pixbuf);
+	g_object_unref(pixbuf);
+	if (buffer == NULL) {
+		snprintf(error, error_size, "failed to allocate image buffer");
+	}
+	return buffer;
+}
+
+static bool json_extract_string(const char *json, const char *key,
+		char *out, size_t out_size) {
+	char pattern[64];
+	snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+	const char *pos = strstr(json, pattern);
+	if (pos == NULL) {
+		return false;
+	}
+	pos = strchr(pos + strlen(pattern), ':');
+	if (pos == NULL) {
+		return false;
+	}
+	pos++;
+	while (*pos == ' ' || *pos == '\t' || *pos == '\r' || *pos == '\n') {
+		pos++;
+	}
+	if (*pos != '"') {
+		return false;
+	}
+	pos++;
+
+	size_t used = 0;
+	while (*pos != '\0' && *pos != '"') {
+		char c = *pos++;
+		if (c == '\\') {
+			c = *pos++;
+			switch (c) {
+			case '"':
+			case '\\':
+			case '/':
+				break;
+			case 'n':
+				c = '\n';
+				break;
+			case 'r':
+				c = '\r';
+				break;
+			case 't':
+				c = '\t';
+				break;
+			default:
+				return false;
+			}
+		}
+		if (used + 1 >= out_size) {
+			return false;
+		}
+		out[used++] = c;
+	}
+	if (*pos != '"') {
+		return false;
+	}
+	out[used] = '\0';
+	return true;
+}
+
+static bool json_extract_int(const char *json, const char *key, int *out) {
+	char pattern[64];
+	snprintf(pattern, sizeof(pattern), "\"%s\"", key);
+	const char *pos = strstr(json, pattern);
+	if (pos == NULL) {
+		return false;
+	}
+	pos = strchr(pos + strlen(pattern), ':');
+	if (pos == NULL) {
+		return false;
+	}
+	pos++;
+	while (*pos == ' ' || *pos == '\t' || *pos == '\r' || *pos == '\n') {
+		pos++;
+	}
+
+	errno = 0;
+	char *end = NULL;
+	long parsed = strtol(pos, &end, 10);
+	if (errno != 0 || end == pos || parsed < 0 || parsed > INT_MAX) {
+		return false;
+	}
+	*out = (int)parsed;
+	return true;
+}
+
+static bool request_preview_bounds(const char *json,
+		struct engineos_preview_bounds *bounds) {
+	memset(bounds, 0, sizeof(*bounds));
+	if (!json_extract_int(json, "x", &bounds->x) ||
+			!json_extract_int(json, "y", &bounds->y) ||
+			!json_extract_int(json, "width", &bounds->width) ||
+			!json_extract_int(json, "height", &bounds->height)) {
+		return false;
+	}
+	json_extract_int(json, "window_width", &bounds->window_width);
+	json_extract_int(json, "window_height", &bounds->window_height);
+	if (bounds->width <= 0 || bounds->height <= 0) {
+		return false;
+	}
+	bounds->set = true;
+	return true;
+}
+
+static void clamp_box_to_output(struct engineos_view_geometry *box,
+		const struct engineos_view_geometry *output) {
+	int output_right = output->x + output->width;
+	int output_bottom = output->y + output->height;
+	if (box->x < output->x) {
+		box->x = output->x;
+	}
+	if (box->y < output->y) {
+		box->y = output->y;
+	}
+	if (box->x + box->width > output_right) {
+		box->width = output_right - box->x;
+	}
+	if (box->y + box->height > output_bottom) {
+		box->height = output_bottom - box->y;
+	}
+	if (box->width < 0) {
+		box->width = 0;
+	}
+	if (box->height < 0) {
+		box->height = 0;
+	}
+}
+
+static bool compute_preview_box(struct engineos_shell_server *server,
+		const struct engineos_preview_bounds *bounds,
+		struct engineos_view_geometry *box) {
+	struct engineos_view_geometry output = {0};
+	output_geometry_for_role(server, ENGINEOS_SURFACE_TERMINAL,
+		&output.x, &output.y, &output.width, &output.height);
+
+	*box = output;
+	box->layout = "preview";
+	box->fullscreen = false;
+
+	if (bounds != NULL && bounds->set &&
+			bounds->window_width > 0 && bounds->window_height > 0) {
+		struct engineos_layout_request request = {0};
+		request.pane = true;
+		request.pane_left = bounds->x;
+		request.pane_top = bounds->y;
+		request.pane_width = bounds->width;
+		request.pane_height = bounds->height;
+		request.window_width = bounds->window_width;
+		request.window_height = bounds->window_height;
+		if (!apply_pane_geometry(&request, &output, box)) {
+			return false;
+		}
+	} else if (server->focused_view != NULL &&
+			is_terminal_role(server->focused_view->role)) {
+		struct engineos_view_geometry focused = {0};
+		if (compute_view_geometry(server->focused_view, &focused) &&
+				focused.width > 0 && focused.height > 0) {
+			*box = focused;
+			box->layout = "preview-focused-terminal";
+		}
+	}
+
+	clamp_box_to_output(box, &output);
+	return box->width > 0 && box->height > 0;
+}
+
+static void hide_image_preview(struct engineos_shell_server *server,
+		const char *reason) {
+	if (server->preview.scene_buffer != NULL) {
+		wlr_scene_node_destroy(&server->preview.scene_buffer->node);
+		server->preview.scene_buffer = NULL;
+	}
+	if (server->preview.buffer != NULL) {
+		wlr_buffer_drop(server->preview.buffer);
+		server->preview.buffer = NULL;
+	}
+	free(server->preview.path);
+	server->preview.path = NULL;
+	server->preview.x = 0;
+	server->preview.y = 0;
+	server->preview.width = 0;
+	server->preview.height = 0;
+	server->preview.image_width = 0;
+	server->preview.image_height = 0;
+	wlr_log(WLR_INFO, "image preview hidden reason=%s",
+		reason != NULL ? reason : "unspecified");
+	schedule_outputs(server);
+}
+
+static bool show_image_preview(struct engineos_shell_server *server,
+		const char *path, const struct engineos_preview_bounds *bounds,
+		char *error, size_t error_size) {
+	if (path == NULL || path[0] != '/') {
+		snprintf(error, error_size, "preview path must be absolute");
+		return false;
+	}
+	struct stat st;
+	if (stat(path, &st) < 0 || !S_ISREG(st.st_mode)) {
+		snprintf(error, error_size, "preview path is not a readable file");
+		return false;
+	}
+
+	struct engineos_view_geometry box = {0};
+	if (!compute_preview_box(server, bounds, &box)) {
+		snprintf(error, error_size, "preview bounds are outside the active output");
+		return false;
+	}
+
+	int image_width = 0;
+	int image_height = 0;
+	struct wlr_buffer *buffer =
+		decode_image_preview(path, &image_width, &image_height, error, error_size);
+	if (buffer == NULL) {
+		return false;
+	}
+
+	long dest_width = box.width;
+	long dest_height = ((long)box.width * image_height) / image_width;
+	if (dest_height > box.height) {
+		dest_height = box.height;
+		dest_width = ((long)box.height * image_width) / image_height;
+	}
+	if (dest_width <= 0 || dest_height <= 0 ||
+			dest_width > INT_MAX || dest_height > INT_MAX) {
+		wlr_buffer_drop(buffer);
+		snprintf(error, error_size, "preview destination size is invalid");
+		return false;
+	}
+
+	hide_image_preview(server, "replace");
+	server->preview.buffer = buffer;
+	server->preview.scene_buffer =
+		wlr_scene_buffer_create(&server->scene->tree, buffer);
+	if (server->preview.scene_buffer == NULL) {
+		wlr_buffer_drop(buffer);
+		server->preview.buffer = NULL;
+		snprintf(error, error_size, "failed to create preview scene buffer");
+		return false;
+	}
+
+	server->preview.path = strdup(path);
+	server->preview.x = box.x + (box.width - (int)dest_width) / 2;
+	server->preview.y = box.y + (box.height - (int)dest_height) / 2;
+	server->preview.width = (int)dest_width;
+	server->preview.height = (int)dest_height;
+	server->preview.image_width = image_width;
+	server->preview.image_height = image_height;
+	wlr_scene_buffer_set_dest_size(server->preview.scene_buffer,
+		server->preview.width, server->preview.height);
+	wlr_scene_node_set_position(&server->preview.scene_buffer->node,
+		server->preview.x, server->preview.y);
+	wlr_scene_node_raise_to_top(&server->preview.scene_buffer->node);
+	wlr_log(WLR_INFO,
+		"image preview shown path=%s image=%dx%d x=%d y=%d size=%dx%d bounds=%dx%d",
+		path, image_width, image_height, server->preview.x,
+		server->preview.y, server->preview.width, server->preview.height,
+		box.width, box.height);
+	schedule_outputs(server);
+	return true;
+}
+
+static void preview_write_response(int client_fd, const char *status,
+		const char *error) {
+	char response[1024];
+	if (strcmp(status, "ok") == 0) {
+		snprintf(response, sizeof(response),
+			"{\"version\":1,\"status\":\"ok\",\"capabilities\":[\"ping\",\"show\",\"hide\",\"png\",\"jpeg\",\"contain\"]}\n");
+	} else {
+		char escaped[768];
+		size_t used = 0;
+		const char *message = error != NULL ? error : "request failed";
+		for (const unsigned char *p = (const unsigned char *)message;
+				*p != '\0' && used + 2 < sizeof(escaped); p++) {
+			if (*p == '"' || *p == '\\') {
+				escaped[used++] = '\\';
+			}
+			if (*p >= 0x20) {
+				escaped[used++] = (char)*p;
+			}
+		}
+		escaped[used] = '\0';
+		snprintf(response, sizeof(response),
+			"{\"version\":1,\"status\":\"error\",\"error\":\"%s\"}\n",
+			escaped);
+	}
+	(void)write(client_fd, response, strlen(response));
+}
+
+static void handle_preview_request(struct engineos_shell_server *server,
+		int client_fd, const char *request) {
+	char op[32] = {0};
+	if (!json_extract_string(request, "op", op, sizeof(op))) {
+		preview_write_response(client_fd, "error", "missing op");
+		return;
+	}
+
+	if (strcmp(op, "ping") == 0) {
+		preview_write_response(client_fd, "ok", NULL);
+		return;
+	}
+	if (strcmp(op, "hide") == 0) {
+		hide_image_preview(server, "ipc-hide");
+		preview_write_response(client_fd, "ok", NULL);
+		return;
+	}
+	if (strcmp(op, "show") != 0) {
+		preview_write_response(client_fd, "error", "unsupported op");
+		return;
+	}
+
+	char path[PATH_MAX] = {0};
+	if (!json_extract_string(request, "path", path, sizeof(path))) {
+		preview_write_response(client_fd, "error", "missing path");
+		return;
+	}
+	struct engineos_preview_bounds bounds = {0};
+	request_preview_bounds(request, &bounds);
+	char error[512] = {0};
+	if (!show_image_preview(server, path, &bounds, error, sizeof(error))) {
+		wlr_log(WLR_ERROR, "image preview show failed path=%s error=%s",
+			path, error[0] != '\0' ? error : "unknown");
+		preview_write_response(client_fd, "error",
+			error[0] != '\0' ? error : "show failed");
+		return;
+	}
+	preview_write_response(client_fd, "ok", NULL);
+}
+
+static int preview_socket_event(int fd, uint32_t mask, void *data) {
+	struct engineos_shell_server *server = data;
+	if ((mask & WL_EVENT_READABLE) == 0) {
+		return 0;
+	}
+
+	struct sockaddr_un addr;
+	socklen_t addr_len = sizeof(addr);
+	int client_fd = accept(fd, (struct sockaddr *)&addr, &addr_len);
+	if (client_fd < 0) {
+		if (errno != EAGAIN && errno != EWOULDBLOCK) {
+			wlr_log(WLR_ERROR, "preview ipc accept failed: %s",
+				strerror(errno));
+		}
+		return 0;
+	}
+
+	char request[8192];
+	ssize_t nread = read(client_fd, request, sizeof(request) - 1);
+	if (nread <= 0) {
+		preview_write_response(client_fd, "error", "empty request");
+		close(client_fd);
+		return 0;
+	}
+	request[nread] = '\0';
+	handle_preview_request(server, client_fd, request);
+	close(client_fd);
+	return 0;
+}
+
+static bool init_preview_ipc(struct engineos_shell_server *server) {
+	if (server->state_dir == NULL) {
+		return false;
+	}
+	server->preview_socket_path = join_state_path(server->state_dir,
+		"preview.sock");
+	if (server->preview_socket_path == NULL) {
+		return false;
+	}
+	if (!mkdir_p(server->state_dir, 0775)) {
+		wlr_log(WLR_ERROR, "failed to create preview ipc dir %s: %s",
+			server->state_dir, strerror(errno));
+		return false;
+	}
+
+	int sock = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+	if (sock < 0) {
+		wlr_log(WLR_ERROR, "failed to create preview ipc socket: %s",
+			strerror(errno));
+		return false;
+	}
+
+	struct sockaddr_un addr = {0};
+	addr.sun_family = AF_UNIX;
+	if (strlen(server->preview_socket_path) >= sizeof(addr.sun_path)) {
+		wlr_log(WLR_ERROR, "preview ipc socket path is too long: %s",
+			server->preview_socket_path);
+		close(sock);
+		return false;
+	}
+	snprintf(addr.sun_path, sizeof(addr.sun_path), "%s",
+		server->preview_socket_path);
+	unlink(server->preview_socket_path);
+	if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		wlr_log(WLR_ERROR, "failed to bind preview ipc socket %s: %s",
+			server->preview_socket_path, strerror(errno));
+		close(sock);
+		return false;
+	}
+	if (listen(sock, 16) < 0) {
+		wlr_log(WLR_ERROR, "failed to listen on preview ipc socket %s: %s",
+			server->preview_socket_path, strerror(errno));
+		close(sock);
+		unlink(server->preview_socket_path);
+		return false;
+	}
+	chmod(server->preview_socket_path, 0660);
+
+	struct wl_event_loop *event_loop = wl_display_get_event_loop(server->display);
+	server->preview_socket_source =
+		wl_event_loop_add_fd(event_loop, sock, WL_EVENT_READABLE,
+			preview_socket_event, server);
+	if (server->preview_socket_source == NULL) {
+		wlr_log(WLR_ERROR, "failed to register preview ipc socket");
+		close(sock);
+		unlink(server->preview_socket_path);
+		return false;
+	}
+	server->preview_socket_fd = sock;
+	wlr_log(WLR_INFO, "preview ipc listening path=%s",
+		server->preview_socket_path);
+	return true;
 }
 
 static void write_shell_state(struct engineos_shell_server *server,
@@ -2860,10 +3449,29 @@ static bool setup_server(struct engineos_shell_server *server) {
 	server->new_input.notify = server_new_input;
 	wl_signal_add(&server->backend->events.new_input, &server->new_input);
 
+	if (!init_preview_ipc(server)) {
+		wlr_log(WLR_ERROR, "failed to initialize image preview ipc");
+		return false;
+	}
+
 	return true;
 }
 
 static void destroy_server(struct engineos_shell_server *server) {
+	hide_image_preview(server, "shell-destroy");
+	if (server->preview_socket_source != NULL) {
+		wl_event_source_remove(server->preview_socket_source);
+		server->preview_socket_source = NULL;
+	}
+	if (server->preview_socket_fd >= 0) {
+		close(server->preview_socket_fd);
+		server->preview_socket_fd = -1;
+	}
+	if (server->preview_socket_path != NULL) {
+		unlink(server->preview_socket_path);
+		free(server->preview_socket_path);
+		server->preview_socket_path = NULL;
+	}
 	if (!wl_list_empty(&server->launches)) {
 		struct engineos_shell_launch *launch;
 		struct engineos_shell_launch *tmp;
@@ -2940,6 +3548,7 @@ static void destroy_server(struct engineos_shell_server *server) {
 int main(int argc, char **argv) {
 	enum engineos_shell_mode mode = ENGINEOS_SHELL_AUTO;
 	struct engineos_shell_server server = {0};
+	server.preview_socket_fd = -1;
 	wl_list_init(&server.launches);
 
 	static const struct option options[] = {

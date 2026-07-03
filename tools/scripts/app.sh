@@ -350,21 +350,42 @@ sync_role_to_pane() {
 notify_shell_layout_sync() {
   if [[ "${ENGINEOS_APP_NOTIFY_SHELL:-true}" != "true" ]]; then
     log_line "pane sync notify=skipped reason=disabled"
-    return
+    return 0
   fi
 
   if have_cmd pkill && pkill -HUP -x engineos-shell >/dev/null 2>&1; then
     log_line "pane sync notify=signal shell=engineos-shell"
-    return
+    return 0
   fi
 
+  local notified=false
+  local failed=0
   if have_cmd pgrep; then
     local pid
     while IFS= read -r pid; do
       [[ -n "$pid" ]] || continue
-      kill -HUP "$pid" >/dev/null 2>&1 || true
+      if kill -HUP "$pid" >/dev/null 2>&1; then
+        log_line "pane sync notify=signal pid=$pid"
+        notified=true
+      else
+        log_line "pane sync notify=failed pid=$pid"
+        failed=$((failed + 1))
+      fi
     done < <(pgrep -x engineos-shell 2>/dev/null || true)
+  else
+    log_line "pane sync notify=failed reason=pgrep-unavailable"
+    return 1
   fi
+
+  if [[ "$notified" == true && "$failed" -eq 0 ]]; then
+    return 0
+  fi
+  if [[ "$notified" == true ]]; then
+    return 1
+  fi
+
+  log_line "pane sync notify=failed reason=shell-not-running"
+  return 1
 }
 
 run_pane_sync() {
@@ -435,7 +456,9 @@ run_pane_sync() {
   done
 
   if (( changed > 0 )); then
-    notify_shell_layout_sync
+    if ! notify_shell_layout_sync; then
+      failed=$((failed + 1))
+    fi
   fi
   (( failed == 0 ))
 }

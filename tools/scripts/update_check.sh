@@ -145,7 +145,7 @@ fetch_tags() {
 
   "$NO_FETCH" && return
   git -C "$repo" fetch --tags --prune "$remote" ||
-    warn "could not fetch tags from $remote for $repo; using local tags"
+    die "could not fetch tags from $remote for $repo; use --no-fetch only when local tags are intentionally trusted"
 }
 
 prompt_upgrade() {
@@ -199,8 +199,7 @@ run_post_install_payload() {
   "$SKIP_POST_INSTALL" && return
   payload="$(post_install_payload "$tango_root" || true)"
   [[ -n "$payload" ]] || {
-    warn "post-install payload not found; skipping post-install refresh"
-    return
+    die "post-install payload not found; cannot refresh development environment after update"
   }
 
   script="$payload/scripts/setup_dev_environment.sh"
@@ -218,6 +217,9 @@ check_component() {
   local latest current updated=false
 
   if [[ ! -d "$repo/.git" ]]; then
+    if [[ -n "$ONLY_COMPONENT" ]]; then
+      die "$component checkout not found at $repo"
+    fi
     log "$component: skipped; Git checkout not found at $repo"
     return 0
   fi

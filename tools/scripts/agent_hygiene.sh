@@ -133,7 +133,10 @@ check_stale_project_mcp_refs() {
           hit="$file"
           break 2
         fi
-      done < <(find "$root_path" -type f -print)
+      done < <(find "$root_path" \
+        -path '*/pkg/*' -prune -o \
+        -path '*/src/*' -prune -o \
+        -type f -print)
     fi
   done
 

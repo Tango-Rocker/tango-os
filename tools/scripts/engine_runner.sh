@@ -73,6 +73,23 @@ go_bin() {
   command -v go
 }
 
+daemon_unavailable_message() {
+  if [[ "${ENGINEOS_ENGINE_RUNNER_ALLOW_PYTHON_FALLBACK:-false}" == "true" && -f "$LEGACY_DAEMON_SCRIPT" ]] &&
+      ! python_bin >/dev/null 2>&1; then
+    printf '%s\n' "Go engine-runner daemon unavailable and python3 fallback was requested but python is unavailable"
+    return
+  fi
+  printf '%s\n' "Go engine-runner daemon unavailable; build tools/go/cmd/engine-runner-daemon or set ENGINEOS_ENGINE_RUNNER_DAEMON. For source-tree development only, set ENGINEOS_ENGINE_RUNNER_ALLOW_PYTHON_FALLBACK=true"
+}
+
+daemon_client_available() {
+  [[ -x "$DAEMON_BIN" ]] && return 0
+  [[ -d "$SOURCE_GO_DIR" ]] && go_bin >/dev/null 2>&1 && return 0
+  [[ "${ENGINEOS_ENGINE_RUNNER_ALLOW_PYTHON_FALLBACK:-false}" == "true" && -f "$LEGACY_DAEMON_SCRIPT" ]] &&
+    python_bin >/dev/null 2>&1 && return 0
+  return 1
+}
+
 run_daemon_client() {
   local mode="$1"
   shift || true
@@ -87,14 +104,14 @@ run_daemon_client() {
     return
   fi
 
-  if [[ "${ENGINEOS_ENGINE_RUNNER_ALLOW_PYTHON_FALLBACK:-true}" == "true" && -f "$LEGACY_DAEMON_SCRIPT" ]]; then
+  if [[ "${ENGINEOS_ENGINE_RUNNER_ALLOW_PYTHON_FALLBACK:-false}" == "true" && -f "$LEGACY_DAEMON_SCRIPT" ]]; then
     local py
-    py="$(python_bin)" || die "Go engine-runner daemon unavailable and python3 fallback is unavailable"
+    py="$(python_bin)" || die "$(daemon_unavailable_message)"
     "$py" "$LEGACY_DAEMON_SCRIPT" "$mode" --socket "$SOCKET_FILE" "$@"
     return
   fi
 
-  die "Go engine-runner daemon unavailable; build tools/go/cmd/engine-runner-daemon or set ENGINEOS_ENGINE_RUNNER_DAEMON"
+  die "$(daemon_unavailable_message)"
 }
 
 daemon_running() {
@@ -115,6 +132,9 @@ start_daemon() {
   ensure_dirs
   if daemon_running; then
     return 0
+  fi
+  if ! daemon_client_available; then
+    die "$(daemon_unavailable_message)"
   fi
 
   ENGINEOS_ROOT="$ROOT" \

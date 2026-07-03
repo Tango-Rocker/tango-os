@@ -10,7 +10,7 @@ Collect evidence before guessing.
 ## Sequence
 
 ```bash
-./tools/engineos/eos-doctor --mock
+./tools/engineos/eos-doctor
 ./tools/engineos/eos-logs all --last 200
 ./tools/engineos/eos-app status --json
 ./tools/engineos/eos-app manifest validate

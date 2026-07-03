@@ -29,6 +29,7 @@ package() {
 
   install -Dm755 "$_engineos_root/tools/engineos/eos" "$pkgdir/usr/bin/eos"
   install -Dm755 "$_engineos_root/tools/engineos/engineos" "$pkgdir/usr/bin/engineos"
+  install -Dm755 "$_engineos_root/tools/engineos/engine-image-preview" "$pkgdir/usr/bin/engine-image-preview"
   install -Dm755 "$_engineos_root/tools/engineos/eos-wrapper" "$pkgdir/usr/lib/engineos/eos-wrapper"
   while IFS= read -r _cmd; do
     [[ -n "$_cmd" ]] || continue

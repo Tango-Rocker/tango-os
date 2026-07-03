@@ -69,7 +69,7 @@ Escalation:
 - Escalate docs/index drift to `cleaner`.
 
 Proof commands:
-- `eos-doctor --mock`
+- `eos-doctor`
 - `eos-logs all --last 200`
 - `eos-crash-bundle --runtime`
 - `eos-preflight all`
@@ -95,10 +95,10 @@ Escalation:
 - Escalate game-specific engine behavior to `pergame-quake`.
 
 Proof commands:
-- `eos-build repo --dry-run`
-- `eos-package engineos-shell --dry-run`
+- `eos-ci local --no-validate-repo --clean-generated`
+- `eos-preflight repo`
 - `eos-lint packages`
-- `eos-build shell --dry-run`
+- `eos-test shell`
 
 ## admin-shell
 
@@ -123,7 +123,7 @@ Escalation:
 Proof commands:
 - `eos-app status --json`
 - `eos-app manifest validate`
-- `eos-proof launchpad --runtime --dry-run`
+- `eos-test shell`
 - `eos-test shell-actions`
 
 ## engine-builder
@@ -149,8 +149,8 @@ Escalation:
 Proof commands:
 - `eos-capture frame --target shell`
 - `eos-test render --smoke`
-- `eos-proof shell-launch --runtime --dry-run`
-- `eos-build shell --dry-run`
+- `eos-test shell`
+- `eos-app manifest validate`
 
 ## pergame-quake
 

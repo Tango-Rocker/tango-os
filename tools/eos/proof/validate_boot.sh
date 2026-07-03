@@ -76,7 +76,7 @@ enabled_service_check() {
 package_check() {
   local pkg="$1"
   if ! have_cmd pacman; then
-    warn "pacman unavailable; cannot check package $pkg"
+    fail "pacman unavailable; cannot check package $pkg"
     return
   fi
   if pacman -Q "$pkg" >/dev/null 2>&1; then
@@ -84,11 +84,6 @@ package_check() {
   else
     fail "package missing: $pkg"
   fi
-}
-
-package_installed() {
-  local pkg="$1"
-  have_cmd pacman && pacman -Q "$pkg" >/dev/null 2>&1
 }
 
 command_check() {
@@ -157,7 +152,7 @@ runtime_config_check() {
       return
     fi
   else
-    warn "$RUNTIME_CONF missing"
+    fail "$RUNTIME_CONF missing"
     return
   fi
 
@@ -204,7 +199,12 @@ runtime_recovery_help_check() {
     return
   fi
 
-  help_output="$(engineos-recovery-help 2>&1 || true)"
+  if help_output="$(engineos-recovery-help 2>&1)"; then
+    ok "recovery help command completed"
+  else
+    fail "recovery help command failed"
+    return
+  fi
   if printf '%s\n' "$help_output" | grep -F 'eos-logs runtime --last 200' >/dev/null; then
     ok "recovery help points to runtime logs"
   else
@@ -311,10 +311,16 @@ bare_metal_graphics_check() {
       fail "AMD display device not visible to lspci"
     fi
   else
-    warn "lspci unavailable; cannot verify AMD display device"
+    fail "lspci unavailable; cannot verify AMD display device"
   fi
 
-  doctor_output="$("$DOCTOR_CMD" --bare-metal 2>&1 || true)"
+  if doctor_output="$("$DOCTOR_CMD" --bare-metal 2>&1)"; then
+    ok "bare-metal doctor completed"
+  else
+    printf '%s\n' "$doctor_output" >"$VALIDATE_DOCTOR_OUT"
+    fail "bare-metal doctor failed; see $VALIDATE_DOCTOR_OUT"
+    return
+  fi
   if printf '%s\n' "$doctor_output" | grep -Eiq 'llvmpipe|softpipe|software rasterizer'; then
     fail "bare-metal validation detected software renderer"
   else
@@ -362,8 +368,11 @@ if [[ "$MODE" == "vm" || "$MODE" == "runtime" ]]; then
 elif [[ "$MODE" == "bare-metal" ]]; then
   doctor_args+=(--bare-metal)
 fi
-"$DOCTOR_CMD" "${doctor_args[@]}" >"$VALIDATE_DOCTOR_OUT" 2>&1 || warn "doctor reported warnings; see $VALIDATE_DOCTOR_OUT"
-ok "doctor completed"
+if "$DOCTOR_CMD" "${doctor_args[@]}" >"$VALIDATE_DOCTOR_OUT" 2>&1; then
+  ok "doctor completed"
+else
+  fail "doctor failed; see $VALIDATE_DOCTOR_OUT"
+fi
 opengl_check
 
 service_check NetworkManager.service
@@ -383,16 +392,8 @@ package_check engineos-cube
 package_check engineos-engine-runner
 package_check engineos-quakespasm
 package_check engineos-quake-template
-if package_installed engineos-quakespasm; then
-  command_check quakespasm
-else
-  warn "engineos-quakespasm not confirmed installed; skipping quakespasm command check"
-fi
-if package_installed engineos-cube; then
-  command_check engineos-cube
-else
-  warn "engineos-cube not confirmed installed; skipping cube command check"
-fi
+command_check quakespasm
+command_check engineos-cube
 if [[ "$MODE" == "runtime" || "$MODE" == "bare-metal" ]]; then
   package_check engineos-shell
 fi

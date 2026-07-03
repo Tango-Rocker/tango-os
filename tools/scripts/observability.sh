@@ -648,6 +648,63 @@ exporter_pid_file() {
   printf '%s\n' "$STATE_DIR/observability-exporter.pid"
 }
 
+read_exporter_pid() {
+  local pid_file="$1"
+  local pid=""
+  [[ -r "$pid_file" ]] || return 1
+  pid="$(sed -n '1p' "$pid_file" 2>/dev/null || true)"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$pid"
+}
+
+exporter_health_host() {
+  local host="$1"
+  case "$host" in
+    0.0.0.0|"")
+      printf '127.0.0.1\n'
+      ;;
+    ::)
+      printf '::1\n'
+      ;;
+    *)
+      printf '%s\n' "$host"
+      ;;
+  esac
+}
+
+exporter_health_check() {
+  local host="$1"
+  local port="$2"
+  ENGINEOS_OBSERVABILITY_HEALTH_HOST="$(exporter_health_host "$host")" \
+    ENGINEOS_OBSERVABILITY_HEALTH_PORT="$port" \
+    python3 - <<'PY'
+import http.client
+import os
+import sys
+
+host = os.environ["ENGINEOS_OBSERVABILITY_HEALTH_HOST"]
+port = int(os.environ["ENGINEOS_OBSERVABILITY_HEALTH_PORT"])
+conn = None
+
+try:
+    conn = http.client.HTTPConnection(host, port, timeout=0.2)
+    conn.request("GET", "/healthz")
+    response = conn.getresponse()
+    body = response.read()
+except OSError:
+    sys.exit(1)
+finally:
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+if response.status == 200 and body == b"ok\n":
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
 cmd_exporter() {
   local action="${1:-status}"
   shift || true
@@ -727,27 +784,51 @@ with http.server.ThreadingHTTPServer((host, port), Handler) as server:
 PY
       ;;
     start)
-      if [[ -r "$pid_file" ]] && kill -0 "$(cat "$pid_file")" >/dev/null 2>&1; then
-        printf 'observability exporter already running pid=%s\n' "$(cat "$pid_file")"
+      local pid
+      if pid="$(read_exporter_pid "$pid_file")" && kill -0 "$pid" >/dev/null 2>&1; then
+        printf 'observability exporter already running pid=%s\n' "$pid"
         return 0
       fi
       nohup "$0" exporter serve --host "$host" --port "$port" >"$log_file" 2>&1 &
-      printf '%s\n' "$!" >"$pid_file"
-      printf 'observability exporter started pid=%s url=http://%s:%s/metrics\n' "$!" "$host" "$port"
+      pid="$!"
+      printf '%s\n' "$pid" >"$pid_file"
+      for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        if ! kill -0 "$pid" >/dev/null 2>&1; then
+          rm -f "$pid_file"
+          die "observability exporter failed to start; see log: $log_file"
+        fi
+        if exporter_health_check "$host" "$port"; then
+          printf 'observability exporter started pid=%s url=http://%s:%s/metrics\n' "$pid" "$host" "$port"
+          return 0
+        fi
+        sleep 0.1
+      done
+      kill "$pid" >/dev/null 2>&1 || true
+      rm -f "$pid_file"
+      die "observability exporter did not become healthy; see log: $log_file"
       ;;
     stop)
-      if [[ -r "$pid_file" ]] && kill -0 "$(cat "$pid_file")" >/dev/null 2>&1; then
-        kill "$(cat "$pid_file")" || true
-        rm -f "$pid_file"
-        printf 'observability exporter stopped\n'
+      local pid
+      if pid="$(read_exporter_pid "$pid_file")" && kill -0 "$pid" >/dev/null 2>&1; then
+        kill "$pid" || die "observability exporter stop failed for pid=$pid"
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+          if ! kill -0 "$pid" >/dev/null 2>&1; then
+            rm -f "$pid_file"
+            printf 'observability exporter stopped\n'
+            return 0
+          fi
+          sleep 0.1
+        done
+        die "observability exporter stop requested but pid is still running: $pid"
       else
         rm -f "$pid_file"
         printf 'observability exporter not running\n'
       fi
       ;;
     status)
-      if [[ -r "$pid_file" ]] && kill -0 "$(cat "$pid_file")" >/dev/null 2>&1; then
-        printf 'observability exporter: running pid=%s\n' "$(cat "$pid_file")"
+      local pid
+      if pid="$(read_exporter_pid "$pid_file")" && kill -0 "$pid" >/dev/null 2>&1; then
+        printf 'observability exporter: running pid=%s\n' "$pid"
       else
         printf 'observability exporter: stopped\n'
       fi

@@ -7,12 +7,22 @@ CODEX_BIN="$TARGET_HOME/.local/bin/codex"
 SETUP="/usr/local/bin/engineos-live-codex-setup"
 LOG="/var/log/engineos/live-codex-setup.log"
 
+run_setup_quiet() {
+  if "$@" >/dev/null 2>&1; then
+    return 0
+  fi
+  printf 'WARN Codex setup helper failed while repairing permissions: %s\n' "$SETUP" >&2
+  if [[ -w "$LOG" ]]; then
+    printf '[%s] WARN setup helper failed while repairing permissions\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$LOG"
+  fi
+}
+
 if [[ -x "$CODEX_BIN" ]]; then
   if [[ ! -w "$TARGET_HOME/.codex" || ! -w "$TARGET_HOME/.local" ]]; then
     if [[ "$EUID" -eq 0 ]]; then
-      "$SETUP" >/dev/null 2>&1 || true
+      run_setup_quiet "$SETUP"
     elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
-      sudo "$SETUP" >/dev/null 2>&1 || true
+      run_setup_quiet sudo "$SETUP"
     fi
   fi
   exec "$CODEX_BIN" "$@"

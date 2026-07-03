@@ -127,7 +127,7 @@ run_real_shell_if_available() {
     tee_shell_output
     case "$mode" in
       headless)
-        WLR_BACKENDS="${WLR_BACKENDS:-headless}" WLR_HEADLESS_OUTPUTS="${WLR_HEADLESS_OUTPUTS:-1}" exec "$SHELL_BIN" --headless "${smoke_args[@]}" "${startup_args[@]}" "${launch_args[@]}" "${bootstrap_args[@]}"
+        WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS="${WLR_HEADLESS_OUTPUTS:-1}" exec "$SHELL_BIN" --headless "${smoke_args[@]}" "${startup_args[@]}" "${launch_args[@]}" "${bootstrap_args[@]}"
         ;;
       nested)
         exec "$SHELL_BIN" --nested "${smoke_args[@]}" "${startup_args[@]}" "${launch_args[@]}" "${bootstrap_args[@]}"
@@ -145,29 +145,29 @@ case "$MODE" in
     if run_real_shell_if_available headless; then
       exit 0
     fi
-    log_line "engineos-shell headless smoke backend=headless result=stub-ok"
+    log_line "engineos-shell headless backend=headless result=missing-shell shell=$SHELL_BIN"
+    printf 'engineos-shell binary is unavailable for --headless: %s\n' "$SHELL_BIN" >&2
+    exit 1
     ;;
   --nested)
     if run_real_shell_if_available nested; then
       exit 0
     fi
     if [[ -z "${WAYLAND_DISPLAY:-}" && -z "${DISPLAY:-}" ]]; then
-      log_line "engineos-shell nested smoke backend=nested display=missing result=stub-ok"
+      log_line "engineos-shell nested backend=nested display=missing result=missing-shell shell=$SHELL_BIN"
     else
-      log_line "engineos-shell nested smoke backend=nested display=available result=stub-ok"
+      log_line "engineos-shell nested backend=nested display=available result=missing-shell shell=$SHELL_BIN"
     fi
+    printf 'engineos-shell binary is unavailable for --nested: %s\n' "$SHELL_BIN" >&2
+    exit 1
     ;;
   --tty)
     if run_real_shell_if_available tty; then
       exit 0
     fi
-    if [[ "${ENGINEOS_ALLOW_TTY_STUB:-false}" == "true" ]]; then
-      log_line "engineos-shell tty smoke backend=drm result=stub-ok"
-    else
-      log_line "engineos-shell tty backend=drm result=not-implemented"
-      printf 'engineos-shell --tty is not implemented yet; run this on bare-metal AMD after the wlroots shell exists.\n' >&2
-      exit 1
-    fi
+    log_line "engineos-shell tty backend=drm result=missing-shell shell=$SHELL_BIN"
+    printf 'engineos-shell binary is unavailable for --tty: %s\n' "$SHELL_BIN" >&2
+    exit 1
     ;;
   help|--help|-h)
     usage

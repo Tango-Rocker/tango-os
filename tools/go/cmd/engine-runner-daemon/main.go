@@ -76,11 +76,21 @@ func (r *runner) readPrevious() (string, []string) {
 	return strings.TrimSpace(string(targetData)), args
 }
 
-func (r *runner) writeState(pid int, target string, args []string) {
-	_ = os.WriteFile(r.pidFile, []byte(fmt.Sprintf("%d\n", pid)), 0o664)
-	_ = os.WriteFile(r.targetFile, []byte(target+"\n"), 0o664)
-	data, _ := json.Marshal(args)
-	_ = os.WriteFile(r.argsFile, data, 0o664)
+func (r *runner) writeState(pid int, target string, args []string) error {
+	if err := os.WriteFile(r.pidFile, []byte(fmt.Sprintf("%d\n", pid)), 0o664); err != nil {
+		return err
+	}
+	if err := os.WriteFile(r.targetFile, []byte(target+"\n"), 0o664); err != nil {
+		return err
+	}
+	data, err := json.Marshal(args)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(r.argsFile, data, 0o664); err != nil {
+		return err
+	}
+	return nil
 }
 
 func pidAlive(pidText string) bool {
@@ -160,7 +170,17 @@ func (r *runner) launch(target string, args []string, clientEnv map[string]strin
 		return response{OK: false, Message: "launch failed: " + err.Error()}
 	}
 	r.process = cmd
-	r.writeState(cmd.Process.Pid, target, args)
+	if err := r.writeState(cmd.Process.Pid, target, args); err != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = syscall.Kill(cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+		_ = logFile.Close()
+		r.process = nil
+		_ = os.Remove(r.pidFile)
+		_ = os.Remove(r.targetFile)
+		_ = os.Remove(r.argsFile)
+		return response{OK: false, Message: "launch failed to record engine state: " + err.Error()}
+	}
 	go func() {
 		_ = cmd.Wait()
 		_ = logFile.Close()
@@ -185,7 +205,7 @@ func (r *runner) quit() response {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return response{OK: true, State: "stopping", PID: pidText, Message: "engine stop requested; pid may still be exiting: " + pidText}
+	return response{OK: false, State: "stopping", PID: pidText, Message: "engine stop requested but pid is still running: " + pidText}
 }
 
 func (r *runner) restart(target string, args []string, env map[string]string) response {
@@ -195,7 +215,10 @@ func (r *runner) restart(target string, args []string, env map[string]string) re
 	if target == "" {
 		return response{OK: false, Message: "no previous engine target to restart"}
 	}
-	r.quit()
+	stop := r.quit()
+	if !stop.OK {
+		return response{OK: false, State: stop.State, PID: stop.PID, Message: "engine restart aborted: " + stop.Message}
+	}
 	return r.launch(target, args, env)
 }
 
@@ -210,7 +233,10 @@ func (r *runner) handle(req request) response {
 	case "engine.restart":
 		return r.restart(req.Target, req.Args, req.Env)
 	case "engine.daemon.stop":
-		r.quit()
+		stop := r.quit()
+		if !stop.OK {
+			return response{OK: false, State: stop.State, PID: stop.PID, Message: "engine runner daemon stop failed: " + stop.Message}
+		}
 		return response{OK: true, Message: "engine runner daemon stopping", Shutdown: true}
 	default:
 		return response{OK: false, Message: "unknown method: " + req.Method}

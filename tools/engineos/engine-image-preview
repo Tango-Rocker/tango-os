@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+import socket
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+
+MAX_FILE_BYTES = 100 * 1024 * 1024
+SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+
+
+def error(message: str, code: int = 1) -> int:
+    print(f"engine-image-preview: {message}", file=sys.stderr)
+    return code
+
+
+def preview_socket_path() -> str:
+    override = os.environ.get("ENGINEOS_PREVIEW_SOCKET")
+    if override:
+        return override
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime_dir:
+        return os.path.join(runtime_dir, "engineos", "preview.sock")
+    return "/tmp/engineos/preview.sock"
+
+
+def detect_image_kind(path: Path) -> str | None:
+    suffix = path.suffix.lower()
+    if suffix not in SUPPORTED_EXTENSIONS:
+        return None
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(12)
+    except OSError:
+        return None
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if header.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    return None
+
+
+def validate_image_path(raw_path: str) -> tuple[Path | None, str | None]:
+    path = Path(raw_path).expanduser()
+    try:
+        resolved = path.resolve(strict=True)
+        st = resolved.stat()
+    except OSError as exc:
+        return None, f"cannot read image path: {exc}"
+    if stat.S_ISDIR(st.st_mode):
+        return None, "image path is a directory"
+    if not stat.S_ISREG(st.st_mode):
+        return None, "image path is not a regular file"
+    if st.st_size > MAX_FILE_BYTES:
+        return None, f"image file is too large: {st.st_size} bytes"
+    if detect_image_kind(resolved) is None:
+        return None, "unsupported image type; expected PNG or JPEG"
+    return resolved, None
+
+
+def tmux_bounds() -> dict[str, int] | None:
+    pane = os.environ.get("TMUX_PANE")
+    if not pane:
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "tmux",
+                "display-message",
+                "-p",
+                "-t",
+                pane,
+                "#{pane_left} #{pane_top} #{pane_width} #{pane_height} #{window_width} #{window_height}",
+            ],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=1.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    parts = result.stdout.strip().split()
+    if len(parts) != 6:
+        return None
+    try:
+        left, top, width, height, window_width, window_height = [int(part) for part in parts]
+    except ValueError:
+        return None
+    if width <= 0 or height <= 0 or window_width <= 0 or window_height <= 0:
+        return None
+    return {
+        "x": left,
+        "y": top,
+        "width": width,
+        "height": height,
+        "window_width": window_width,
+        "window_height": window_height,
+    }
+
+
+def build_request(args: argparse.Namespace) -> tuple[dict[str, object] | None, str | None]:
+    if args.ping:
+        return {"version": 1, "op": "ping"}, None
+    if args.hide:
+        return {"version": 1, "op": "hide"}, None
+
+    raw_path = args.view or args.open
+    if raw_path is None:
+        return None, "expected --view PATH, --open PATH, --hide, or --ping"
+    path, path_error = validate_image_path(raw_path)
+    if path_error is not None or path is None:
+        return None, path_error
+
+    request: dict[str, object] = {
+        "version": 1,
+        "op": "show",
+        "path": str(path),
+        "anchor": "active-pane",
+        "fit": "contain",
+    }
+    bounds = tmux_bounds()
+    if bounds is not None:
+        request["bounds"] = bounds
+    return request, None
+
+
+def send_request(request: dict[str, object], sock_path: str) -> tuple[dict[str, object] | None, str | None]:
+    payload = (json.dumps(request, separators=(",", ":")) + "\n").encode("utf-8")
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(2.0)
+            client.connect(sock_path)
+            client.sendall(payload)
+            chunks: list[bytes] = []
+            while True:
+                chunk = client.recv(4096)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                if b"\n" in chunk:
+                    break
+    except OSError as exc:
+        return None, f"shell preview IPC unavailable at {sock_path}: {exc}"
+
+    raw = b"".join(chunks).split(b"\n", 1)[0]
+    if not raw:
+        return None, "shell preview IPC returned an empty response"
+    try:
+        response = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return None, f"shell preview IPC returned invalid JSON: {exc}"
+    if response.get("status") != "ok":
+        message = response.get("error")
+        return response, str(message) if message else "shell preview request failed"
+    return response, None
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Request an EngineOS shell image preview")
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--view", metavar="PATH", help="show an image from MC View")
+    action.add_argument("--open", metavar="PATH", help="show an image from MC Open")
+    action.add_argument("--hide", action="store_true", help="hide the active preview")
+    action.add_argument("--ping", action="store_true", help="check shell preview IPC")
+    parser.add_argument("--socket", help="override the shell preview socket path")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="validate input and print the IPC JSON without contacting the shell",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str]) -> int:
+    args = parse_args(argv)
+    request, request_error = build_request(args)
+    if request_error is not None or request is None:
+        return error(request_error or "failed to build request", 2)
+
+    if args.dry_run:
+        print(json.dumps(request, sort_keys=True, separators=(",", ":")))
+        return 0
+
+    response, ipc_error = send_request(request, args.socket or preview_socket_path())
+    if ipc_error is not None:
+        return error(ipc_error, 1)
+    if args.ping:
+        caps = response.get("capabilities", []) if response is not None else []
+        print("engine-image-preview: shell preview IPC ready", file=sys.stderr)
+        if caps:
+            print("engine-image-preview: capabilities=" + ",".join(map(str, caps)), file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
