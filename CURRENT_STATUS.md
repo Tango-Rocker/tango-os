@@ -171,6 +171,12 @@ e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeO
   `terminal-secondary` preview placement at `x=1920` on the second output,
   stale-owner hide rejection, watcher-triggered hide, and working
   `engine-image-preview --ping`.
+- The EngineDev shell relaunch path now refreshes the Wayland session before
+  starting a new shell: the dev-shell wrapper terminates stale same-user
+  `engineos-shell` processes, removes stale `wayland-*` runtime sockets, and
+  the compositor waits for initial outputs after backend start before spawning
+  terminal/Qt/Wayland clients. This targets the relaunch failure where Qt logged
+  `qt.qpa.wayland: there are no outputs`.
 - The launchpad app registry is now packaged at `/etc/engineos/apps.toml` from `packages/engineos-config/files/etc/engineos/apps.toml`. `eos-app manifest validate` checks the terminal, cube, and Quake slot contract, `eos-runtime shell` reads the manifest for default slot commands, and `eos-proof launchpad` validates the manifest before checking runtime logs.
 - The first rebuilt EngineRuntime ISO booted in builder-hosted QEMU far enough to mount the 50% cowspace and reach login, but exposed two runtime-proof blockers: `engineos-live-setup.service` was ordered after `multi-user.target`, creating a cycle that skipped `engineos-engine-runner.service`, and Runtime did not yet enable explicit SSH password access for automated VM proof. The profile now runs live setup before the runtime services and configures `engineos` / `engineos` SSH validation access.
 - A clean generated EngineRuntime ISO now passes `eos-proof booted-iso --runtime` in builder-hosted QEMU through SSH port 2223 with 0 boot-validation failures and 0 warnings. The final proven ISO is `EngineRuntimeOS-2026.06.15-x86_64.iso`, checksum `e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2`.

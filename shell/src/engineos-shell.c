@@ -408,6 +408,43 @@ static int terminate_from_smoke_timer(void *data) {
 	return 0;
 }
 
+static int64_t monotonic_msec(void) {
+	struct timespec now = {0};
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
+static bool wait_for_initial_outputs(struct engineos_shell_server *server,
+		int timeout_ms) {
+	if (server->output_count > 0) {
+		return true;
+	}
+
+	struct wl_event_loop *event_loop = wl_display_get_event_loop(server->display);
+	int64_t deadline = monotonic_msec() + timeout_ms;
+	wlr_log(WLR_INFO, "waiting for initial outputs timeout_ms=%d",
+		timeout_ms);
+	while (server->output_count == 0) {
+		int64_t remaining = deadline - monotonic_msec();
+		if (remaining <= 0) {
+			wlr_log(WLR_ERROR,
+				"no outputs available after backend start timeout_ms=%d",
+				timeout_ms);
+			return false;
+		}
+		int dispatch_timeout = remaining < 50 ? (int)remaining : 50;
+		if (wl_event_loop_dispatch(event_loop, dispatch_timeout) < 0) {
+			wlr_log(WLR_ERROR,
+				"event dispatch failed while waiting for outputs");
+			return false;
+		}
+	}
+
+	wlr_log(WLR_INFO, "initial outputs ready count=%u",
+		server->output_count);
+	return true;
+}
+
 static struct engineos_shell_launch *find_launch_by_pid(
 		struct engineos_shell_server *server, pid_t pid) {
 	struct engineos_shell_launch *launch;
@@ -3888,6 +3925,7 @@ int main(int argc, char **argv) {
 		destroy_server(&server);
 		return 1;
 	}
+	setenv("WAYLAND_DISPLAY", socket, 1);
 
 	if (!wlr_backend_start(server.backend)) {
 		wlr_log(WLR_ERROR, "failed to start wlroots backend");
@@ -3895,7 +3933,11 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-	setenv("WAYLAND_DISPLAY", socket, 1);
+	if (!wait_for_initial_outputs(&server, 3000)) {
+		destroy_server(&server);
+		return 1;
+	}
+
 	wlr_log(WLR_INFO, "engineos-shell mode=%s backend=%s wayland_display=%s",
 		server.mode_name, getenv("WLR_BACKENDS") ? getenv("WLR_BACKENDS") : "auto", socket);
 	wlr_log(WLR_INFO, "input mode=%s capture=%s reason=startup",
