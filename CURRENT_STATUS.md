@@ -164,7 +164,9 @@ e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeO
   owner token, shell preview anchoring honors `terminal` vs
   `terminal-secondary`, stale owner-scoped `hide` requests are ignored after a
   newer image replaces the preview, MC/process-exit watcher hides clean up the
-  matching preview, and shell shutdown no longer unlinks the shared
+  matching preview, MC `View`/`Open` helper calls return immediately instead of
+  blocking terminal input, unmodified `F3` closes the visible shell-owned
+  preview surface, and shell shutdown no longer unlinks the shared
   `preview.sock` path during restart races. Live proof showed
   `terminal-secondary` preview placement at `x=1920` on the second output,
   stale-owner hide rejection, watcher-triggered hide, and working
