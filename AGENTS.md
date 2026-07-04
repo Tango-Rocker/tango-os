@@ -2,10 +2,11 @@
 
 EngineOS is a hobby OS lab: build an Arch-based EngineDev OS first, then a smaller game-runtime appliance. Keep work practical. Advance the next proof, avoid process for its own sake, and put useful tangents in [BACKLOG.md](BACKLOG.md).
 
-Current target: prove the EngineRuntime startup shell on the AMD target with
+Current target: prove the live bare-metal EngineOS shell/app stack with
 hardware GL acceleration, shell-owned Wayland clients, recovery logs, and
-Quake launch through the EngineOS app stack.
-For the real Arch builder VM, keep the repo at `/srv/engineos`; the archiso profiles point pacman at `file:///srv/engineos/repo/$arch`.
+Quake launch through the EngineOS app stack. ISO, VM, QEMU, Hyper-V builder,
+and generated-image work is legacy/reference-only unless the user explicitly
+re-enables the image lab.
 
 ## First Pass
 
@@ -23,7 +24,7 @@ Read only what the task needs:
 2. Pick the smallest command that proves or falsifies the next claim.
 3. Make the narrowest change that moves that proof forward.
 4. Run the narrowest relevant check.
-5. If validation cannot run, determine whether the blocker is environmental or repo-owned. Fix repo-owned blockers before handoff; for environmental blockers, record the exact failure and the exact command to rerun on the Arch builder VM or target host.
+5. If validation cannot run, determine whether the blocker is environmental or repo-owned. Fix repo-owned blockers before handoff; for environmental blockers, record the exact failure and the exact command to rerun on the target host.
 6. Update [CURRENT_STATUS.md](CURRENT_STATUS.md) if an acceptance condition changes.
 7. Put useful off-track ideas in [BACKLOG.md](BACKLOG.md), then return to the current proof.
 8. When the work is finished, leave a Git disposition: commit the scoped
@@ -34,7 +35,7 @@ Read only what the task needs:
 ## Project Map
 
 ```text
-archiso/              mkarchiso profiles
+archiso/              legacy generated-image profiles; not routine work
 packages/             local Arch package definitions
 shell/                wlroots shell work
 engine-runner/        process control work
@@ -67,7 +68,7 @@ Use this before opening broad docs.
 | First-deploy EngineDev setup | [docs/dev-instance.md](docs/dev-instance.md) | [CURRENT_STATUS.md](CURRENT_STATUS.md) |
 | Navigate code or check LSP | [.agents/skills/code-navigation/SKILL.md](.agents/skills/code-navigation/SKILL.md) | [docs/agent-lsp.md](docs/agent-lsp.md) |
 | Build packages or repo | [docs/agent-harness.md](docs/agent-harness.md) | `packages/*/PKGBUILD` |
-| Build ISO profiles | [.agents/skills/archiso-build/SKILL.md](.agents/skills/archiso-build/SKILL.md) | [archiso/enginedev/README.md](archiso/enginedev/README.md) |
+| Legacy ISO profiles | [.agents/skills/archiso-build/SKILL.md](.agents/skills/archiso-build/SKILL.md) | only when explicitly re-enabled |
 | Work on wlroots shell | [.agents/skills/wlroots-compositor/SKILL.md](.agents/skills/wlroots-compositor/SKILL.md) | [shell/README.md](shell/README.md) |
 | Work on QuakeSpasm | [.agents/skills/quake-port/SKILL.md](.agents/skills/quake-port/SKILL.md) | [docs/asset-policy.md](docs/asset-policy.md) |
 | Work on input routing | [.agents/skills/input-routing/SKILL.md](.agents/skills/input-routing/SKILL.md) | [docs/mvp-plan.md](docs/mvp-plan.md) |
@@ -77,73 +78,24 @@ Use this before opening broad docs.
 
 ## Command Ladder
 
-Use real local checks for non-destructive proof. Keep dry-runs for destructive,
-remote, USB, and builder-only previews:
+Use real local checks for non-destructive proof. ISO, VM, QEMU, Hyper-V
+builder, and generated-image paths are legacy/reference-only:
 
 ```bash
 ./tools/engineos/eos --help
-./tools/engineos/eos-doctor --vm
-./tools/engineos/eos-builder handoff --dry-run --host dev@<builder-vm-ip>
-./tools/engineos/eos-builder handoff --dry-run --host dev@<builder-vm-ip> --run-proof
-./tools/engineos/eos-builder doctor-proof --dry-run --host dev@<builder-vm-ip>
-./tools/engineos/eos-deploy first --dry-run --host dev@127.0.0.1 --port 2222
-./tools/engineos/eos-builder bootstrap --dry-run
+./tools/engineos/eos-doctor
 ./tools/engineos/eos-agent hygiene check
 ./tools/engineos/eos-agent dispatch status
 ./tools/engineos/eos-preflight all
 ./tools/engineos/eos-lint packages
 ./tools/engineos/eos-build fetch engine quake --status
-./tools/engineos/eos-proof build-lab --dry-run
-./tools/engineos/eos-proof release-candidate --dry-run
-./tools/engineos/eos-proof hardware-ready --dry-run --profile engineruntime --device /dev/sdX
-./tools/engineos/eos-test vm
 ./tools/engineos/eos-build shell --dry-run
 ./tools/engineos/eos-build repo --dry-run
-./tools/engineos/eos-build iso --dry-run
-./tools/engineos/eos-build iso enginedev --fast --dry-run
 ./tools/engineos/eos-test
 ./tools/engineos/eos-test all
 ```
 
-On the Arch builder VM, use real builds when the task is ready:
-
-```bash
-cd /srv/engineos
-./tools/engineos/eos-builder bootstrap
-./tools/engineos/eos-validate builder
-./tools/engineos/eos-proof build-lab
-./tools/engineos/eos-build iso enginedev --fast --clean --archive-existing
-./tools/engineos/eos-proof release-candidate
-./tools/engineos/eos-proof hardware-ready --profile engineruntime --device /dev/sdX
-./tools/engineos/eos-vm boot enginedev --display none --background --ssh-port 2222
-ENGINEOS_GUEST_PASSWORD=dev ./tools/engineos/eos-deploy first --host dev@127.0.0.1 --port 2222
-./tools/engineos/eos-vm boot engineruntime
-```
-
-From the host, after the EngineDev VM is booted by the builder with SSH
-forwarded on port 2222, use the combined build-and-doctor directive:
-
-```bash
-./tools/engineos/eos-builder doctor-proof --host dev@<builder-vm-ip>
-```
-
-This SSHes into the builder, runs `./tools/engineos/eos-proof build-lab`,
-then SSHes from the builder into the booted EngineDev guest and runs
-`eos-doctor --vm`.
-If WSL cannot route to the Hyper-V builder but Windows OpenSSH can, run it as:
-
-```bash
-ENGINEOS_SSH=ssh.exe ./tools/engineos/eos-builder doctor-proof --host dev@<builder-vm-ip>
-```
-
-Inside a booted ISO:
-
-```bash
-eos-proof booted-iso --vm
-eos-proof booted-iso --runtime
-```
-
-After first deploy inside EngineDev, verify:
+On the live bare-metal EngineDev install, verify:
 
 ```bash
 tmux -V
@@ -187,7 +139,7 @@ lsp_find_symbol
 lsp_related_files
 ```
 
-Bash, PKGBUILD, Markdown, archiso profiles, and package lists are not LSP-backed here. Use `rg`, `bash -n`, `shellcheck` when available, `eos-preflight all`, and `eos-lint packages`. Real C/wlroots proof belongs on the Arch builder VM with compiler output.
+Bash, PKGBUILD, Markdown, legacy archiso profiles, and package lists are not LSP-backed here. Use `rg`, `bash -n`, `shellcheck` when available, `eos-preflight all`, and `eos-lint packages`. Real C/wlroots proof belongs on the target host with compiler output.
 
 ## Stay Focused
 
@@ -210,4 +162,4 @@ bash -n tools/engineos/engineos tools/scripts/*.sh tools/eos/*/*.sh engines/quak
 ./tools/engineos/eos-test
 ```
 
-If a check cannot run here, do not treat that as success. Decide whether it is caused by the local environment or by the repo change. Fix repo-owned failures before handoff. For environment-only blockers, say why, preserve the failing output, and name the exact command to run in the Arch builder VM.
+If a check cannot run here, do not treat that as success. Decide whether it is caused by the local environment or by the repo change. Fix repo-owned failures before handoff. For environment-only blockers, say why, preserve the failing output, and name the exact command to run on the target host.
