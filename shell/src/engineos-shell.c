@@ -124,12 +124,14 @@ struct engineos_preview_surface {
 	struct wlr_buffer *buffer;
 	char *path;
 	char *owner;
+	char *mode;
 	int x;
 	int y;
 	int width;
 	int height;
 	int image_width;
 	int image_height;
+	int opacity_percent;
 };
 
 struct engineos_shell_server {
@@ -185,6 +187,7 @@ struct engineos_shell_server {
 	struct wl_event_source *preview_socket_source;
 	int preview_socket_fd;
 	struct engineos_preview_surface preview;
+	struct engineos_preview_surface wallpaper;
 	enum engineos_bootstrap_mode bootstrap_mode;
 	enum engineos_input_mode input_mode;
 	enum engineos_surface_role active_slot;
@@ -1722,6 +1725,20 @@ static bool request_preview_bounds(const char *json,
 	return true;
 }
 
+static int request_opacity_percent(const char *json, int fallback) {
+	int value = fallback;
+	if (!json_extract_int(json, "opacity", &value)) {
+		return fallback;
+	}
+	if (value < 0) {
+		return 0;
+	}
+	if (value > 100) {
+		return 100;
+	}
+	return value;
+}
+
 static void clamp_box_to_output(struct engineos_view_geometry *box,
 		const struct engineos_view_geometry *output) {
 	int output_right = output->x + output->width;
@@ -1822,28 +1839,44 @@ static bool compute_preview_box(struct engineos_shell_server *server,
 	return box->width > 0 && box->height > 0;
 }
 
+static void reset_image_surface(struct engineos_preview_surface *surface) {
+	if (surface->scene_buffer != NULL) {
+		wlr_scene_node_destroy(&surface->scene_buffer->node);
+		surface->scene_buffer = NULL;
+	}
+	if (surface->buffer != NULL) {
+		wlr_buffer_drop(surface->buffer);
+		surface->buffer = NULL;
+	}
+	free(surface->path);
+	surface->path = NULL;
+	free(surface->owner);
+	surface->owner = NULL;
+	free(surface->mode);
+	surface->mode = NULL;
+	surface->x = 0;
+	surface->y = 0;
+	surface->width = 0;
+	surface->height = 0;
+	surface->image_width = 0;
+	surface->image_height = 0;
+	surface->opacity_percent = 0;
+}
+
 static void hide_image_preview(struct engineos_shell_server *server,
 		const char *reason) {
-	if (server->preview.scene_buffer != NULL) {
-		wlr_scene_node_destroy(&server->preview.scene_buffer->node);
-		server->preview.scene_buffer = NULL;
-	}
-	if (server->preview.buffer != NULL) {
-		wlr_buffer_drop(server->preview.buffer);
-		server->preview.buffer = NULL;
-	}
-	free(server->preview.path);
-	server->preview.path = NULL;
-	free(server->preview.owner);
-	server->preview.owner = NULL;
-	server->preview.x = 0;
-	server->preview.y = 0;
-	server->preview.width = 0;
-	server->preview.height = 0;
-	server->preview.image_width = 0;
-	server->preview.image_height = 0;
+	reset_image_surface(&server->preview);
 	wlr_log(WLR_INFO, "image preview hidden reason=%s",
 		reason != NULL ? reason : "unspecified");
+	schedule_outputs(server);
+}
+
+static void hide_wallpaper(struct engineos_shell_server *server,
+		const char *reason) {
+	reset_image_surface(&server->wallpaper);
+	wlr_log(WLR_INFO, "wallpaper hidden reason=%s",
+		reason != NULL ? reason : "unspecified");
+	write_shell_state(server, reason != NULL ? reason : "wallpaper-hidden");
 	schedule_outputs(server);
 }
 
@@ -1925,12 +1958,113 @@ static bool show_image_preview(struct engineos_shell_server *server,
 	return true;
 }
 
+static bool compute_wallpaper_box(struct engineos_shell_server *server,
+		const char *slot, const char *mode,
+		const struct engineos_preview_bounds *bounds,
+		struct engineos_view_geometry *box) {
+	if (mode != NULL && strcmp(mode, "pane") == 0) {
+		return compute_preview_box(server, slot, bounds, box);
+	}
+
+	output_geometry_for_role(server, ENGINEOS_SURFACE_TERMINAL,
+		&box->x, &box->y, &box->width, &box->height);
+	box->fullscreen = false;
+	box->layout = "wallpaper-output";
+	return box->width > 0 && box->height > 0;
+}
+
+static bool show_wallpaper(struct engineos_shell_server *server,
+		const char *path, const char *slot, const char *mode,
+		const struct engineos_preview_bounds *bounds, int opacity_percent,
+		char *error, size_t error_size) {
+	if (path == NULL || path[0] != '/') {
+		snprintf(error, error_size, "wallpaper path must be absolute");
+		return false;
+	}
+	struct stat st;
+	if (stat(path, &st) < 0 || !S_ISREG(st.st_mode)) {
+		snprintf(error, error_size, "wallpaper path is not a readable file");
+		return false;
+	}
+
+	const char *wallpaper_mode =
+		mode != NULL && strcmp(mode, "pane") == 0 ? "pane" : "output";
+	struct engineos_view_geometry box = {0};
+	if (!compute_wallpaper_box(server, slot, wallpaper_mode, bounds, &box)) {
+		snprintf(error, error_size, "wallpaper bounds are outside the active output");
+		return false;
+	}
+
+	int image_width = 0;
+	int image_height = 0;
+	struct wlr_buffer *buffer =
+		decode_image_preview(path, &image_width, &image_height, error, error_size);
+	if (buffer == NULL) {
+		return false;
+	}
+
+	struct wlr_fbox source_box = {
+		.x = 0.0,
+		.y = 0.0,
+		.width = image_width,
+		.height = image_height,
+	};
+	double image_ratio = (double)image_width / (double)image_height;
+	double dest_ratio = (double)box.width / (double)box.height;
+	if (image_ratio > dest_ratio) {
+		source_box.width = (double)image_height * dest_ratio;
+		source_box.x = ((double)image_width - source_box.width) / 2.0;
+	} else if (image_ratio < dest_ratio) {
+		source_box.height = (double)image_width / dest_ratio;
+		source_box.y = ((double)image_height - source_box.height) / 2.0;
+	}
+
+	hide_wallpaper(server, "replace");
+	server->wallpaper.buffer = buffer;
+	server->wallpaper.scene_buffer =
+		wlr_scene_buffer_create(&server->scene->tree, buffer);
+	if (server->wallpaper.scene_buffer == NULL) {
+		wlr_buffer_drop(buffer);
+		server->wallpaper.buffer = NULL;
+		snprintf(error, error_size, "failed to create wallpaper scene buffer");
+		return false;
+	}
+
+	server->wallpaper.path = strdup(path);
+	server->wallpaper.mode = strdup(wallpaper_mode);
+	server->wallpaper.x = box.x;
+	server->wallpaper.y = box.y;
+	server->wallpaper.width = box.width;
+	server->wallpaper.height = box.height;
+	server->wallpaper.image_width = image_width;
+	server->wallpaper.image_height = image_height;
+	server->wallpaper.opacity_percent = opacity_percent;
+	wlr_scene_buffer_set_source_box(server->wallpaper.scene_buffer,
+		&source_box);
+	wlr_scene_buffer_set_dest_size(server->wallpaper.scene_buffer,
+		server->wallpaper.width, server->wallpaper.height);
+	wlr_scene_buffer_set_opacity(server->wallpaper.scene_buffer,
+		(float)opacity_percent / 100.0f);
+	wlr_scene_node_set_position(&server->wallpaper.scene_buffer->node,
+		server->wallpaper.x, server->wallpaper.y);
+	wlr_scene_node_lower_to_bottom(&server->wallpaper.scene_buffer->node);
+	wlr_log(WLR_INFO,
+		"wallpaper shown path=%s mode=%s opacity=%d image=%dx%d x=%d y=%d size=%dx%d source=%.1fx%.1f+%.1f+%.1f",
+		path, wallpaper_mode, opacity_percent, image_width, image_height,
+		server->wallpaper.x, server->wallpaper.y,
+		server->wallpaper.width, server->wallpaper.height,
+		source_box.width, source_box.height, source_box.x, source_box.y);
+	write_shell_state(server, "wallpaper-shown");
+	schedule_outputs(server);
+	return true;
+}
+
 static void preview_write_response(int client_fd, const char *status,
 		const char *error) {
 	char response[1024];
 	if (strcmp(status, "ok") == 0) {
 		snprintf(response, sizeof(response),
-			"{\"version\":1,\"status\":\"ok\",\"capabilities\":[\"ping\",\"show\",\"hide\",\"launch\",\"png\",\"jpeg\",\"contain\"]}\n");
+			"{\"version\":1,\"status\":\"ok\",\"capabilities\":[\"ping\",\"show\",\"hide\",\"wallpaper\",\"hide-wallpaper\",\"launch\",\"png\",\"jpeg\",\"contain\",\"cover\",\"opacity\"]}\n");
 	} else {
 		char escaped[768];
 		size_t used = 0;
@@ -1983,6 +2117,11 @@ static void handle_preview_request(struct engineos_shell_server *server,
 		preview_write_response(client_fd, "ok", NULL);
 		return;
 	}
+	if (strcmp(op, "hide-wallpaper") == 0) {
+		hide_wallpaper(server, "ipc-hide-wallpaper");
+		preview_write_response(client_fd, "ok", NULL);
+		return;
+	}
 	if (strcmp(op, "launch") == 0) {
 		char slot[64] = {0};
 		if (!json_extract_string(request, "slot", slot, sizeof(slot))) {
@@ -1995,6 +2134,31 @@ static void handle_preview_request(struct engineos_shell_server *server,
 			return;
 		}
 		launch_or_activate_slot(server, role, "ipc-launch");
+		preview_write_response(client_fd, "ok", NULL);
+		return;
+	}
+	if (strcmp(op, "wallpaper") == 0) {
+		char path[PATH_MAX] = {0};
+		if (!json_extract_string(request, "path", path, sizeof(path))) {
+			preview_write_response(client_fd, "error", "missing path");
+			return;
+		}
+		char slot[64] = {0};
+		json_extract_string(request, "slot", slot, sizeof(slot));
+		char mode[32] = {0};
+		json_extract_string(request, "mode", mode, sizeof(mode));
+		struct engineos_preview_bounds bounds = {0};
+		request_preview_bounds(request, &bounds);
+		int opacity = request_opacity_percent(request, 100);
+		char error[512] = {0};
+		if (!show_wallpaper(server, path, slot, mode, &bounds, opacity,
+					error, sizeof(error))) {
+			wlr_log(WLR_ERROR, "wallpaper show failed path=%s error=%s",
+				path, error[0] != '\0' ? error : "unknown");
+			preview_write_response(client_fd, "error",
+				error[0] != '\0' ? error : "wallpaper failed");
+			return;
+		}
 		preview_write_response(client_fd, "ok", NULL);
 		return;
 	}
@@ -2192,6 +2356,16 @@ static void write_shell_state(struct engineos_shell_server *server,
 		server->pointer_count, server->view_count);
 	fprintf(file, "  \"last_reason\": ");
 	json_write_string(file, reason != NULL ? reason : "unspecified");
+	fprintf(file, ",\n  \"wallpaper\": {\"visible\": %s, \"path\": ",
+		server->wallpaper.scene_buffer != NULL ? "true" : "false");
+	json_write_string(file, server->wallpaper.path);
+	fprintf(file, ", \"mode\": ");
+	json_write_string(file, server->wallpaper.mode);
+	fprintf(file, ", \"opacity\": %d, \"x\": %d, \"y\": %d, \"width\": %d, \"height\": %d, \"image_width\": %d, \"image_height\": %d}",
+		server->wallpaper.opacity_percent, server->wallpaper.x,
+		server->wallpaper.y, server->wallpaper.width,
+		server->wallpaper.height, server->wallpaper.image_width,
+		server->wallpaper.image_height);
 	fprintf(file, ",\n  \"slots\": {\n");
 	write_slot_state(file, server, ENGINEOS_SURFACE_TERMINAL);
 	fprintf(file, ",\n");
@@ -4455,6 +4629,7 @@ static bool setup_server(struct engineos_shell_server *server) {
 
 static void destroy_server(struct engineos_shell_server *server) {
 	hide_image_preview(server, "shell-destroy");
+	hide_wallpaper(server, "shell-destroy");
 	close_preview_ipc(server, false, true);
 	if (!wl_list_empty(&server->launches)) {
 		struct engineos_shell_launch *launch;

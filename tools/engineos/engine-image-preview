@@ -14,6 +14,7 @@ from pathlib import Path
 MAX_FILE_BYTES = 100 * 1024 * 1024
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 PREVIEW_PANELS = {"left", "right", "active"}
+WALLPAPER_TARGETS = {"output", "pane"}
 
 
 def error(message: str, code: int = 1) -> int:
@@ -240,13 +241,32 @@ def build_request(args: argparse.Namespace) -> tuple[dict[str, object] | None, s
         if args.owner:
             request["owner"] = args.owner
         return request, None
+    if args.hide_wallpaper:
+        return {"version": 1, "op": "hide-wallpaper"}, None
 
-    raw_path = args.view or args.open or args.quick_view
+    raw_path = args.view or args.open or args.quick_view or args.wallpaper
     if raw_path is None:
-        return None, "expected --view PATH, --open PATH, --quick-view PATH, --hide, or --ping"
+        return None, "expected --view PATH, --open PATH, --quick-view PATH, --wallpaper PATH, --hide, --hide-wallpaper, or --ping"
     path, path_error = validate_image_path(raw_path)
     if path_error is not None or path is None:
         return None, path_error
+
+    if args.wallpaper:
+        request = {
+            "version": 1,
+            "op": "wallpaper",
+            "path": str(path),
+            "mode": args.target,
+            "fit": "cover",
+            "opacity": args.opacity,
+        }
+        slot = shell_slot()
+        if slot is not None:
+            request["slot"] = slot
+        bounds = tmux_bounds()
+        if args.target == "pane" and bounds is not None:
+            request["bounds"] = bounds
+        return request, None
 
     panel = quick_view_panel(args.panel) if args.quick_view else "active"
     request: dict[str, object] = {
@@ -311,13 +331,35 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         metavar="PATH",
         help="show an image from MC Quick View selection updates",
     )
+    action.add_argument(
+        "--wallpaper",
+        metavar="PATH",
+        help="set a shell-rendered image backdrop",
+    )
     action.add_argument("--hide", action="store_true", help="hide the active preview")
+    action.add_argument(
+        "--hide-wallpaper",
+        action="store_true",
+        help="hide the shell-rendered image backdrop",
+    )
     action.add_argument("--ping", action="store_true", help="check shell preview IPC")
     parser.add_argument("--socket", help="override the shell preview socket path")
     parser.add_argument(
         "--panel",
         choices=sorted(PREVIEW_PANELS),
         help="Quick View panel to cover when tmux bounds are available",
+    )
+    parser.add_argument(
+        "--target",
+        choices=sorted(WALLPAPER_TARGETS),
+        default="output",
+        help="wallpaper target area",
+    )
+    parser.add_argument(
+        "--opacity",
+        type=int,
+        default=100,
+        help="wallpaper opacity percent, from 0 to 100",
     )
     parser.add_argument("--owner", help=argparse.SUPPRESS)
     parser.add_argument("--wait-pid", type=int, help=argparse.SUPPRESS)
@@ -326,7 +368,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="validate input and print the IPC JSON without contacting the shell",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.opacity < 0 or args.opacity > 100:
+        parser.error("--opacity must be between 0 and 100")
+    if args.target != "output" and not args.wallpaper:
+        parser.error("--target can only be used with --wallpaper")
+    if args.opacity != 100 and not args.wallpaper:
+        parser.error("--opacity can only be used with --wallpaper")
+    return args
 
 
 def wait_then_hide(pid: int, owner: str, sock_path: str) -> int:

@@ -1023,6 +1023,34 @@ FAKE
       die "image preview dry-run did not include tmux bounds field $field"
   done
 
+  "$preview_bin" --wallpaper "$png" --opacity 65 --dry-run >"$out"
+  grep -F '"op":"wallpaper"' "$out" >/dev/null ||
+    die "image preview wallpaper dry-run did not emit wallpaper op"
+  grep -F '"mode":"output"' "$out" >/dev/null ||
+    die "image preview wallpaper dry-run did not default to output mode"
+  grep -F '"fit":"cover"' "$out" >/dev/null ||
+    die "image preview wallpaper dry-run did not request cover fit"
+  grep -F '"opacity":65' "$out" >/dev/null ||
+    die "image preview wallpaper dry-run did not include opacity"
+
+  PATH="$fake_bin:$PATH" \
+    TMUX_PANE="%1" \
+    "$preview_bin" --wallpaper "$png" --target pane --opacity 42 --dry-run >"$out"
+  grep -F '"mode":"pane"' "$out" >/dev/null ||
+    die "image preview wallpaper pane dry-run did not request pane mode"
+  grep -F '"opacity":42' "$out" >/dev/null ||
+    die "image preview wallpaper pane dry-run did not include opacity"
+  for field in '"x":10' '"y":5' '"width":80' '"height":24' '"window_width":160' '"window_height":48'; do
+    grep -F "$field" "$out" >/dev/null ||
+      die "image preview wallpaper pane dry-run did not include bounds field $field"
+  done
+
+  if "$preview_bin" --wallpaper "$png" --opacity 101 --dry-run >"$out" 2>"$err"; then
+    die "image preview accepted invalid wallpaper opacity"
+  fi
+  grep -F -- '--opacity must be between 0 and 100' "$err" >/dev/null ||
+    die "image preview invalid wallpaper opacity error was not visible"
+
   PATH="$fake_bin:$PATH" \
     TMUX_PANE="%1" \
     "$preview_bin" --quick-view "$png" --panel right --dry-run >"$out"
@@ -1124,6 +1152,8 @@ PY
     ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --ping >"$out" 2>"$err"
     ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --view "$png" >"$out" 2>"$err"
     ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --view "$jpg" >"$out" 2>"$err"
+    ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --wallpaper "$png" --opacity 55 >"$out" 2>"$err"
+    ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --hide-wallpaper >"$out" 2>"$err"
     ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --hide >"$out" 2>"$err"
     python - "$shell_state/preview.sock" <<'PY'
 import socket
@@ -1144,6 +1174,10 @@ PY
       die "compiled shell did not decode and show PNG preview"
     grep -F "image preview shown path=$jpg" "$shell_log" | grep -F "image=4x3" >/dev/null ||
       die "compiled shell did not decode and show JPEG preview"
+    grep -F "wallpaper shown path=$png" "$shell_log" | grep -F "opacity=55" >/dev/null ||
+      die "compiled shell did not decode and show wallpaper"
+    grep -F "wallpaper hidden reason=ipc-hide-wallpaper" "$shell_log" >/dev/null ||
+      die "compiled shell did not hide wallpaper"
     grep -F "image preview hidden reason=ipc-hide" "$shell_log" >/dev/null ||
       die "compiled shell did not hide image preview"
     grep -F 'launchpad slot unavailable role=terminal-secondary action=launch-requested trigger=ipc-launch' "$shell_log" >/dev/null ||
