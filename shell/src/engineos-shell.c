@@ -3304,9 +3304,16 @@ static bool handle_keybinding(struct engineos_shell_server *server,
 		}
 		return false;
 	case XKB_KEY_F3:
-		if (modifiers == 0 && server->preview.scene_buffer != NULL) {
-			wlr_log(WLR_INFO, "keybinding f3: close image preview");
-			hide_image_preview(server, "f3-close");
+		if (modifiers == 0 &&
+				(server->preview.scene_buffer != NULL ||
+				 server->wallpaper.scene_buffer != NULL)) {
+			wlr_log(WLR_INFO, "keybinding f3: close image surfaces");
+			if (server->preview.scene_buffer != NULL) {
+				hide_image_preview(server, "f3-close");
+			}
+			if (server->wallpaper.scene_buffer != NULL) {
+				hide_wallpaper(server, "f3-close");
+			}
 			return true;
 		}
 		break;
