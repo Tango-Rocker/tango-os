@@ -1,6 +1,6 @@
 # Agent Workflow
 
-The `engineos` CLI is the execution surface for humans and agents. Skills carry
+The `eos-*` CLI is the execution surface for humans and agents. Skills carry
 repeatable workflow judgment. Project-status/docs MCP has been removed; do not
 mirror build, test, proof, package, admin, or runtime commands through MCP.
 Future EngineOS MCP work is reserved for read-only live runtime state.

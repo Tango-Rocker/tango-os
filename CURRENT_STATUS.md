@@ -1,458 +1,93 @@
 # Current Status
 
-Current focus: make the EngineRuntime startup shell prove hardware GL acceleration on the AMD target, with shell-owned Wayland clients still launched through the EngineOS app stack.
+Current focus: prove the EngineRuntime startup shell on the AMD target with
+hardware GL acceleration, shell-owned Wayland clients, useful recovery logs,
+and Quake launch through the EngineOS app stack.
 
-Current deployment context: this session is the bare-metal EngineDev installation.
-Do not build ISO profiles or ISO artifacts again until the user explicitly
-re-enables that path.
+Current deployment context: this session is the bare-metal EngineDev
+installation. Do not build ISO profiles or ISO artifacts again until the user
+explicitly re-enables that path.
 
-PoC 0 build-lab acceptance is complete for EngineDev. The Arch builder can repeatably rebuild the local package repo and EngineDev ISO, the rebuilt ISO checksum passes, the ISO boots headlessly in QEMU, SSH comes up through the forwarded port, and `eos-proof booted-iso --vm` passes inside the clean live guest. The first-deploy dev environment follow-on is also proven: the guest has tmux, Docker, Docker Compose, Codex CLI, and the post-install payload applied.
+Historical proof notes that no longer need to stay in the active status file
+are archived in
+[docs/session-archive/2026-07-04-engineos-proof-history/README.md](docs/session-archive/2026-07-04-engineos-proof-history/README.md).
 
 ## Current Artifacts
 
 - Arch builder VM: `dev@172.23.74.185`
 - Builder repo path: `/srv/engineos`
-- Local package repo: `/srv/engineos/repo/x86_64`
-- EngineDev ISO: `out/EngineDevOS-2026.06.16-x86_64.iso` on the builder, copied locally to `E:\dev\Tang-OS\out\EngineDevOS-2026.06.16-x86_64.iso`
-- EngineDev checksum: `out/EngineDevOS-2026.06.16-x86_64.iso.sha256`
+- Builder local package repo: `/srv/engineos/repo/x86_64`
+- EngineDev ISO: `out/EngineDevOS-2026.06.16-x86_64.iso`
 - EngineRuntime ISO: `out/EngineRuntimeOS-2026.06.15-x86_64.iso`
-- EngineRuntime checksum: `out/EngineRuntimeOS-2026.06.15-x86_64.iso.sha256`
+- EngineRuntime checksum: `e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2`
 
-The latest EngineDev ISO checksum passed on the builder with:
+## Working Now
 
-```bash
-cd out
-sha256sum -c EngineDevOS-2026.06.16-x86_64.iso.sha256
-```
-
-Current EngineDev checksum after the cached-package autoinstall rebuild:
-
-```text
-EngineDevOS-2026.06.16-x86_64.iso: OK
-
-Current EngineDev checksum after the live Codex/install-guide rebuild:
-
-```text
-e37bc00857743df534444b22bcdb113769a88f82e957d2ae5d2463830becd85c  EngineDevOS-2026.06.16-x86_64.iso
-```
-```
-
-Current EngineRuntime checksum after the launchpad MVP proof rebuild:
-
-```text
-e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeOS-2026.06.15-x86_64.iso
-```
-
-## Working
-
-- `eos-*` is now the command surface for builder setup, package builds, ISO builds, VM boot helpers, USB dry-runs, diagnostics, proofs, logs, assets, shell launches, engine launches, agent operations, observability, and tests. `/usr/bin/engineos` remains only as a legacy discovery shim that prints the migration map and exits nonzero for old subcommands.
-- `eos-secureboot` now has a repo-owned custom-key path for Secure Boot experiments: create an EngineOS db signing key, sign a generated ISO's UEFI fallback bootloader plus `vmlinuz-linux`, print firmware enrollment guidance, and run local dry-run tests. The builder package set now includes `sbsigntools`, `libisoburn`, `mtools`, and `efitools` for this workflow.
-- The local Windows/WSL host repacked and signed `out/EngineDevOS-2026.06.15-x86_64-secureboot.iso` with the EngineOS Secure Boot key under `artifacts/secure-boot/keys`. `sbverify --list` shows `/EFI/BOOT/BOOTx64.EFI` and `/arch/boot/x86_64/vmlinuz-linux` signed by `CN=EngineOS Secure Boot`, and `sha256sum -c EngineDevOS-2026.06.15-x86_64-secureboot.iso.sha256` passes.
-- The current USB is Windows Disk 4, `USB DISK 2.0`, 31 GB, with Ventoy-style partitions `I:` and `H:`. `EngineOS-SecureBoot-db.cer` was staged to both partitions, and `EngineDevOS-2026.06.15-x86_64-secureboot.iso` reached full size on `I:`. The USB's `H:`/`VTOYEFI` partition did not show `EFI\BOOT\BOOTX64.EFI`, explaining the firmware bounce when selecting the UEFI partition. The current Codex/PowerShell session is not elevated, so it cannot raw-write the signed ISO to the physical USB disk.
-- For the bare-metal USB console hang, `out/EngineDevOS-2026.06.15-x86_64-secureboot-baremetal.iso` was repacked from the signed enrollable image with the EngineDev boot entry reduced to `console=tty0`; `console=ttyS0,115200n8` and `systemd.mask=serial-getty@ttyS0.service` were removed from both the ISO-root and EFI-image loader entries. `sbverify` still reports EngineOS Secure Boot signatures on `BOOTx64.EFI` and `vmlinuz-linux`, and the new checksum passes.
-- The checked-in EngineDev boot entry now uses `console=tty0` without serial-console redirection, so the next rebuilt EngineDev ISO should not need the one-off bare-metal repack to keep boot output on the monitor.
-- EngineDev live ISO source now includes a Codex-on-demand path: `/usr/local/bin/codex` delegates to `/home/dev/.local/bin/codex` when present and otherwise runs `/usr/local/bin/engineos-live-codex-setup`, which installs the official Codex CLI for the live `dev` user and logs to `/var/log/engineos/live-codex-setup.log`. The live profile enables `engineos-live-codex-setup.service` as a best-effort boot-time install attempt, with the wrapper still available for manual retry.
-- `eos-install guide` is now packaged by `engineos-install-tools` and prints the live ISO install flow, including Codex validation, private GitHub token setup for `--repo-token-file`, the destructive install command, clone-failure recovery for `prompts are disabled`, and fstab recovery commands.
-- The rebuilt EngineDev ISO `EngineDevOS-2026.06.16-x86_64.iso` contains `engineos-cli 0.1.0-19`, the embedded live Codex CLI `codex-cli 0.140.0` with executable permissions, the `eos-install guide` command, the fstab `sudo genfstab ... | sudo tee ...` fix, the live Codex setup service enabled, and the checked-in `console=tty0` boot entry. Builder checksum verification and local Windows SHA-256 verification both passed.
-- The Arch builder VM has the repo at `/srv/engineos`, validates cleanly, builds EngineOS packages, validates the local repo, and builds EngineDev/EngineRuntime ISOs.
-- `eos-proof build-lab` completed on the Arch builder after rebuilding existing package artifacts with `makepkg -f`.
-- A clean EngineDev ISO rebuild was forced by archiving the previous same-day artifact and removing `work/enginedev`; the fresh ISO was written at `2026-06-13 22:13 UTC`.
-- The builder has a persistent 4 GiB `/swapfile`; `eos-build iso` uses disk-backed `TMPDIR=/srv/engineos/tmp`, can clean/archive ISO artifacts, remounts `/tmp` to 8 GiB when needed, and caps the archiso SquashFS step to 4 processors for stable builds on the tuned Hyper-V builder.
-- EngineDev and EngineRuntime profiles write `/etc/engineos/version` and regenerate `/etc/issue` with the profile/build date.
-- Installed-image `eos-preflight scripts` checks `/usr/bin/eos`, representative `/usr/bin/eos-*` tools, the legacy `/usr/bin/engineos` shim, `/usr/lib/engineos/scripts`, and Go daemon install paths instead of looking for source-tree paths.
-- Installed script helpers treat `/usr/lib/engineos/scripts` as installed mode, use `/var/log/engineos` for logs and `/var/lib/engineos/captures` for default captures, avoiding `/usr/artifacts` permission failures.
-- Installed Quake launch treats `/usr` and installed package prefixes as installed mode, uses `/var/log/engineos`, and uses `/usr/lib/engineos/scripts`.
-- `eos-vm boot` uses a QEMU `-bios` compatible OVMF image (`OVMF.4m.fd`) instead of the pflash-only `OVMF_CODE.4m.fd`.
-- EngineDev live ISO now configures explicit SSH password access for validation: `dev` / `dev`.
-- EngineDev and EngineRuntime live ISOs set locale, keymap, UTC timezone, hostname, serial console output, and mask `systemd-firstboot.service` to avoid interactive first-boot prompts during VM validation.
-- `eos-vm boot` can boot headlessly with `--display none --background`, writing pid, QEMU, and serial logs under the EngineOS state/log directories.
-- The latest EngineDev ISO was rebuilt with `cow_spacesize=50%` and copied from the builder to the Windows host at `E:\dev\Tang-OS\out\EngineDevOS-2026.06.14-cowspace-x86_64.iso`, checksum `2cb8450fe6a4f520b1255ea6493d25250e7b5c0c27f9113de69e987ef57345fa`.
-- `tools/scripts/create_iso_test_vm_hyperv.ps1` creates a separate Hyper-V ISO test VM, dry-run by default, for direct EngineDev/EngineRuntime validation outside the builder-hosted QEMU path.
-- EngineDev and EngineRuntime UEFI boot entries set `cow_spacesize=50%`; on the 4 GiB Hyper-V test VM this raises the live writable overlay from archiso's 256 MiB default to 2.0 GiB. EngineRuntime still masks `serial-getty@ttyS0.service` for the serial VM path, while EngineDev now keeps bare-metal boot output on `tty0`; `eos-preflight iso` enforces the EngineDev boot-entry settings.
-- Hyper-V test VM `EngineOS-EngineDev-Test` was recreated from the cowspace-rebuilt June 14 EngineDev ISO and booted on the Default Switch at `172.22.49.144`; `eos-proof booted-iso --vm` passed there.
-- `eos-deploy first` stages a repo-owned post-install payload into a booted EngineDev guest and runs first-time dev setup for tmux, zsh/oh-my-zsh, Docker, and Codex CLI.
-- EngineDev first-deploy and installed-target package sets include the late dev convenience layer: Neovim/Vim, fzf, zoxide, wl-clipboard, bash completion, GitHub CLI, Git LFS, lazygit, btop, bat, eza, tldr, man-db, and man-pages.
-- EngineDev autoinstall now prefers the packaged post-install payload at `/usr/share/engineos/post-install-payload` when it exists in the installed target, falling back to `/srv/engineos/tools/post-install-payload`. This keeps first-boot setup aligned with the rebuilt ISO's `engineos-cli` package even when the cloned workspace is not yet updated.
-- `eos-build iso enginedev --fast` generates a temporary zstd-compressed profile for faster dev ISO iteration while keeping checked-in profiles on xz.
-- The fast EngineDev build completed in 134 seconds on the tuned builder. The resulting ISO is 1.8 GiB, checksum-valid, boots in QEMU, and passes `eos-proof booted-iso --vm` after first-deploy.
-- First-deploy validation passed in the fresh guest: `tmux 3.6b` with mouse enabled and packaged plugin scripts configured, packaged oh-my-zsh with zsh plugin packages, `codex-cli 0.139.0`, Docker `29.5.2` with `overlayfs`, Docker Compose `5.1.4`, `dev` in the `docker` group, and `docker.service` active.
-- First-deploy also passed on the separate Hyper-V EngineDev test VM: `tmux 3.6b`, `@engineos-plugins`, oh-my-zsh, `codex-cli 0.139.0`, Docker `29.5.2` with `overlayfs`/systemd cgroups, Docker Compose `5.1.4`, readable `/dev/input/event*` and `/dev/input/mouse0`, active PipeWire/Pulse services, and Quake smoke logs from `/usr/bin/quakespasm`.
-- EngineDev self-host rehearsal passed in the Hyper-V test VM using the separate 32 GiB VHD: `/dev/sda` was partitioned/formatted as `ENGINEOS_DEV_SRV`, mounted at `/srv`, seeded with `/srv/engineos`, and survived reboot with the repo checkout plus local package repo artifacts intact. The live ISO root reverted package installs after reboot, as expected, while reinstalling `engineos-cli` from `/srv/engineos/repo/x86_64` restored the rebuilt package.
-- `eos-install dev --dry-run` now prints the safe EngineDev autoinstall plan. On the current Windows lab it defaults to the disk that is currently `F:` via `/dev/disk/by-id/ata-WDC_WD10EZEX-00WN4A0_WD-WCC6Y1ZP5EAX`, creates a GPT layout with EFI, root, `/var`, and persistent `/srv`, mounts the existing NTFS `E:` volume labeled `Tango` at `/home`, uses the optional ISO package cache, clones the official Tang-OS repo, builds the local repo, runs the post-install payload, and records first-boot handoff proof.
-- `eos-install dev --yes-i-understand-this-wipes-device` now has a guarded executor for the VM/bare-metal path. It wipes and partitions the target, installs Arch/EngineDev packages, configures systemd-boot, creates the `dev` user, enables NetworkManager/sshd/Docker, mounts optional NTFS `/home`, clones Tang-OS into `/srv/engineos`, builds the local package repo, runs the post-install payload, and writes `/srv/ENGINEOS_INSTALL_HANDOFF.txt`.
-- `eos-install dev` now rewrites the target fstab through `sudo genfstab ... | sudo tee ...` instead of appending through a partially privileged pipeline, addressing the bare-metal failure mode where fstab update failed due to permissions.
-- EngineDev ISO builds now default to staging an installer package cache into generated EngineDev profiles at `/opt/engineos/install-cache/pkg`; `eos-install dev` validates that requested install package artifacts are present, uses the cache through a generated pacman config and `pacstrap -c -C ...`, falls back to normal pacman cache/mirrors when the cache is absent, and rejects incomplete caches with an explicit rebuild/`--no-package-cache` handoff.
-- EngineDev autoinstall now defaults the source checkout to `https://github.com/Tango-Rocker/tango-os.git`, runs Git clones non-interactively, and supports private repo access through `--repo-token-file` / `ENGINEOS_REPO_TOKEN_FILE`. The token is copied only into the target runtime under root-only transient storage, used through a temporary `GIT_ASKPASS` helper, redacted from installer output, and removed immediately after clone.
-- A full EngineDev autoinstall VM proof passed on June 15, 2026 using the rebuilt ISO `out/EngineDevOS-2026.06.15-x86_64.iso`, a disposable qcow2 target disk exposed as `/dev/vda`, and the private `Tango-Rocker/tango-os` repo on branch `main`. The live ISO package cache contained 1008 package artifacts under `/opt/engineos/install-cache/pkg`, `pacstrap` installed the cached 501-package transaction, `/srv/engineos` cloned to commit `23b8ebb`, and the installed target built 13 local package artifacts.
-- The full VM autoinstall used the read-only GitHub token from `/run/engineos-secrets/tango-os-readonly.token` without printing it or embedding it permanently. Installed-disk checks confirmed `/root/.engineos/repo-token` and `/usr/local/bin/engineos-git-askpass` were absent after the clone.
-- The installed EngineDev target booted from the qcow2 and passed the full non-skip post-install validation: `/usr/bin/engineos` exists, `engineos --help` works, `eos-doctor --vm` passes, builder mock validation and repo validation both report 0 failures and 0 warnings, `tmux 3.6b` and packaged zsh/oh-my-zsh config load, Docker `29.5.2` is active with `overlayfs`, Docker Compose `5.1.4` works, `codex-cli 0.139.0` is installed, `sshd` and NetworkManager are active, and `engineos-dev-shell.service` is enabled.
-- The source fix for private repo cloning is proven, but the tested ISO predates that fix and was hot-patched in the live guest from current source to use `/usr/local/bin/engineos-git-askpass`. Rebuild the EngineDev ISO before treating the no-hotpatch path as baked into install media.
-- The first real Hyper-V install attempt reached `pacstrap` against the VM's `/dev/sda` and downloaded the full 501-package transaction, proving the wipe, partition, format, mount, and mirrorlist repair steps. It then failed at keyring commit with `Public keyring not found` / `keyring is not writable`; the installer has been updated to stop using `pacstrap -K` and instead let pacstrap seed the target from the live ISO host keyring, matching pacstrap's default behavior.
-- For the current Hyper-V EngineDev session, classic base Quake assets were manually staged from `E:\SteamLibrary\steamapps\common\Quake\id1\PAK0.PAK` and `PAK1.PAK` directly into `/home/dev/.local/share/engineos/quake/id1`; no bind mount is needed with the larger cowspace ISO.
-- A timed real Quake launch passed over SSH on the Hyper-V EngineDev VM: `eos-runtime quake` found the registered assets, initialized an 800x600 OpenGL mode through Mesa llvmpipe, initialized PulseAudio (`pulseaudio - Dummy Output` after starting user PipeWire/Pulse services), loaded `demo1.dem`, executed `autoexec.cfg`, and was stopped by a 12-second timeout with no lingering Quake process and active VT restored to `tty1`.
-- Hyper-V audio diagnosis: PipeWire/Pulse is running, but the VM has no ALSA sound card (`aplay -l` reports no soundcards and `/dev/snd` only has `seq`/`timer`), so PipeWire exposes only `auto_null`/Dummy Output. Elevated host inspection found no Hyper-V sound device exposed for `EngineOS-EngineDev-Test`; Enhanced Session Mode is enabled on the host, but this Arch live ISO is running through the basic Hyper-V console/SSH path, not an RDP audio-redirection guest session. This is a Hyper-V virtual hardware/console limitation for the current VM path, not a Quake wrapper issue.
-- Quake hotkey diagnosis/fix: the generated `config.cfg` had old defaults (`a`/`d` as look up/down style binds and `MOUSE2` as forward). `engineos-quake-template` `pkgrel=2` now makes the Quake wrapper create a missing `id1/autoexec.cfg` with EngineOS defaults: WASD movement, `MOUSE1` attack, `MOUSE2` jump, `MOUSE3`/`e` mouselook, and `cl_alwaysrun 1`.
-- Quake black-screen diagnosis/fix: the VM was still reachable over SSH and Hyper-V reported it running, so the failure was the visible console left in graphics/blank state after SDL/KMS termination rather than a kernel hang. The Quake wrapper now keeps Quake as a child process, traps `INT`/`TERM`/`HUP`, terminates the child, and resets the text console with `setterm`, `kbd_mode -a`, and `setfont` before exit.
-- The current Hyper-V test VM was restarted after the black-screen report. `eos-proof booted-iso --vm` passed after restart at `172.22.49.144`; the manually staged Quake assets and hot-patched wrapper were reapplied, and `serial-getty@ttyS0.service` was masked for the live session. The booted ISO's `/proc/cmdline` still lacks the serial-getty mask until the next ISO rebuild from the updated profile.
-- Current Hyper-V EngineDev login-shell validation passed at `dev@172.22.49.144`: `dev` has `/usr/bin/zsh` as its passwd login shell, interactive zsh loads oh-my-zsh from `/usr/share/oh-my-zsh`, `tmux 3.6b` starts, and a detached `engineos-proof` tmux session can launch a zsh pane (`tmux_zsh_ok:5.9.1`, `pane_command=zsh`). The live VM's legacy `/home/dev/.tmux.conf` was backed up to `/home/dev/.tmux.conf.engineos-legacy.bak` and replaced with the current EngineOS config; `tmux show -g @engineos-plugins` now reports `tmux-sensible tmux-yank tmux-resurrect tmux-continuum tmux-pain-control`.
-- After rebooting the current Hyper-V EngineDev VM, inspection showed it is still the older June 14 ISO image: `engineos-shell` is not installed, no dev/runtime shell service exists, `WAYLAND_DISPLAY` is unset, and EGL reports Mesa llvmpipe. That explains why logging in lands on a plain zsh/tmux-capable TTY instead of the OpenGL shell. The running live guest was hot-patched again so `/home/dev/.tmux.conf` contains `@engineos-plugins` and `/home/dev/.zprofile` execs `tmux new-session -A -s engineos` for the next interactive login, but the shell/autostart fix requires a rebuilt EngineDev ISO.
-- EngineDev is now patched for the rebuilt-image path: `archiso/enginedev/packages.x86_64` includes `engineos-shell`, `engineos-dev-shell.service` autostarts on `tty1` as `dev`, requires the shell-owned Wayland terminal path, and bootstraps the terminal only with `ENGINEOS_TERMINAL_SESSION_CMD=tmux new -A -s engineos`. EngineDev and EngineRuntime zsh login profiles now auto-attach tmux for interactive login shells, guarded by `ENGINEOS_AUTO_TMUX=0` for opt-out. First-deploy now backs up and replaces legacy EngineOS `.tmux.conf` and `.zprofile` files.
-- The first-deploy payload now carries the same dev shell retrofit: it requests `engineos-shell` during package install, installs `/usr/local/bin/engineos-dev-shell-start`, installs `/etc/systemd/system/engineos-dev-shell.service`, enables the service when `engineos-shell` is available, and otherwise logs the exact blocker plus the enable command to rerun after installing/rebuilding. Payload preflight now requires the shell-start helper, service unit, managed zprofile, and tmux-owned Wayland launch markers.
-- The shell-owned app launch contract is now explicit: `eos-app launch terminal|cube|quake` requires `WAYLAND_DISPLAY` by default, sets common Wayland client hints (`XDG_SESSION_TYPE`, `SDL_VIDEODRIVER`, GTK/Qt hints), unsets `DISPLAY` when the shell Wayland socket is active, logs `owner=engineos-shell` to `app.log`, writes cube output to `cube.log`, and dispatches Quake through the existing engine runner. The shell default launchpad commands now use `eos-app launch terminal`, `eos-app launch cube`, and `eos-app launch quake`; `eos-app status --json` reports log-derived shell/slot/app state for proofs.
-- The source path now supports tmux-pane-bounded Quake launches through the shell-owned Wayland path: `eos-app launch quake` captures the current tmux pane geometry, writes an engine launch-bounds request, forces QuakeSpasm windowed for pane launches, and lets `--fullscreen` request output/fullscreen behavior instead. `engineos-shell` applies engine pane/output/fullscreen geometry and records the layout in shell state; local `eos-test`, `eos-preflight all`, and app manifest validation pass.
-- Bare-metal EngineDev now has the shell/Quake pane-bounds path deployed without
-  an ISO rebuild: `engineos-shell` was rebuilt/reinstalled in place, the dev
-  shell service restarted cleanly, and `eos-app launch quake` mapped
-  QuakeSpasm under the shell with `active_slot=engine`, `layout=tmux-pane`,
-  AMD Mesa GL renderer evidence, PulseAudio output, and no new
-  `engineos-shell` coredump after the launch.
-- Bare-metal EngineDev now has the game cursor capture follow-up deployed
-  without an ISO rebuild: `engineos-shell` advertises Wayland relative-pointer
-  and pointer-constraints globals, hides the cursor while the mapped engine slot
-  owns game capture, ignores client cursor images during capture, and emits
-  nonzero `relative pointer motion` deltas even while the focused engine surface
-  coordinate is clamped at the window edge. The final live state showed
-  `active_slot=engine`, `input.capture=true`, `cursor.locked=true`,
-  `cursor.hidden=true`, Quake pid `78881`, and no `engineos-shell` coredump.
-- Bare-metal EngineDev now has a faster cube-based pane-bounds proof deployed
-  without an ISO rebuild. `eos-app launch cube` disables SDL/libdecor to avoid
-  the GTK/glycin decoration abort, writes `launch-bounds/cube.env` from the
-  current tmux pane, and `engineos-shell` applies per-role pane geometry to cube
-  as well as engine surfaces. A temporary split-pane smoke launch requested
-  tmux bounds `0 34 240 32 240 66`; the shell laid cube out as
-  `layout=tmux-pane x=0 y=556 size=1920x524`, and `cube.log` reported AMD Mesa
-  GLES with `first_frame window_size=1920x524 drawable_size=1920x524`,
-  `frames=228`, `result=smoke-ok`, and no new coredump after
-  `2026-07-01T22:50:02Z`.
-- Source now implements the v1 pane-embedded GL panel policy: tmux-pane cube
-  and engine surfaces remain scene-visible when inactive, pane-bound maps no
-  longer steal the active slot unless they were launched through a pending slot,
-  output/fullscreen launches keep exclusive slot behavior, `shell-state.json`
-  and `eos-app status --json` expose pane visibility/layout/bounds, and
-  `eos-app pane sync` plus tmux hooks can refresh launch bounds and signal the
-  shell to relayout without restarting clients. Local source-root validation,
-  tmux config loading, and an `engineos-shell` compile pass on the bare-metal
-  EngineDev host.
-- Bare-metal EngineDev now has the v1 pane-embedded GL panel policy deployed
-  without an ISO rebuild: `engineos-shell 0.1.0-5` and `engineos-tools
-  0.1.0-3` were installed with `pacman -U`, `engineos-dev-shell.service`
-  restarted cleanly on PID `130195`, and the live tmux config/skel config carry
-  the pane-sync hooks. A live `eos-app launch cube --smoke-ms 30000` from the
-  tmux session kept `active_slot=terminal-secondary` while `shell-state.json`
-  and `eos-app status --json` reported cube `mapped=true`, `visible=true`,
-  `layout=tmux-pane`, `fullscreen=false`, `app_id=engineos-cube`, and
-  `title=engineos-cube`. Shell logs show inactive cube visibility as
-  `reason=pane-layout-mapped-inactive visible=true`, and a sync pass logged
-  `layout sync requested signal=1` followed by inactive cube
-  `visible=true reason=layout-sync-signal`.
-- Source now has the Stage 1 MC image preview contract: `engine-image-preview`
-  validates PNG/JPEG paths, captures tmux pane bounds when available, and sends
-  visible-failure JSON requests to the shell preview socket. `engineos-shell`
-  listens on `$ENGINEOS_STATE_DIR/preview.sock` or
-  `$XDG_RUNTIME_DIR/engineos/preview.sock`, handles `ping/show/hide`, decodes
-  images with libpng/libjpeg-turbo, clamps decoded dimensions, wraps pixels in
-  a wlroots scene buffer, and renders the preview contained inside the active
-  pane/output bounds. Local source validation passed for helper syntax, helper
-  contract tests, shell build dry-run, real Meson compile, and a headless shell
-  IPC proof that successfully showed PNG and JPEG previews and hid them again.
-  The current live `dev` user also has `~/.config/mc/mc.ext.ini` PNG/JPEG
-  `Open`/`View` rules pointing at `engine-image-preview`; rebuilt
-  `/usr/bin/engineos-shell` and `/usr/bin/engine-image-preview` binaries are
-  installed on bare-metal EngineDev.
-- The MC image preview live bugfix is deployed on bare-metal EngineDev:
-  `engine-image-preview` now tags requests with the owning terminal slot and an
-  owner token, shell preview anchoring honors `terminal` vs
-  `terminal-secondary`, stale owner-scoped `hide` requests are ignored after a
-  newer image replaces the preview, MC/process-exit watcher hides clean up the
-  matching preview, MC `View`/`Open` helper calls return immediately instead of
-  blocking terminal input, unmodified `F3` closes the visible shell-owned
-  preview surface, and shell shutdown no longer unlinks the shared
-  `preview.sock` path during restart races. Live proof showed
-  `terminal-secondary` preview placement at `x=1920` on the second output,
-  stale-owner hide rejection, watcher-triggered hide, and working
-  `engine-image-preview --ping`.
-- Source and the live EngineDev helper now include MC Quick View preview-panel
-  mode: `engine-image-preview --quick-view PATH --panel right|left|active`
-  sends `mc-preview-panel` requests, narrows tmux bounds to the selected panel
-  half by default, uses a stable MC/tmux owner token so Up/Down selection
-  changes replace the same preview, and starts only one MC-exit watcher per
-  Quick View owner. The live `dev` MC PNG/JPEG `View=` rules now call
-  `engine-image-preview --quick-view %f --panel right`; `engineos-tools
-  0.1.0-6` has been rebuilt and installed so `/usr/bin/engine-image-preview` is
-  package-owned by pacman. The live `dev` MC config keeps
-  `use_internal_view=true` and uses `%view{ascii}` for PNG/JPEG `View=` so F3
-  runs MC extension preprocessing instead of falling back to a raw external
-  pager that displays image bytes as binary.
-- Bare-metal EngineDev now has a local MC Quick View selection-update patch
-  deployed as `mc 4.8.33-2`. The tracked patch is
-  `packages/mc/patches/engineos-quick-view-preview.patch`; it keeps MC's normal
-  internal quick-view loading intact, but calls
-  `engine-image-preview --quick-view FILE --panel right` for PNG/JPEG
-  selections and `engine-image-preview --hide` for other selections. A tmux
-  disposable MC smoke test with a fake `engine-image-preview` proved Quick View
-  emits `--hide` on `..`, then `--quick-view alpha.png --panel right` and
-  `--quick-view beta.png --panel right` after Down/Down selection changes, with
-  no fresh `mc` coredumps after the narrowed patch.
-- The EngineDev shell relaunch path now refreshes the Wayland session before
-  starting a new shell: the dev-shell wrapper terminates stale same-user
-  `engineos-shell` processes, removes stale `wayland-*` runtime sockets, and
-  the compositor waits for initial outputs after backend start before spawning
-  terminal/Qt/Wayland clients. This targets the relaunch failure where Qt logged
-  `qt.qpa.wayland: there are no outputs`.
-- The launchpad app registry is now packaged at `/etc/engineos/apps.toml` from `packages/engineos-config/files/etc/engineos/apps.toml`. `eos-app manifest validate` checks the terminal, cube, and Quake slot contract, `eos-runtime shell` reads the manifest for default slot commands, and `eos-proof launchpad` validates the manifest before checking runtime logs.
-- The first rebuilt EngineRuntime ISO booted in builder-hosted QEMU far enough to mount the 50% cowspace and reach login, but exposed two runtime-proof blockers: `engineos-live-setup.service` was ordered after `multi-user.target`, creating a cycle that skipped `engineos-engine-runner.service`, and Runtime did not yet enable explicit SSH password access for automated VM proof. The profile now runs live setup before the runtime services and configures `engineos` / `engineos` SSH validation access.
-- A clean generated EngineRuntime ISO now passes `eos-proof booted-iso --runtime` in builder-hosted QEMU through SSH port 2223 with 0 boot-validation failures and 0 warnings. The final proven ISO is `EngineRuntimeOS-2026.06.15-x86_64.iso`, checksum `e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2`.
-- The final Runtime proof image contains `engineos-cli 0.1.0-12`, `engineos-cube 0.1.0-2`, `engineos-shell 0.1.0-4`, `engineos-engine-runner 0.1.0-5`, `engineos-config 0.1.0-3`, and `engineos-quakespasm 0.97.0-1`.
-- Runtime autostart reaches `engineos-shell` on DRM/libinput under QEMU: `Virtual-1` modesets at 1280x800, the shell starts with `backend=drm,libinput`, and libinput reports the AT keyboard plus `ImExPS/2 Generic Explorer Mouse`. QEMU falls back to the wlroots pixman renderer because bochs-drm has no render node and GLES refuses software rendering; this is acceptable for the VM proof but not a bare-metal renderer proof.
-- Runtime logging and recovery are now package-backed: the runner unit prepares `/var/log/engineos` and `/var/lib/engineos` as `root:wheel 0775` without `LogsDirectory=engineos`, `engineos` command/profile handling preserves explicit environment overrides, and `crash-bundle --runtime` captures isolated log directories correctly.
-- The Runtime graphical shell entry point is now explicit: `engineos-shell` accepts `--bootstrap none|terminal|engine|launchpad` (`all` is an alias), `eos-runtime shell --tty` passes `--bootstrap launchpad` by default, and packaged `runtime.conf` sets `ENGINEOS_SHELL_BOOTSTRAP=launchpad` so Runtime starts terminal, cube, and engine launch commands after the shell Wayland socket is ready with cube as the active slot.
-- `eos-proof launchpad` is now the focused MVP acceptance gate for the shell launchpad: it checks launchpad bootstrap, cube active slot, shell-owned terminal/cube/Quake app launch markers, cube renderer/frame evidence, and a mapped engine slot. Missing Quake assets are still useful runtime guidance, but they no longer satisfy launchpad proof.
-- The previous `eos-proof launchpad --runtime` pass on the final EngineRuntime ISO is now treated as incomplete because Quake assets were absent and the engine slot did not map. Re-run it with user-provided assets before claiming Runtime launchpad acceptance.
-- The cube launchpad app is a packaged SDL2/Wayland OpenGL ES client. Its live log records `video_driver=wayland`, Mesa GL renderer/version details, and `frames=1` after the first successful swap while continuing to run fullscreen as the active slot.
-- The shell writes live state to `/run/user/1000/engineos/shell-state.json`. The final Runtime proof showed schema `engineos-shell-state-v0`, `bootstrap=launchpad`, `active_slot=cube`, terminal mapped but hidden, cube mapped and visible, and engine unmapped because assets were missing.
-- `engineos-shell` now tracks shell-launched child processes by pid, records the intended launchpad role, marks launches when that role maps, reaps `SIGCHLD`, and logs exit status plus `reason=process-exited-before-map` for slot commands that die before creating a surface.
-- Local validation for the shell bootstrap entry point passed after freeing WSL resources: `bash -n ...`, `tools/engineos/eos-build shell --dry-run`, `tools/engineos/eos-test shell-actions`, and `tools/engineos/eos-test shell` all completed. Shell validation now fails closed when `pkg-config` or the required `wlroots-0.19`, `wayland-server`, and `xkbcommon` modules are unavailable, matching the real compositor build contract.
-- The tool packagelets have collapsed into `engineos-tools`: it owns the shared Bash dispatcher/runtime, all public `eos-*` wrappers, domain modules under `tools/eos/`, post-install payload, update/observability/agent helpers, and the agent dispatcher/exporter units. Source checkouts keep `tools/engineos/eos-wrapper` plus `tools/engineos/generate-wrappers.sh`; package builds and local generation derive the concrete `eos-*` wrappers from `engineos_eos_commands` in `tools/scripts/common.sh`.
-- The Codex/agent harness keeps only canonical source metadata in the repo: `.codex/config.toml`, `.codex/hooks.example.json`, docs, `.agents/index.toml`, `.agents/roles/*`, `.agents/skills/*`, and `tools/hooks/*.py`. `tools/scripts/agent_metadata.sh` generates structured profiles and OpenCode wrappers for installed packages and `eos-agent profile show`; `eos-agent hygiene check` validates generated profile/wrapper drift from the index. Project-status/docs MCP remains removed, and local builds, tests, proofs, logs, admin work, observability, and runtime actions stay on direct `eos-*` commands plus skills.
-- Local validation for the packagelet collapse and generated metadata/wrapper path passed with `bash -n` on the touched shell/PKGBUILD files, `eos-test agent`, `eos-test agent-hygiene`, `eos-test post-first-deploy`, `eos-lint packages`, `eos-preflight all`, and `eos-test`. Expected local limitations remain: real ISO builds stay on the Arch builder VM, and full repo validation still belongs under `/srv/engineos`.
-- The `avoid-ai-code-smells` cleanup pass removed several false-success paths across OS/runtime tooling. Mock validation modes were removed, dry-run proofs now identify themselves as previews, missing shell/engine/repo/build prerequisites fail closed, failed capture/exporter/dispatcher/update paths return nonzero, and explicit Python fallback for the engine runner is opt-in only. `eos-ci local` now provides the post-change loop for preflight, focused tests, package rebuild, optional reinstall, repo validation on the builder, and generated package cleanup.
-- Repo and builder validation now require the probes that make their claims meaningful: repo validation fails without `pacman`, `vercmp`, or `bsdtar`, and builder validation fails when filesystem, RAM/swap, or `/tmp` sizing cannot be inspected. Low-capacity builders still warn, but missing evidence no longer passes as a validated environment.
-- First-deploy setup now fails closed when required package installation machinery or packaged payload assets are missing. `--skip-pacman` remains the explicit escape hatch; otherwise missing `pacman`, dev shell autostart assets, `systemctl`, or `engineos-shell` is a deployment failure instead of a successful-looking partial setup.
-- Booted-ISO validation also fails when `systemctl` is unavailable, because service state cannot be proven without it. Individual optional service enablement may still warn, but a missing service inspection tool is no longer accepted as a valid proof run.
-- Booted-ISO validation now also requires the EngineOS log directory and fails closed for recovery service checks when service state cannot be inspected, so runtime proof cannot pass without the log surface used by recovery, renderer, and autostart checks.
-- EngineDev and EngineRuntime live setup paths no longer use `best_effort` wrappers for required setup. ISO customization, image-backed user linger files, live udev repair, Codex repair/version checks, Docker/observability enablement, zsh shell assignment, and dev-shell autostart now fail visibly when their required commands fail; only diagnostic firstboot doctor failures remain logged as warnings.
-- VM, builder, installed EngineDev, and bare-metal workflows are now separated under `tools/eos/`: `builder/`, `vm/`, `os-dev/`, `bare-metal/`, `proof/`, and `test/`. The old `tools/scripts` compatibility shims for those moved domains were removed; `tools/engineos/eos` dispatches directly to the domain modules, and packages install only the public `eos-*` wrapper plus `/usr/lib/engineos/eos/...` modules. Preflight and package lint require the domain module layout, and local validation passed with `bash -n`, `eos-lint packages`, `eos-preflight scripts`, focused moved-domain tests, `eos-preflight all`, and `eos-test`.
-- Runtime terminal startup now lands directly in the configured dev shell: packaged `runtime.conf` sets `ENGINEOS_TERMINAL_SESSION_CMD='tmux new -A -s engineos'`, `eos-terminal` runs that command under `zsh -lc` inside the selected graphical terminal, and the Runtime `engineos` user inherits the checked-in `.zshrc`/`.tmux.conf` from `/etc/skel`.
-- Runtime graphical client launch is now pinned to the shell-owned Wayland display: `engineos-shell` exports Wayland session hints and unsets `DISPLAY` for spawned terminal/engine clients, `eos-terminal` requires `WAYLAND_DISPLAY` by default and no longer falls back to `xterm`, and `engineos-runtime.service` sets `XDG_SESSION_TYPE=wayland` plus `ENGINEOS_TERMINAL_REQUIRE_WAYLAND=true`. VM renderer limitations still apply; hardware acceleration must be proven on the AMD target.
-- Bare-metal boot validation now treats shell renderer evidence as an acceptance gate: `eos-validate boot --bare-metal` requires `/var/log/engineos/shell.log`, rejects pixman/llvmpipe/softpipe/software-renderer markers, and requires GL-capable shell renderer evidence such as GLES/EGL or an explicit `wlr_renderer=gles2|vulkan` marker.
-- `eos-vm boot` now has a `--gl` dry-run/test path that selects `virtio-vga-gl` and a GL-capable display backend. A real accelerated Runtime VM launch was attempted on the Arch builder with `virtio-vga-gl` plus `egl-headless,gl=on`, but QEMU failed before boot with `egl: no drm render node available`; the builder currently exposes only `/dev/dri/card1` to the `dev` session, not a `renderD*` node. The separate Hyper-V EngineDev VM also exposes only `/dev/dri/card1`, and `eos-doctor --vm` reports Mesa `llvmpipe`, so neither current VM path proves accelerated shell rendering.
-- `eos-vm boot` now supports `--audio hda`, which adds a QEMU ICH9 HDA controller and duplex codec. A Runtime VM booted with that option exposes `HDA Intel` in `/proc/asound/cards`, `aplay -l` lists `Generic Analog`, WirePlumber reports `Built-in Audio Analog Stereo` sink/source, and `speaker-test -D default` reaches the guest audio path. QEMU is using a discard backend, so this proves guest audio plumbing but not audible host output.
-- EngineRuntime includes the Quake audio default path through `/etc/engineos/quake.conf` with `ENGINEOS_QUAKE_SDL_AUDIODRIVER=pulseaudio`.
-- EngineRuntime TTY shell launch passes default terminal, cube, and engine commands into `engineos-shell`, so `Alt+Return`, `Alt+G`, `Alt+1`, `Alt+2`, and `Alt+3` have configured launchpad actions. Source now manages ordinary non-launchpad xdg toplevels as floating desktop windows: Qt/Falkon-style apps participate in `Alt+Tab`, xdg maximize/minimize/fullscreen/move requests are handled, and focused floating windows can be minimized with `Alt+F9`/`Alt+M`, maximized with `Alt+F10`/`Alt+X`, or nudged with `Alt+Arrow`.
-- EngineDev and EngineRuntime live users get input/audio/video/render access, PipeWire user units are globally enabled, and live setup repairs groups and udev state at boot.
-- In the booted EngineDev guest, `dev` can read `/dev/input/event*` and `/dev/input/mouse0`, PipeWire/Pulse reports active through `pactl info`, and `eos-runtime quake --smoke` finds `/usr/bin/quakespasm`.
-- QuakeSpasm is packaged and included with the Quake template package. Real user-provided Quake assets have been proven in a hot-patched EngineDev VM under Xvfb.
-- The wlroots shell compiles on the Arch builder against `wlroots0.19` and has basic scene, input, focus, terminal launch, engine launch, and emergency release paths in source.
-- Local focused tests cover CLI smoke paths, package/repo scaffolding, assets, logs, proof dry-runs, boot validation fixtures, shell actions, engine-runner environment forwarding, input traces, output validation, and render capture fallback.
+- `eos-*` is the active command surface for builds, proofs, packages, app
+  launch, logs, assets, agent operations, observability, and runtime checks.
+  `/usr/bin/engineos` is only a legacy discovery shim.
+- PoC 0 and the EngineDev first-deploy follow-on are complete: the builder can
+  rebuild the package repo and EngineDev ISO, a clean EngineDev guest boots,
+  `eos-proof booted-iso --vm` passes, and first-deploy provides tmux, Docker,
+  Docker Compose, Codex CLI, and the post-install payload.
+- EngineRuntime has a generated ISO and packaged launchpad path. Runtime
+  autostart, DRM/libinput shell startup, crash-bundle recovery,
+  terminal/cube launchpad mapping, missing-Quake-asset handling,
+  shell-state JSON, and emulated QEMU HDA audio plumbing are proven in
+  builder-hosted QEMU.
+- Bare-metal EngineDev has the current shell/app stack deployed without an ISO
+  rebuild, including pane-bounds app launch, game cursor capture, MC image
+  preview, Quick View preview integration, and the Falkon startup crash fix.
+  The live shell package is `engineos-shell 0.1.0-8`.
+- EngineDev-only Quake level-agent V1 is live-proven without an ISO rebuild:
+  terminal `serve/build/status/load` works, Quake console
+  `agent` / `agent_status` / `agent_load` works through the tracked
+  QuakeSpasm command patch, and TrenchBroom setup/open-file smoke is packaged.
+- Agent-pack hygiene currently passes. Canonical ownership is
+  `.agents/index.toml` plus `docs/agent-roles.md`; reusable workflows belong
+  in skills; CLI work stays on direct `eos-*` commands.
 
 ## Not Yet Proven
 
-- Interactive Quake keyboard/mouse/audio in a live Runtime console session with user assets.
-- Quake has a first shell-side retest on the new shared per-role pane-bounds
-  path: a temporary split-pane launch wrote `launch-bounds/engine.env` with
-  bounds `0 34 132 32 240 66`, and the shell mapped Quake as
-  `layout=tmux-pane x=0 y=556 size=1056x524` with game capture active. After
-  terminating the test process, the engine slot unmapped, capture released, and
-  no new coredump was recorded. QuakeSpasm did not flush its video-mode line
-  before the timed run was terminated, so the next Quake pass should use a
-  longer clean shutdown or explicit client-size instrumentation to confirm the
-  client-side video mode matches the shell layout.
-- Persistent Quake asset mounting is not implemented yet; the current Hyper-V VM still loses manually copied assets on reboot because it is a live ISO, even though the writable overlay is now large enough for session-local copies.
-- Real audible output is not proven in the current Hyper-V/basic QEMU path. Hyper-V is not presenting a sound device to Linux, and the QEMU HDA proof uses an audio discard backend; prove audible output on hardware or an audio-forwarding VM/RDP path.
-- Accelerated VM graphics are not available in the current lab VM paths: the builder QEMU GL path fails without a host DRM render node, and the Hyper-V test guest reports llvmpipe.
-- Visible hardware/frame-capture proof of the Runtime shell is still missing; the current Runtime proof is headless QEMU evidence from logs, state JSON, and app renderer/frame logs.
-- MC image preview still needs a visual live MC Quick View acceptance capture:
-  use the real `engine-image-preview`/shell path, move Up/Down across PNG/JPEG
-  files, confirm the shell-owned preview updates in the right MC panel, and
-  capture a frame with a known image.
-- Runtime launchpad with user-provided Quake assets is not proven yet, so the engine slot has not mapped as a live Quake surface in Runtime.
-- Real USB writing to removable media.
-- Secure Boot signed-ISO boot with an enrolled EngineOS db certificate. The signed ISO artifact exists and verifies locally, but target firmware enrollment and a real USB boot have not been executed yet.
-- Bare-metal AMD boot, DRM/KMS validation, and hardware GL shell startup proof.
-- Hyper-V CPU/RAM settings are not changed from this repo; raising them requires elevated Windows PowerShell.
+- Runtime launchpad with user-provided Quake assets, including a mapped live
+  Quake surface in Runtime.
+- Interactive Quake keyboard, mouse, and audible audio in a live Runtime
+  console session with user assets.
+- Hardware GL shell startup proof on the AMD target. VM paths are useful smoke
+  tests only: the builder QEMU GL path lacks a render node and Hyper-V reports
+  llvmpipe.
+- Manual TrenchBroom GUI compile/run clicks. Setup generation, open-file smoke,
+  and the equivalent compile/launch command path are proven.
+- Visual live MC Quick View acceptance capture with the real
+  `engine-image-preview` and shell preview path.
+- Persistent Quake asset mounting across live ISO reboot.
+- Real USB write and Secure Boot boot with an enrolled EngineOS db certificate.
 
 ## Next Commands
 
-Re-run the completed EngineDev VM proof if needed:
+Runtime VM smoke before hardware:
 
 ```bash
 cd /srv/engineos
-./tools/engineos/eos-build iso enginedev --fast --clean --archive-existing
-./tools/engineos/eos-vm boot enginedev --display none --background --ssh-port 2222
-sshpass -p dev ssh -p 2222 dev@127.0.0.1 'eos-proof booted-iso --vm'
-sshpass -p dev ssh -p 2222 dev@127.0.0.1 'eos-proof shell-launch --vm'
-```
-
-Remote guest inspection after the rebuilt ISO boots:
-
-```bash
-ssh -p 2222 dev@127.0.0.1   # password: dev
-eos-proof booted-iso --vm
-tmux -V
-tmux start-server \; show -g mouse \; show -g @engineos-plugins
-zsh -ic 'echo $ZSH; echo $plugins'
-docker info
-codex --version
-eos-runtime quake --smoke
-eos-assets check quake
-tail -n 200 /var/log/engineos/engine.log
-```
-
-First-deploy dev environment setup from the builder:
-
-```bash
-cd /srv/engineos
-ENGINEOS_GUEST_PASSWORD=dev ./tools/engineos/eos-deploy first --host dev@127.0.0.1 --port 2222
-sshpass -p dev ssh -p 2222 dev@127.0.0.1 'tmux -V; /home/dev/.local/bin/codex --version; docker info'
-```
-
-EngineDev autoinstall planner proof:
-
-```bash
-./tools/engineos/eos-install dev --dry-run --device /dev/sdX --repo-url https://github.com/Tango-Rocker/tango-os.git --branch main
-./tools/engineos/eos-test install
-./tools/engineos/eos-preflight repo --package engineos-tools
-```
-
-Rebuild the EngineDev ISO with the live Codex/install-guide fixes baked in:
-
-```bash
-cd /srv/engineos
-./tools/engineos/eos-build repo
-./tools/engineos/eos-build iso enginedev --fast --clean --archive-existing
-```
-
-After booting the rebuilt live ISO on the bare-metal lab target:
-
-```bash
-eos-doctor --bare-metal
-eos-install guide
-codex --version
-sudo install -d -m 0700 /run/engineos-secrets
-sudo tee /run/engineos-secrets/tango-os-readonly.token >/dev/null
-sudo chmod 0600 /run/engineos-secrets/tango-os-readonly.token
-eos-install dev --dry-run --repo-url https://github.com/Tango-Rocker/tango-os.git --branch main --repo-token-file /run/engineos-secrets/tango-os-readonly.token
-sudo eos-install dev --repo-url https://github.com/Tango-Rocker/tango-os.git --branch main --repo-token-file /run/engineos-secrets/tango-os-readonly.token --yes-i-understand-this-wipes-device
-```
-
-For the current bare-metal lab target, inspect the default plan before the real destructive install:
-
-```bash
-eos-install dev --dry-run --repo-url https://github.com/Tango-Rocker/tango-os.git --branch main
-```
-
-Secure Boot custom-key path for the current USB boot failure:
-
-```bash
-cd /srv/engineos
-./tools/engineos/eos-builder bootstrap
-./tools/engineos/eos-secureboot keys create
-./tools/engineos/eos-secureboot sign-iso --iso out/EngineDevOS-2026.06.15-x86_64.iso
-./tools/engineos/eos-secureboot enroll-handoff
-./tools/engineos/eos-usb write --iso out/EngineDevOS-2026.06.15-x86_64-secureboot.iso --device /dev/sdX --dry-run
-```
-
-Enroll `artifacts/secure-boot/keys/db.cer` into firmware Secure Boot `db` as an appended allowed certificate. Do not clear or replace Microsoft keys on a Windows dual-boot machine.
-
-Current locally signed artifact:
-
-```bash
-out/EngineDevOS-2026.06.15-x86_64-secureboot.iso
-out/EngineDevOS-2026.06.15-x86_64-secureboot.iso.sha256
-out/EngineDevOS-2026.06.15-x86_64-secureboot-baremetal.iso
-out/EngineDevOS-2026.06.15-x86_64-secureboot-baremetal.iso.sha256
-artifacts/secure-boot/keys/db.cer
-```
-
-Re-run the completed EngineDev autoinstall VM proof if needed:
-
-```bash
-cd /srv/engineos
-./tools/engineos/eos-build repo
-./tools/engineos/eos-build iso enginedev --fast --clean --archive-existing
-# boot the rebuilt ISO in the QEMU test VM with a disposable qcow2 target disk, then from the live guest:
-find /opt/engineos/install-cache/pkg -maxdepth 1 -name '*.pkg.tar*' | wc -l
-sudo eos-install dev --device /dev/vda --repo-url https://github.com/Tango-Rocker/tango-os.git --branch main --repo-token-file /run/engineos-secrets/tango-os-readonly.token --yes-i-understand-this-wipes-device
-```
-
-Runtime interactive retest:
-
-```bash
-cd /srv/engineos
+./tools/engineos/eos-build iso engineruntime --fast --clean --archive-existing
 ./tools/engineos/eos-vm boot engineruntime --display none --background --ssh-port 2223 --audio hda
 sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'eos-proof booted-iso --runtime'
 sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'eos-app manifest validate'
 sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'eos-proof launchpad --runtime'
-sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'eos-logs runtime --last 200; eos-logs shell --last 200'
-sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'cat /proc/asound/cards; wpctl status'
 ```
 
-Accelerated Runtime VM retest when the host exposes `/dev/dri/renderD*`:
+Bare-metal hardware gate:
 
 ```bash
-cd /srv/engineos
-./tools/engineos/eos-vm boot engineruntime --gl --background --ssh-port 2293 --audio hda
-sshpass -p engineos ssh -p 2293 engineos@127.0.0.1 'eos-proof booted-iso --runtime'
-sshpass -p engineos ssh -p 2293 engineos@127.0.0.1 'eos-logs shell --last 200; eos-logs app --last 200'
-```
-
-Current expected blocker on the Arch builder VM:
-
-```text
-qemu-system-x86_64: egl: no drm render node available
-qemu-system-x86_64: egl: render node init failed
-```
-
-Windows Hyper-V ISO test VM:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\scripts\create_iso_test_vm_hyperv.ps1 -IsoPath .\out\EngineDevOS-2026.06.14-cowspace-x86_64.iso -Execute -Start
-```
-
-Current Hyper-V EngineDev test guest:
-
-```bash
-ssh dev@172.22.49.144   # password: dev
-eos-proof booted-iso --vm
-eos-runtime quake --smoke
-eos-logs engine --last 80
-```
-
-Temporary Quake asset staging used for the current Hyper-V VM:
-
-```bash
-mkdir -p /home/dev/.local/share/engineos/quake/id1
-# copy pak0.pak and pak1.pak into /home/dev/.local/share/engineos/quake/id1
-eos-assets check quake
-systemctl --user start pipewire.socket pipewire-pulse.socket wireplumber.service
-timeout 12s eos-runtime quake
-```
-
-After launching Quake inside Runtime, inspect:
-
-```bash
-eos-logs engine --last 200
-eos-logs shell --last 200
-```
-
-Expected markers:
-
-- `QuakeSpasm audio_driver=pulseaudio`
-- `launch commands terminal=... cube=... engine=...`
-- `launch action label=bootstrap-cube role=cube`
-- `launch action exit label=... role=... status=... mapped=...`
-- `launchpad slot unavailable role=engine reason=process-exited-before-map` when Quake exits before mapping
-
-Bare-metal GL shell startup proof after booting EngineRuntime on the AMD target:
-
-```bash
-eos-proof booted-iso --bare-metal
+eos-validate boot --bare-metal
 eos-proof shell-launch --bare-metal
-eos-logs shell --last 200
-eos-capture frame --target shell
+eos-proof booted-iso --bare-metal
 ```
 
-Expected shell renderer markers:
+Agent and harness hygiene:
 
-- no `pixman`, `llvmpipe`, `softpipe`, or software-renderer markers in `/var/log/engineos/shell.log`
-- `GLES2`, `EGL`, or explicit `wlr_renderer=gles2|vulkan` evidence for the shell renderer
-
-## Resource Note
-
-The builder was tuned from Windows Hyper-V and now validates with 6 vCPUs, 4 GiB swap, at least 8 GiB `/tmp`, OVMF, and no builder warnings. Earlier low-memory settings caused `pacstrap` kills, `mkinitcpio` `/tmp` failures, and SquashFS compression failures. The repo also works around constrained builders with persistent swap, disk-backed mkarchiso temp space, automatic `/tmp` tmpfs remounting, clean/archive ISO builds, and capped SquashFS compression.
-
-For a real speed improvement, run elevated PowerShell on the Windows host. On this 40 GiB / 12 logical CPU host, the helper will choose generous defaults around 8 GiB startup RAM, 16 GiB maximum RAM, and 6 vCPUs:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\scripts\tune_builder_vm_hyperv.ps1 -Execute -Restart
+```bash
+./tools/engineos/eos-agent hygiene check
+./tools/engineos/eos-test agent-hygiene
+./tools/engineos/eos-test agent
 ```

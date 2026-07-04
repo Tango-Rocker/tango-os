@@ -2,7 +2,9 @@
 
 EngineOS is a hobby OS lab: build an Arch-based EngineDev OS first, then a smaller game-runtime appliance. Keep work practical. Advance the next proof, avoid process for its own sake, and put useful tangents in [BACKLOG.md](BACKLOG.md).
 
-Current target: finish the EngineDev first-deploy dev environment follow-on after PoC 0.
+Current target: prove the EngineRuntime startup shell on the AMD target with
+hardware GL acceleration, shell-owned Wayland clients, recovery logs, and
+Quake launch through the EngineOS app stack.
 For the real Arch builder VM, keep the repo at `/srv/engineos`; the archiso profiles point pacman at `file:///srv/engineos/repo/$arch`.
 
 ## First Pass
@@ -24,6 +26,10 @@ Read only what the task needs:
 5. If validation cannot run, determine whether the blocker is environmental or repo-owned. Fix repo-owned blockers before handoff; for environmental blockers, record the exact failure and the exact command to rerun on the Arch builder VM or target host.
 6. Update [CURRENT_STATUS.md](CURRENT_STATUS.md) if an acceptance condition changes.
 7. Put useful off-track ideas in [BACKLOG.md](BACKLOG.md), then return to the current proof.
+8. When the work is finished, leave a Git disposition: commit the scoped
+   changes, push the branch, and merge or open the merge path when policy and
+   repository state allow. If publishing cannot happen, record the exact
+   blocker and next command.
 
 ## Project Map
 
@@ -33,7 +39,7 @@ packages/             local Arch package definitions
 shell/                wlroots shell work
 engine-runner/        process control work
 engines/              QuakeSpasm and future engine ports
-tools/engineos/       primary CLI
+tools/engineos/       eos-* command wrappers and dispatcher
 tools/scripts/        implementation helpers for the CLI
 tools/post-install-payload/ first-deploy guest setup scripts and assets
 docs/                 architecture, plans, and workflow docs
@@ -71,18 +77,17 @@ Use this before opening broad docs.
 
 ## Command Ladder
 
-Prefer dry-run proof locally:
+Use real local checks for non-destructive proof. Keep dry-runs for destructive,
+remote, USB, and builder-only previews:
 
 ```bash
 ./tools/engineos/eos --help
-./tools/engineos/eos-doctor --mock
+./tools/engineos/eos-doctor --vm
 ./tools/engineos/eos-builder handoff --dry-run --host dev@<builder-vm-ip>
 ./tools/engineos/eos-builder handoff --dry-run --host dev@<builder-vm-ip> --run-proof
 ./tools/engineos/eos-builder doctor-proof --dry-run --host dev@<builder-vm-ip>
 ./tools/engineos/eos-deploy first --dry-run --host dev@127.0.0.1 --port 2222
 ./tools/engineos/eos-builder bootstrap --dry-run
-./tools/engineos/eos-validate builder --mock
-./tools/engineos/eos-validate repo --dry-run
 ./tools/engineos/eos-agent hygiene check
 ./tools/engineos/eos-agent dispatch status
 ./tools/engineos/eos-preflight all
@@ -188,7 +193,7 @@ Bash, PKGBUILD, Markdown, archiso profiles, and package lists are not LSP-backed
 
 - Finish the current PoC before expanding later polish.
 - Prefer one working command over broad refactors.
-- Use `engineos` commands as the control surface.
+- Use `eos-*` commands and skills as the control surface.
 - Put off-track ideas in [BACKLOG.md](BACKLOG.md) with why they matter and the likely phase.
 - Do not start GPU passthrough, Steam/Proton, NVIDIA, HDR, VRR, or rich 3D cockpit work before the MVP path asks for it.
 - Update [CURRENT_STATUS.md](CURRENT_STATUS.md) whenever an acceptance condition changes.

@@ -53,7 +53,7 @@ Responsibilities:
 - Keep recovery commands and status docs current.
 
 Boundaries:
-- Use direct `engineos` diagnostics before changing persistent OS behavior.
+- Use direct `eos-*` diagnostics before changing persistent OS behavior.
 - Defer source builds to `compiler` and shell/window behavior to `admin-shell`.
 - Defer agent-pack hygiene, stale references, and duplicated role guidance to
   `cleaner`.

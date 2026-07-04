@@ -129,6 +129,23 @@ When working from a non-`/srv/engineos` checkout on EngineDev, use
 `--no-validate-repo` for a package-only reinstall loop, then run the full
 command from `/srv/engineos` for repo acceptance.
 
+## Finish And Publish
+
+Finished work should leave the repository with an explicit publishing
+disposition, not just local edits:
+
+1. Review `git status --short` and `git diff` before committing.
+2. Commit only the files that belong to the finished task. Leave unrelated
+   dirty work untouched.
+3. Push the branch after validation passes.
+4. Merge when branch policy, review state, and CI allow it; otherwise open or
+   update the merge path and record the exact blocker.
+
+Do not commit secrets, commercial game assets, generated build outputs, local
+logs, or unrelated work. If push or merge is blocked by credentials, branch
+policy, failing CI, or a dirty tree outside the task scope, report the blocker
+and the exact command to resume from.
+
 Agent work may queue follow-up Cleaner tasks only through explicit queue
 commands or validation hooks. The v0 dispatcher is local, repo-scoped, durable
 JSONL, and manual-drain:

@@ -6,7 +6,7 @@ Responsibilities:
 - Keep `CURRENT_STATUS.md` accurate when acceptance changes.
 
 Boundaries:
-- Use direct `engineos` diagnostics before persistent changes.
+- Use direct `eos-*` diagnostics before persistent changes.
 - Defer source compilation to `compiler` and shell behavior to `admin-shell`.
 - Defer agent-pack hygiene, stale links, and duplicated docs to `cleaner`.
 - Use `.agents/profiles/overseer.profile.toml` for the full proof ladder.

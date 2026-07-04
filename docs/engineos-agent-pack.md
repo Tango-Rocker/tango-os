@@ -37,9 +37,9 @@ The `engineos-tools` package installs the same guidance under
 
 ## Interface Policy
 
-Use direct `engineos` CLI commands for local builds, tests, proofs, logs,
-package work, admin work, observability, and runtime actions. Use skills to
-capture repeatable workflows and safety rules.
+Use direct `eos-*` CLI commands for local builds, tests, proofs, logs, package
+work, admin work, observability, and runtime actions. Use skills to capture
+repeatable workflows and safety rules.
 
 Project-status/docs MCP has been removed. Do not add MCP tools just to mirror
 local commands that are already scriptable, documented, and safe through the

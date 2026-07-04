@@ -15,6 +15,7 @@ Use these files by purpose:
 - [agent-workflow.md](agent-workflow.md): quick workflow checklist and Codex harness notes
 - [engineos-agent-pack.md](engineos-agent-pack.md): Codex config, hooks, roles, skills, and OpenCode wrappers
 - [asset-policy.md](asset-policy.md): Quake asset rules
+- [session-archive/](session-archive/): focused long-term proof history and handoff records
 
 Area-specific docs live next to their code:
 
