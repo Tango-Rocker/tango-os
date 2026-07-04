@@ -43,7 +43,7 @@ def shell_state_path() -> Path:
 
 
 def shell_slot() -> str | None:
-    env_slot = os.environ.get("ENGINEOS_TERMINAL_ROLE") or os.environ.get("ENGINEOS_PREVIEW_SLOT")
+    env_slot = explicit_shell_slot()
     if env_slot in {"terminal", "terminal-secondary"}:
         return env_slot
     try:
@@ -53,6 +53,13 @@ def shell_slot() -> str | None:
     active = state.get("active_slot")
     if active in {"terminal", "terminal-secondary"}:
         return str(active)
+    return None
+
+
+def explicit_shell_slot() -> str | None:
+    env_slot = os.environ.get("ENGINEOS_TERMINAL_ROLE") or os.environ.get("ENGINEOS_PREVIEW_SLOT")
+    if env_slot in {"terminal", "terminal-secondary"}:
+        return env_slot
     return None
 
 
@@ -260,7 +267,7 @@ def build_request(args: argparse.Namespace) -> tuple[dict[str, object] | None, s
             "fit": "cover",
             "opacity": args.opacity,
         }
-        slot = shell_slot()
+        slot = explicit_shell_slot()
         if slot is not None:
             request["slot"] = slot
         bounds = tmux_bounds()

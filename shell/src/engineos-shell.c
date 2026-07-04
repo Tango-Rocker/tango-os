@@ -1966,7 +1966,8 @@ static bool compute_wallpaper_box(struct engineos_shell_server *server,
 		return compute_preview_box(server, slot, bounds, box);
 	}
 
-	output_geometry_for_role(server, ENGINEOS_SURFACE_TERMINAL,
+	enum engineos_surface_role anchor_role = preview_anchor_role(server, slot);
+	output_geometry_for_role(server, anchor_role,
 		&box->x, &box->y, &box->width, &box->height);
 	box->fullscreen = false;
 	box->layout = "wallpaper-output";
@@ -2047,7 +2048,11 @@ static bool show_wallpaper(struct engineos_shell_server *server,
 		(float)opacity_percent / 100.0f);
 	wlr_scene_node_set_position(&server->wallpaper.scene_buffer->node,
 		server->wallpaper.x, server->wallpaper.y);
-	wlr_scene_node_lower_to_bottom(&server->wallpaper.scene_buffer->node);
+	if (strcmp(wallpaper_mode, "pane") == 0) {
+		wlr_scene_node_raise_to_top(&server->wallpaper.scene_buffer->node);
+	} else {
+		wlr_scene_node_lower_to_bottom(&server->wallpaper.scene_buffer->node);
+	}
 	wlr_log(WLR_INFO,
 		"wallpaper shown path=%s mode=%s opacity=%d image=%dx%d x=%d y=%d size=%dx%d source=%.1fx%.1f+%.1f+%.1f",
 		path, wallpaper_mode, opacity_percent, image_width, image_height,
