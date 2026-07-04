@@ -138,11 +138,27 @@ infer_changed_packages() {
 
 latest_package_artifact() {
   local pkg="$1"
-  find "$REPO_DIR" -maxdepth 1 -type f \
+  local artifact
+  local name
+  local version
+  local best_artifact=""
+  local best_version=""
+
+  have_cmd pacman || die "pacman is missing"
+  have_cmd vercmp || die "vercmp is missing; install pacman"
+
+  while IFS= read -r artifact; do
+    read -r name version < <(pacman -Qp "$artifact" 2>/dev/null || true)
+    [[ "$name" == "$pkg" && -n "${version:-}" ]] || continue
+    if [[ -z "$best_version" ]] || [[ "$(vercmp "$version" "$best_version")" -gt 0 ]]; then
+      best_artifact="$artifact"
+      best_version="$version"
+    fi
+  done < <(find "$REPO_DIR" -maxdepth 1 -type f \
     \( -name "$pkg-*.pkg.tar.zst" -o -name "$pkg-*.pkg.tar.xz" -o -name "$pkg-*.pkg.tar.gz" \) \
-    -printf '%T@ %p\n' 2>/dev/null |
-    sort -n |
-    awk 'END { if (NF >= 2) { $1=""; sub(/^ /, ""); print } }'
+    -print 2>/dev/null | sort)
+
+  [[ -n "$best_artifact" ]] && printf '%s\n' "$best_artifact"
 }
 
 install_rebuilt_packages() {
