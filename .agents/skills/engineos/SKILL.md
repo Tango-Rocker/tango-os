@@ -1,13 +1,14 @@
 ---
 name: engineos
-description: Use for general Tang-OS / EngineOS work involving eos-* CLI tools, agent workflow, builder VM, archiso profiles, packages, runtime proofs, shell launchpad, Quake path, logs, crash bundles, observability, or role routing.
+description: Use for general Tang-OS / EngineOS work involving eos-* CLI tools, agent workflow, packages, runtime proofs, shell launchpad, Quake path, logs, crash bundles, observability, or role routing.
 ---
 
 # EngineOS Orchestrator Skill
 
-EngineOS is a hobby OS lab. Build the Arch-based EngineDev lab first, then the
-smaller EngineRuntime appliance. Keep the next proof small and use
-`./tools/engineos/eos-*` tools as the control surface.
+EngineOS is a bare-metal/source-checkout hobby OS lab. Keep the next proof
+small and use `./tools/engineos/eos-*` tools as the control surface. ISO, VM,
+QEMU, Hyper-V builder, and generated-image work is legacy/reference-only unless
+the user explicitly re-enables it.
 
 ## First Read
 
@@ -16,9 +17,8 @@ Read only the context the task needs:
 - `CURRENT_STATUS.md` for what is proven, broken, and next.
 - `ROADMAP.md` for the current phase.
 - `docs/agent-harness.md` for command policy.
-- Area skills such as `archiso-build`, `wlroots-compositor`, `quake-port`,
-  `render-gl`, `input-routing`, and `crash-forensics` when the task enters
-  those areas.
+- Area skills such as `wlroots-compositor`, `quake-port`, `render-gl`,
+  `input-routing`, and `crash-forensics` when the task enters those areas.
 
 ## Default Loop
 
@@ -31,7 +31,7 @@ Read only the context the task needs:
 
 ## Local Check Ladder
 
-Prefer these outside the Arch builder VM. Dry-runs are previews only, not proof.
+Prefer these on the live checkout. Dry-runs are previews only, not proof.
 
 ```bash
 ./tools/engineos/eos-doctor
@@ -45,7 +45,7 @@ Prefer these outside the Arch builder VM. Dry-runs are previews only, not proof.
 ./tools/engineos/eos-test shell
 ```
 
-Use real package/ISO builds only from `/srv/engineos` on the Arch builder VM.
+Do not use ISO, VM, or builder-handoff paths for routine work.
 
 ## Agent Harness
 
@@ -67,6 +67,20 @@ docs/agent-roles.md
 docs/agent-profiles.md
 ```
 
+## Finish And Deploy
+
+When finished work is ready to publish from a checkout that should deploy on
+push, install the repo-owned hook once:
+
+```bash
+tools/hooks/install_git_push_deploy_hook.sh
+```
+
+The hook writes `.git/hooks/pre-push` and runs the configured local deploy
+command for pushed branch refs. The default command is the local `eos-ci`
+package rebuild/reinstall loop. It must not call `eos-builder`, `eos-vm`, or
+`eos-build iso` unless the user explicitly re-enables the legacy image lab.
+
 Use direct `eos-*` CLI commands for local builds, tests, proofs, logs,
 runtime actions, observability, and route checks. Use skills for repeatable
 workflow judgment. Use `eos-agent hygiene check` for agent-pack drift and
@@ -80,7 +94,7 @@ recursive deletion, secret reads, or direct editing of generated `work/` or
 ## Hard Boundaries
 
 - Do not commit commercial Quake assets or secrets.
-- Do not hand-edit generated ISO output as source of truth.
+- Do not route work through generated ISO/VM artifacts unless explicitly asked.
 - Do not run real USB writes, dev installs, or TTY/KMS takeover commands without
   explicit user direction.
 - Put persistent OS behavior in packages, profile files, or repo-owned scripts.

@@ -33,80 +33,24 @@ rg --files --hidden
 
 ## Command Policy
 
-Use real local checks first. Keep dry-runs for destructive, remote, USB, and
-builder-only previews:
+Use real local checks first. ISO, VM, QEMU, Hyper-V builder, and
+generated-image paths are legacy/reference-only and are not part of routine
+Tango-OS/Engine-OS work:
 
 ```bash
-./tools/engineos/eos-doctor --vm
+./tools/engineos/eos-doctor
 ./tools/engineos/eos-test agent
-./tools/engineos/eos-builder handoff --dry-run --host dev@<builder-vm-ip>
-./tools/engineos/eos-builder handoff --dry-run --host dev@<builder-vm-ip> --run-proof
-./tools/engineos/eos-builder doctor-proof --dry-run --host dev@<builder-vm-ip>
-./tools/engineos/eos-deploy first --dry-run --host dev@127.0.0.1 --port 2222
-./tools/engineos/eos-builder bootstrap --dry-run
 ./tools/engineos/eos-agent hygiene check
 ./tools/engineos/eos-agent dispatch status
 ./tools/engineos/eos-ci local --package engineos-tools --test agent-route --no-validate-repo --clean-generated
 ./tools/engineos/eos-preflight all
 ./tools/engineos/eos-lint packages
-./tools/engineos/eos-proof build-lab --dry-run
-./tools/engineos/eos-proof hardware-ready --dry-run --profile engineruntime --device /dev/sdX
 ./tools/engineos/eos-release checklist --dry-run
-./tools/engineos/eos-test vm
-./tools/engineos/eos-test usb
-./tools/engineos/eos-build iso --dry-run
-./tools/engineos/eos-build iso enginedev --fast --dry-run
 ```
 
-Use real builds only on the Arch builder VM:
-
-```bash
-cd /srv/engineos
-./tools/engineos/eos-builder bootstrap
-./tools/engineos/eos-validate builder
-./tools/engineos/eos-proof build-lab
-./tools/engineos/eos-build iso enginedev --fast --clean --archive-existing
-./tools/engineos/eos-proof release-candidate
-./tools/engineos/eos-proof hardware-ready --profile engineruntime --device /dev/sdX
-./tools/engineos/eos-vm boot enginedev --display none --background --ssh-port 2222
-ENGINEOS_GUEST_PASSWORD=dev ./tools/engineos/eos-deploy first --host dev@127.0.0.1 --port 2222
-./tools/engineos/eos-vm boot engineruntime
-```
-
-To move the current checkout onto the Arch builder VM and run the first real
-builder checks from the host side:
-
-```bash
-./tools/engineos/eos-builder handoff --host dev@<builder-vm-ip>
-./tools/engineos/eos-builder handoff --host dev@<builder-vm-ip> --run-proof
-```
-
-After the EngineDev VM is booted by the builder and SSH is forwarded on port
-2222, use the host-side combined build-and-doctor directive:
-
-```bash
-./tools/engineos/eos-builder doctor-proof --host dev@<builder-vm-ip>
-```
-
-It SSHes into the builder for `proof build-lab`, then SSHes from the builder
-into the booted EngineDev guest and runs `eos-doctor --vm`.
-If WSL cannot route to the Hyper-V builder but Windows OpenSSH can, use
-`ENGINEOS_SSH=ssh.exe` for the host-to-builder leg.
-
-If the Arch builder VM does not exist yet, use
-[builder-vm-hyperv.md](builder-vm-hyperv.md) on Windows Hyper-V.
-
-Inside a generated ISO:
-
-```bash
-eos-proof booted-iso --vm
-eos-proof booted-iso --runtime
-```
-
-For first-deploy setup of a booted EngineDev guest, see
-[dev-instance.md](dev-instance.md). The payload lives in
-`tools/post-install-payload/`; do not add secrets or commercial game assets to
-that payload.
+Legacy image-lab commands remain in archived docs and scripts for reference,
+but agents should not choose them for current work without explicit user
+direction.
 
 For agent harness changes, run:
 
@@ -125,9 +69,8 @@ It runs real preflight, tests, package rebuilds, and repo validation by default;
 ./tools/engineos/eos-ci local --package engineos-tools --test agent --install --clean-generated
 ```
 
-When working from a non-`/srv/engineos` checkout on EngineDev, use
-`--no-validate-repo` for a package-only reinstall loop, then run the full
-command from `/srv/engineos` for repo acceptance.
+When working from any live checkout, use `--no-validate-repo` for package-only
+local loops if repo validation is tied to the old image repository layout.
 
 ## Finish And Publish
 
@@ -138,7 +81,20 @@ disposition, not just local edits:
 2. Commit only the files that belong to the finished task. Leave unrelated
    dirty work untouched.
 3. Push the branch after validation passes.
-4. Merge when branch policy, review state, and CI allow it; otherwise open or
+4. If deploy-on-push is installed for this checkout, the `pre-push` hook runs
+   the configured local deploy command for pushed branch refs before Git
+   completes the push.
+   Configure it with:
+
+```bash
+tools/hooks/install_git_push_deploy_hook.sh
+```
+
+   Override the command with `--command '<local deploy command>'` only when the
+   replacement stays on the live checkout. The hook deliberately fails the push
+   if deployment fails; use `git config engineos.deployOnPush false` only for an
+   intentional manual-publish exception.
+5. Merge when branch policy, review state, and CI allow it; otherwise open or
    update the merge path and record the exact blocker.
 
 Do not commit secrets, commercial game assets, generated build outputs, local
@@ -235,14 +191,13 @@ Package rules:
 
 - local packages live in `packages/<name>/PKGBUILD`
 - package names use the `engineos-` prefix
-- ISO contents come from official Arch packages, local EngineOS packages, or archiso profile files
-- avoid one-off manual copies into images unless profile-owned and documented
+- packages are the active deployment unit
+- generated images are legacy/reference artifacts, not a routine deploy target
 
 Graphics rules:
 
 - headless shell before nested shell
 - nested shell before direct TTY/KMS
-- VM graphics is smoke confidence only
 - bare-metal AMD is the source of truth for DRM/KMS and real rendering behavior
 
 Quake asset rules:
@@ -250,7 +205,7 @@ Quake asset rules:
 - do not commit commercial Quake assets
 - keep asset metadata in a manifest
 - generated test assets need redistributable licenses
-- user-provided assets stay out of the ISO by default
+- user-provided assets stay out of generated artifacts by default
 
 ## Handoff
 

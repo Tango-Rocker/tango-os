@@ -65,6 +65,8 @@ package() {
   install -Dm755 "$_engineos_root/tools/hooks/session_start.py" "$pkgdir/usr/share/engineos/tools/hooks/session_start.py"
   install -Dm755 "$_engineos_root/tools/hooks/pre_tool_policy.py" "$pkgdir/usr/share/engineos/tools/hooks/pre_tool_policy.py"
   install -Dm755 "$_engineos_root/tools/hooks/stop_check.py" "$pkgdir/usr/share/engineos/tools/hooks/stop_check.py"
+  install -Dm755 "$_engineos_root/tools/hooks/git_pre_push_deploy.sh" "$pkgdir/usr/share/engineos/tools/hooks/git_pre_push_deploy.sh"
+  install -Dm755 "$_engineos_root/tools/hooks/install_git_push_deploy_hook.sh" "$pkgdir/usr/share/engineos/tools/hooks/install_git_push_deploy_hook.sh"
 
   install -Dm644 "$_engineos_root/LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

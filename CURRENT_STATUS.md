@@ -1,18 +1,21 @@
 # Current Status
 
-Current focus: prove the EngineRuntime startup shell on the AMD target with
-hardware GL acceleration, shell-owned Wayland clients, useful recovery logs,
-and Quake launch through the EngineOS app stack.
+Current focus: continue Tango-OS/Engine-OS as a bare-metal/source-checkout
+system, with package rebuild/reinstall loops and live shell/app proofs.
 
 Current deployment context: this session is the bare-metal EngineDev
-installation. Do not build ISO profiles or ISO artifacts again until the user
-explicitly re-enables that path.
+installation. ISO, VM, QEMU, Hyper-V builder, and generated image paths are
+decoupled from active work. Do not route routine build, proof, deploy, or
+publish tasks through them unless the user explicitly re-enables the legacy
+image lab.
 
 Historical proof notes that no longer need to stay in the active status file
 are archived in
 [docs/session-archive/2026-07-04-engineos-proof-history/README.md](docs/session-archive/2026-07-04-engineos-proof-history/README.md).
 
-## Current Artifacts
+## Legacy Image Artifacts
+
+These are historical proof artifacts only; they are not the active work path:
 
 - Arch builder VM: `dev@172.23.74.185`
 - Builder repo path: `/srv/engineos`
@@ -26,15 +29,10 @@ are archived in
 - `eos-*` is the active command surface for builds, proofs, packages, app
   launch, logs, assets, agent operations, observability, and runtime checks.
   `/usr/bin/engineos` is only a legacy discovery shim.
-- PoC 0 and the EngineDev first-deploy follow-on are complete: the builder can
-  rebuild the package repo and EngineDev ISO, a clean EngineDev guest boots,
-  `eos-proof booted-iso --vm` passes, and first-deploy provides tmux, Docker,
-  Docker Compose, Codex CLI, and the post-install payload.
-- EngineRuntime has a generated ISO and packaged launchpad path. Runtime
-  autostart, DRM/libinput shell startup, crash-bundle recovery,
-  terminal/cube launchpad mapping, missing-Quake-asset handling,
-  shell-state JSON, and emulated QEMU HDA audio plumbing are proven in
-  builder-hosted QEMU.
+- The old image lab proved package repo, EngineDev image boot, EngineRuntime
+  autostart, recovery logs, launchpad mapping, missing-Quake-asset handling,
+  shell-state JSON, and emulated audio plumbing. That evidence is archived and
+  no longer drives active work.
 - Bare-metal EngineDev has the current shell/app stack deployed without an ISO
   rebuild, including pane-bounds app launch, game cursor capture, MC image
   preview, Quick View preview integration, and the Falkon startup crash fix.
@@ -53,27 +51,22 @@ are archived in
   Quake surface in Runtime.
 - Interactive Quake keyboard, mouse, and audible audio in a live Runtime
   console session with user assets.
-- Hardware GL shell startup proof on the AMD target. VM paths are useful smoke
-  tests only: the builder QEMU GL path lacks a render node and Hyper-V reports
-  llvmpipe.
+- Hardware GL shell startup proof on the AMD target.
 - Manual TrenchBroom GUI compile/run clicks. Setup generation, open-file smoke,
   and the equivalent compile/launch command path are proven.
 - Visual live MC Quick View acceptance capture with the real
   `engine-image-preview` and shell preview path.
-- Persistent Quake asset mounting across live ISO reboot.
-- Real USB write and Secure Boot boot with an enrolled EngineOS db certificate.
+- Persistent Quake asset handling outside generated ISO images.
+- Real Secure Boot and installer work only if explicitly re-enabled.
 
 ## Next Commands
 
-Runtime VM smoke before hardware:
+Bare-metal/source-checkout loop:
 
 ```bash
-cd /srv/engineos
-./tools/engineos/eos-build iso engineruntime --fast --clean --archive-existing
-./tools/engineos/eos-vm boot engineruntime --display none --background --ssh-port 2223 --audio hda
-sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'eos-proof booted-iso --runtime'
-sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'eos-app manifest validate'
-sshpass -p engineos ssh -p 2223 engineos@127.0.0.1 'eos-proof launchpad --runtime'
+./tools/engineos/eos-ci local --test agent --install --clean-generated --no-validate-repo
+eos-app manifest validate
+eos-proof shell-launch --bare-metal
 ```
 
 Bare-metal hardware gate:
@@ -81,7 +74,6 @@ Bare-metal hardware gate:
 ```bash
 eos-validate boot --bare-metal
 eos-proof shell-launch --bare-metal
-eos-proof booted-iso --bare-metal
 ```
 
 Agent and harness hygiene:

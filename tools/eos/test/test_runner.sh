@@ -150,6 +150,10 @@ run_agent() {
   local profile
   local skill
   local wrapper
+  local hook_root
+  local fake_eos_log
+  local hook_out
+  local missing_host_out
   local tmp_dir="${TMPDIR:-/tmp}/engineos-agent-test-$$"
 
   cleanup_agent() {
@@ -173,6 +177,15 @@ run_agent() {
     die "removed project MCP server still exists"
   grep -F 'tools/hooks/session_start.py' "$ROOT/.codex/hooks.example.json" >/dev/null ||
     die "Codex hook example does not reference the session-start hook"
+  [[ -x "$ROOT/tools/hooks/git_pre_push_deploy.sh" ]] ||
+    die "deploy-on-push helper is missing or not executable"
+  [[ -x "$ROOT/tools/hooks/install_git_push_deploy_hook.sh" ]] ||
+    die "deploy-on-push installer is missing or not executable"
+  bash -n "$ROOT/tools/hooks/git_pre_push_deploy.sh" "$ROOT/tools/hooks/install_git_push_deploy_hook.sh"
+  grep -F 'install_git_push_deploy_hook.sh' "$ROOT/.agents/skills/engineos/SKILL.md" >/dev/null ||
+    die "EngineOS skill does not explain deploy-on-push setup"
+  grep -F 'install_git_push_deploy_hook.sh' "$ROOT/tools/post-install-payload/assets/codex/engineos-dev-directives.md" >/dev/null ||
+    die "EngineDev directives do not explain deploy-on-push setup"
   grep -F 'docs/agent-roles.md' "$ROOT/docs/engineos-agent-pack.md" >/dev/null ||
     die "agent pack docs do not reference the role spec"
   grep -F 'agentd.md' "$ROOT/docs/engineos-agent-pack.md" >/dev/null ||
@@ -181,6 +194,45 @@ run_agent() {
     die "agent pack docs do not reference profile docs"
   grep -F '.agents/index.toml' "$ROOT/docs/engineos-agent-pack.md" >/dev/null ||
     die "agent pack docs do not reference the canonical agent index"
+
+  hook_root="$tmp_dir/hook-root"
+  fake_eos_log="$tmp_dir/fake-eos.log"
+  hook_out="$tmp_dir/hook.out"
+  mkdir -p "$hook_root/tools/hooks" "$hook_root/tools/engineos"
+  git init -q "$hook_root"
+  cp "$ROOT/tools/hooks/git_pre_push_deploy.sh" "$hook_root/tools/hooks/git_pre_push_deploy.sh"
+  cp "$ROOT/tools/hooks/install_git_push_deploy_hook.sh" "$hook_root/tools/hooks/install_git_push_deploy_hook.sh"
+  chmod 0755 "$hook_root/tools/hooks/git_pre_push_deploy.sh" \
+    "$hook_root/tools/hooks/install_git_push_deploy_hook.sh"
+
+  git -C "$hook_root" config engineos.deployCommand 'printf local-deploy >"$ENGINEOS_FAKE_EOS_LOG"'
+  ENGINEOS_FAKE_EOS_LOG="$fake_eos_log" \
+    bash -c 'cd "$1" && tools/hooks/git_pre_push_deploy.sh origin git@example.invalid:engineos.git' bash "$hook_root" >"$hook_out" <<'EOF'
+refs/heads/main 1111111111111111111111111111111111111111 refs/heads/main 0000000000000000000000000000000000000000
+EOF
+  grep -F 'local-deploy' "$fake_eos_log" >/dev/null ||
+    die "deploy-on-push hook did not run configured local deploy command"
+
+  rm -f "$fake_eos_log"
+  ENGINEOS_FAKE_EOS_LOG="$fake_eos_log" \
+    bash -c 'cd "$1" && tools/hooks/git_pre_push_deploy.sh origin git@example.invalid:engineos.git' bash "$hook_root" >"$hook_out" <<'EOF'
+refs/tags/v1.2.3 2222222222222222222222222222222222222222 refs/tags/v1.2.3 0000000000000000000000000000000000000000
+EOF
+  [[ ! -e "$fake_eos_log" ]] ||
+    die "deploy-on-push hook should skip tag-only pushes"
+
+  git -C "$hook_root" config engineos.deployHost dev@192.0.2.10
+  git -C "$hook_root" config engineos.deployDest /srv/engineos
+  git -C "$hook_root" config engineos.deployRunProof true
+  bash -c 'cd "$1" && tools/hooks/install_git_push_deploy_hook.sh --command "printf installed-local-deploy"' bash "$hook_root" >"$hook_out"
+  [[ -x "$hook_root/.git/hooks/pre-push" ]] ||
+    die "deploy-on-push installer did not write an executable pre-push hook"
+  grep -F 'EngineOS deploy-on-push hook' "$hook_root/.git/hooks/pre-push" >/dev/null ||
+    die "deploy-on-push installer wrote an unexpected hook"
+  [[ "$(git -C "$hook_root" config --get engineos.deployCommand)" == 'printf installed-local-deploy' ]] ||
+    die "deploy-on-push installer did not persist local deploy command"
+  [[ -z "$(git -C "$hook_root" config --get engineos.deployHost || true)" ]] ||
+    die "deploy-on-push installer left builder host config behind"
 
   for role in oracle overseer compiler admin-shell engine-builder pergame-quake cleaner; do
     [[ -f "$ROOT/.agents/roles/$role/AGENTS.md" ]] ||
