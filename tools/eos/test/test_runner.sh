@@ -1111,7 +1111,8 @@ PY
       WLR_BACKENDS=headless \
       WLR_HEADLESS_OUTPUTS=1 \
       WLR_RENDERER_ALLOW_SOFTWARE=1 \
-      "$shell_bin" --headless --smoke-ms 3000 >"$shell_log" 2>&1 &
+      "$shell_bin" --headless --smoke-ms 3000 \
+        --terminal-secondary true >"$shell_log" 2>&1 &
     shell_pid=$!
     for _ in {1..100}; do
       [[ -S "$shell_state/preview.sock" ]] && break
@@ -1124,6 +1125,18 @@ PY
     ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --view "$png" >"$out" 2>"$err"
     ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --view "$jpg" >"$out" 2>"$err"
     ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --hide >"$out" 2>"$err"
+    python - "$shell_state/preview.sock" <<'PY'
+import socket
+import sys
+path = sys.argv[1]
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+    client.settimeout(2.0)
+    client.connect(path)
+    client.sendall(b'{"version":1,"op":"launch","slot":"terminal-secondary"}\n')
+    response = client.recv(4096)
+if b'"status":"ok"' not in response:
+    raise SystemExit(f"unexpected shell IPC response: {response!r}")
+PY
     wait "$shell_pid"
     shell_pid=""
 
@@ -1133,6 +1146,8 @@ PY
       die "compiled shell did not decode and show JPEG preview"
     grep -F "image preview hidden reason=ipc-hide" "$shell_log" >/dev/null ||
       die "compiled shell did not hide image preview"
+    grep -F 'launchpad slot unavailable role=terminal-secondary action=launch-requested trigger=ipc-launch' "$shell_log" >/dev/null ||
+      die "compiled shell did not accept IPC slot launch"
   fi
 
   printf 'image preview contract test passed\n'
@@ -1312,6 +1327,63 @@ FAKE
     die "app launcher dry-run missing header"
   grep -F 'app:      terminal' "$out" >/dev/null ||
     die "app launcher dry-run missing app id"
+
+  cat >"$fake_bin/pkill" <<'FAKE'
+#!/usr/bin/env bash
+if [[ "$1" == "-HUP" && "$2" == "-x" && "$3" == "engineos-shell" ]]; then
+  exit 0
+fi
+exit 1
+FAKE
+  chmod +x "$fake_bin/pkill"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    "$SCRIPT_DIR/app.sh" recover preview >"$out"
+  grep -F 'requested shell IPC refresh' "$out" >/dev/null ||
+    die "app recover preview did not report IPC refresh"
+  grep -F 'pane sync notify=signal shell=engineos-shell' "$log_dir/app.log" >/dev/null ||
+    die "app recover preview did not notify the running shell"
+
+  local recover_sock="$tmp_dir/recover.sock"
+  python - "$recover_sock" "$tmp_dir/recover-request.txt" <<'PY' &
+import os
+import socket
+import sys
+sock_path = sys.argv[1]
+request_path = sys.argv[2]
+try:
+    os.unlink(sock_path)
+except FileNotFoundError:
+    pass
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(sock_path)
+server.listen(1)
+client, _ = server.accept()
+request = client.recv(4096)
+open(request_path, "wb").write(request)
+client.sendall(b'{"version":1,"status":"ok","capabilities":["launch"]}\n')
+client.close()
+server.close()
+PY
+  local recover_server_pid=$!
+  for _ in {1..50}; do
+    [[ -S "$recover_sock" ]] && break
+    sleep 0.02
+  done
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    ENGINEOS_SHELL_IPC_SOCKET="$recover_sock" \
+    "$SCRIPT_DIR/app.sh" recover terminal-secondary >"$out"
+  wait "$recover_server_pid"
+  grep -F 'requested terminal-secondary recovery through running shell' "$out" >/dev/null ||
+    die "app recover terminal-secondary did not report shell IPC launch"
+  grep -F '"op":"launch","slot":"terminal-secondary"' "$tmp_dir/recover-request.txt" >/dev/null ||
+    die "app recover terminal-secondary did not send shell IPC launch request"
+  grep -F 'app recover target=terminal-secondary role=terminal-secondary method=shell-ipc socket='"$recover_sock" "$log_dir/app.log" >/dev/null ||
+    die "app recover terminal-secondary did not log recovery request"
 
   printf '[2026-01-01T00:00:00Z] app launch app=terminal owner=engineos-shell display=engineos-test-wayland\n' >>"$log_dir/app.log"
   {

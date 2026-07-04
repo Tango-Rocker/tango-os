@@ -301,6 +301,9 @@ static void launch_or_activate_slot(struct engineos_shell_server *server,
 	enum engineos_surface_role role, const char *reason);
 static void write_shell_state(struct engineos_shell_server *server,
 	const char *reason);
+static bool init_preview_ipc(struct engineos_shell_server *server);
+static void close_preview_ipc(struct engineos_shell_server *server,
+	bool unlink_socket, bool free_path);
 
 static const char *mode_to_string(enum engineos_shell_mode mode) {
 	switch (mode) {
@@ -424,6 +427,13 @@ static int terminate_from_signal(int signal_number, void *data) {
 static int relayout_from_signal(int signal_number, void *data) {
 	struct engineos_shell_server *server = data;
 	wlr_log(WLR_INFO, "layout sync requested signal=%d", signal_number);
+	close_preview_ipc(server, true, true);
+	if (init_preview_ipc(server)) {
+		wlr_log(WLR_INFO, "preview ipc refreshed reason=layout-sync-signal");
+	} else {
+		wlr_log(WLR_ERROR,
+			"preview ipc refresh failed reason=layout-sync-signal");
+	}
 	apply_launchpad_visibility(server, "layout-sync-signal");
 	write_shell_state(server, "layout-sync-signal");
 	return 0;
@@ -1905,7 +1915,7 @@ static void preview_write_response(int client_fd, const char *status,
 	char response[1024];
 	if (strcmp(status, "ok") == 0) {
 		snprintf(response, sizeof(response),
-			"{\"version\":1,\"status\":\"ok\",\"capabilities\":[\"ping\",\"show\",\"hide\",\"png\",\"jpeg\",\"contain\"]}\n");
+			"{\"version\":1,\"status\":\"ok\",\"capabilities\":[\"ping\",\"show\",\"hide\",\"launch\",\"png\",\"jpeg\",\"contain\"]}\n");
 	} else {
 		char escaped[768];
 		size_t used = 0;
@@ -1955,6 +1965,21 @@ static void handle_preview_request(struct engineos_shell_server *server,
 			return;
 		}
 		hide_image_preview(server, "ipc-hide");
+		preview_write_response(client_fd, "ok", NULL);
+		return;
+	}
+	if (strcmp(op, "launch") == 0) {
+		char slot[64] = {0};
+		if (!json_extract_string(request, "slot", slot, sizeof(slot))) {
+			preview_write_response(client_fd, "error", "missing slot");
+			return;
+		}
+		enum engineos_surface_role role = parse_surface_role(slot);
+		if (!is_launchpad_role(role)) {
+			preview_write_response(client_fd, "error", "unsupported slot");
+			return;
+		}
+		launch_or_activate_slot(server, role, "ipc-launch");
 		preview_write_response(client_fd, "ok", NULL);
 		return;
 	}
@@ -2013,6 +2038,25 @@ static int preview_socket_event(int fd, uint32_t mask, void *data) {
 	handle_preview_request(server, client_fd, request);
 	close(client_fd);
 	return 0;
+}
+
+static void close_preview_ipc(struct engineos_shell_server *server,
+		bool unlink_socket, bool free_path) {
+	if (server->preview_socket_source != NULL) {
+		wl_event_source_remove(server->preview_socket_source);
+		server->preview_socket_source = NULL;
+	}
+	if (server->preview_socket_fd >= 0) {
+		close(server->preview_socket_fd);
+		server->preview_socket_fd = -1;
+	}
+	if (unlink_socket && server->preview_socket_path != NULL) {
+		unlink(server->preview_socket_path);
+	}
+	if (free_path && server->preview_socket_path != NULL) {
+		free(server->preview_socket_path);
+		server->preview_socket_path = NULL;
+	}
 }
 
 static bool init_preview_ipc(struct engineos_shell_server *server) {
@@ -4288,18 +4332,7 @@ static bool setup_server(struct engineos_shell_server *server) {
 
 static void destroy_server(struct engineos_shell_server *server) {
 	hide_image_preview(server, "shell-destroy");
-	if (server->preview_socket_source != NULL) {
-		wl_event_source_remove(server->preview_socket_source);
-		server->preview_socket_source = NULL;
-	}
-	if (server->preview_socket_fd >= 0) {
-		close(server->preview_socket_fd);
-		server->preview_socket_fd = -1;
-	}
-	if (server->preview_socket_path != NULL) {
-		free(server->preview_socket_path);
-		server->preview_socket_path = NULL;
-	}
+	close_preview_ipc(server, false, true);
 	if (!wl_list_empty(&server->launches)) {
 		struct engineos_shell_launch *launch;
 		struct engineos_shell_launch *tmp;

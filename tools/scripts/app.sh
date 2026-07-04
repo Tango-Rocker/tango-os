@@ -28,6 +28,7 @@ Usage: app.sh launch terminal [args...]
        app.sh launch terminal-secondary [args...]
        app.sh launch cube [--smoke]
        app.sh launch quake [--smoke] [--pane|--fullscreen|--output] [--map NAME] [--game MOD]
+       app.sh recover preview|terminal|terminal-secondary|cube|quake
        app.sh pane sync [--all|cube|engine|quake]
        app.sh status [--json]
        app.sh manifest path|show|validate
@@ -40,6 +41,8 @@ Quake launches from inside tmux default to the invoking pane's bounds. Use
 --fullscreen or --output to clear pane bounds for the launch.
 pane sync refreshes existing tmux-pane launch bounds and asks engineos-shell to
 re-layout mapped panel clients without restarting them.
+recover asks the running shell to refresh IPC or relaunch a shell-owned slot
+without restarting the compositor service.
 HELP
 }
 
@@ -386,6 +389,114 @@ notify_shell_layout_sync() {
 
   log_line "pane sync notify=failed reason=shell-not-running"
   return 1
+}
+
+shell_ipc_socket() {
+  if [[ -n "${ENGINEOS_SHELL_IPC_SOCKET:-}" ]]; then
+    printf '%s\n' "$ENGINEOS_SHELL_IPC_SOCKET"
+  elif [[ -n "${ENGINEOS_PREVIEW_SOCKET:-}" ]]; then
+    printf '%s\n' "$ENGINEOS_PREVIEW_SOCKET"
+  else
+    printf '%s/preview.sock\n' "$STATE_DIR"
+  fi
+}
+
+send_shell_ipc() {
+  local socket_path="$1"
+  local request="$2"
+  python - "$socket_path" "$request" <<'PY'
+import json
+import socket
+import sys
+
+socket_path = sys.argv[1]
+payload = (sys.argv[2] + "\n").encode("utf-8")
+try:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(2.0)
+        client.connect(socket_path)
+        client.sendall(payload)
+        chunks = []
+        while True:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            if b"\n" in chunk:
+                break
+except OSError as exc:
+    print(f"shell IPC unavailable at {socket_path}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+
+raw = b"".join(chunks).split(b"\n", 1)[0]
+if not raw:
+    print("shell IPC returned an empty response", file=sys.stderr)
+    raise SystemExit(1)
+try:
+    response = json.loads(raw.decode("utf-8"))
+except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    print(f"shell IPC returned invalid JSON: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+print(json.dumps(response, separators=(",", ":")))
+if response.get("status") != "ok":
+    print(response.get("error") or "shell IPC request failed", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
+recover_preview_ipc() {
+  if notify_shell_layout_sync; then
+    printf 'requested shell IPC refresh\n'
+    return 0
+  fi
+  return 1
+}
+
+recover_slot() {
+  local app="$1"
+  local role
+  local socket_path
+  local request
+
+  case "$app" in
+    terminal|terminal-secondary|cube)
+      role="$app"
+      ;;
+    engine|quake)
+      role="engine"
+      ;;
+    *)
+      die "unknown recover target: $app"
+      ;;
+  esac
+
+  recover_preview_ipc >/dev/null || return 1
+  sleep 0.1
+  socket_path="$(shell_ipc_socket)"
+  request="{\"version\":1,\"op\":\"launch\",\"slot\":\"$role\"}"
+  send_shell_ipc "$socket_path" "$request" >/dev/null
+  log_line "recover target=$app role=$role method=shell-ipc socket=$socket_path"
+  printf 'requested %s recovery through running shell\n' "$app"
+}
+
+run_recover() {
+  local target="${1:-}"
+  shift || true
+  [[ $# -eq 0 ]] || die "recover takes exactly one target"
+  case "$target" in
+    preview|ipc|mc)
+      recover_preview_ipc
+      ;;
+    terminal|terminal-secondary|cube|engine|quake)
+      recover_slot "$target"
+      ;;
+    help|--help|-h|"")
+      usage
+      ;;
+    *)
+      die "unknown recover target: $target"
+      ;;
+  esac
 }
 
 run_pane_sync() {
@@ -1029,6 +1140,9 @@ case "$ACTION" in
     ;;
   status)
     run_status "$@"
+    ;;
+  recover)
+    run_recover "$@"
     ;;
   pane)
     run_pane "$@"
