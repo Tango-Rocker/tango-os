@@ -1,6 +1,6 @@
 pkgname=engineos-shell
 pkgver=0.1.0
-pkgrel=9
+pkgrel=10
 pkgdesc="EngineOS wlroots shell bootstrap"
 arch=('x86_64')
 url="https://example.invalid/engineos"

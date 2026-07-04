@@ -151,6 +151,7 @@ struct engineos_shell_server {
 	struct wl_listener new_output;
 	struct wl_listener new_input;
 	struct wl_listener new_xdg_surface;
+	struct wl_listener new_xdg_popup;
 	struct wl_listener cursor_motion;
 	struct wl_listener cursor_motion_absolute;
 	struct wl_listener cursor_button;
@@ -213,6 +214,12 @@ struct engineos_shell_pointer {
 	struct engineos_shell_server *server;
 	struct wlr_input_device *device;
 	struct wlr_pointer *wlr_pointer;
+	struct wl_listener destroy;
+};
+
+struct engineos_shell_popup {
+	struct wlr_xdg_popup *xdg_popup;
+	struct wl_listener commit;
 	struct wl_listener destroy;
 };
 
@@ -4090,6 +4097,9 @@ static void xdg_surface_destroy(struct wl_listener *listener, void *data) {
 	if (server->pending_slot == view->role) {
 		server->pending_slot = ENGINEOS_SURFACE_UNKNOWN;
 	}
+	if (view->xdg_surface != NULL) {
+		view->xdg_surface->data = NULL;
+	}
 	if (view->scene_tree != NULL) {
 		wlr_scene_node_destroy(&view->scene_tree->node);
 	}
@@ -4149,6 +4159,65 @@ static void relative_pointer_new(struct wl_listener *listener, void *data) {
 			surface_role_name(server->focused_view->role) : "none");
 }
 
+static void xdg_popup_commit(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct engineos_shell_popup *popup =
+		wl_container_of(listener, popup, commit);
+
+	if (popup->xdg_popup->base->initial_commit) {
+		wlr_xdg_surface_schedule_configure(popup->xdg_popup->base);
+	}
+}
+
+static void xdg_popup_destroy(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct engineos_shell_popup *popup =
+		wl_container_of(listener, popup, destroy);
+
+	if (popup->xdg_popup != NULL && popup->xdg_popup->base != NULL) {
+		popup->xdg_popup->base->data = NULL;
+	}
+	wl_list_remove(&popup->commit.link);
+	wl_list_remove(&popup->destroy.link);
+	free(popup);
+}
+
+static void server_new_xdg_popup(struct wl_listener *listener, void *data) {
+	(void)listener;
+	struct wlr_xdg_popup *xdg_popup = data;
+	struct wlr_xdg_surface *parent =
+		wlr_xdg_surface_try_from_wlr_surface(xdg_popup->parent);
+
+	if (parent == NULL || parent->data == NULL) {
+		wlr_log(WLR_ERROR, "xdg popup missing parent scene tree");
+		return;
+	}
+
+	struct engineos_shell_popup *popup = calloc(1, sizeof(*popup));
+	if (popup == NULL) {
+		wlr_log(WLR_ERROR, "failed to allocate xdg popup state");
+		return;
+	}
+
+	struct wlr_scene_tree *parent_tree = parent->data;
+	struct wlr_scene_tree *popup_tree =
+		wlr_scene_xdg_surface_create(parent_tree, xdg_popup->base);
+	if (popup_tree == NULL) {
+		wlr_log(WLR_ERROR, "failed to allocate scene tree for xdg popup");
+		free(popup);
+		return;
+	}
+
+	popup->xdg_popup = xdg_popup;
+	xdg_popup->base->data = popup_tree;
+	popup->commit.notify = xdg_popup_commit;
+	wl_signal_add(&xdg_popup->base->surface->events.commit, &popup->commit);
+	popup->destroy.notify = xdg_popup_destroy;
+	wl_signal_add(&xdg_popup->events.destroy, &popup->destroy);
+
+	wlr_log(WLR_INFO, "xdg popup created");
+}
+
 static void server_new_xdg_surface(struct wl_listener *listener, void *data) {
 	struct engineos_shell_server *server =
 		wl_container_of(listener, server, new_xdg_surface);
@@ -4170,6 +4239,7 @@ static void server_new_xdg_surface(struct wl_listener *listener, void *data) {
 		free(view);
 		return;
 	}
+	xdg_surface->data = view->scene_tree;
 	view->scene_tree->node.data = view;
 	wlr_scene_node_set_enabled(&view->scene_tree->node, false);
 	wlr_scene_node_set_position(&view->scene_tree->node,
@@ -4307,6 +4377,8 @@ static bool setup_server(struct engineos_shell_server *server) {
 	}
 	server->new_xdg_surface.notify = server_new_xdg_surface;
 	wl_signal_add(&server->xdg_shell->events.new_toplevel, &server->new_xdg_surface);
+	server->new_xdg_popup.notify = server_new_xdg_popup;
+	wl_signal_add(&server->xdg_shell->events.new_popup, &server->new_xdg_popup);
 
 	server->seat = wlr_seat_create(server->display, "seat0");
 	if (server->seat == NULL) {
@@ -4352,6 +4424,7 @@ static void destroy_server(struct engineos_shell_server *server) {
 	remove_listener_if_linked(&server->new_output);
 	remove_listener_if_linked(&server->new_input);
 	remove_listener_if_linked(&server->new_xdg_surface);
+	remove_listener_if_linked(&server->new_xdg_popup);
 	remove_listener_if_linked(&server->cursor_motion);
 	remove_listener_if_linked(&server->cursor_motion_absolute);
 	remove_listener_if_linked(&server->cursor_button);
