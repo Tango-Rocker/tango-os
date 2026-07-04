@@ -49,6 +49,12 @@
 #ifndef XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION
 #define XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION 4
 #endif
+#ifndef XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION
+#define XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION 5
+#endif
+#ifndef XDG_TOPLEVEL_STATE_SUSPENDED_SINCE_VERSION
+#define XDG_TOPLEVEL_STATE_SUSPENDED_SINCE_VERSION 6
+#endif
 
 enum engineos_shell_mode {
 	ENGINEOS_SHELL_AUTO,
@@ -155,6 +161,9 @@ struct engineos_shell_server {
 	struct wl_listener new_pointer_constraint;
 	struct wl_listener active_pointer_constraint_destroy;
 	struct engineos_shell_view *focused_view;
+	struct engineos_shell_view *moving_view;
+	double move_grab_x;
+	double move_grab_y;
 	const char *mode_name;
 	const char *startup_cmd;
 	const char *terminal_cmd;
@@ -225,10 +234,26 @@ struct engineos_shell_view {
 	struct wl_listener unmap;
 	struct wl_listener commit;
 	struct wl_listener destroy;
+	struct wl_listener request_maximize;
 	struct wl_listener request_fullscreen;
+	struct wl_listener request_minimize;
+	struct wl_listener request_move;
+	struct wl_listener request_resize;
+	struct wl_listener request_show_window_menu;
 	enum engineos_surface_role role;
+	int x;
+	int y;
+	int width;
+	int height;
+	int saved_x;
+	int saved_y;
+	int saved_width;
+	int saved_height;
+	bool has_floating_geometry;
 	bool mapped;
 	bool fullscreen;
+	bool maximized;
+	bool minimized;
 };
 
 struct engineos_pixel_buffer {
@@ -249,6 +274,11 @@ static bool compute_view_geometry(struct engineos_shell_view *view,
 	struct engineos_view_geometry *geometry);
 static bool is_persistent_panel_geometry(enum engineos_surface_role role,
 	const struct engineos_view_geometry *geometry);
+static bool is_managed_floating_view(struct engineos_shell_view *view);
+static void apply_view_layout(struct engineos_shell_view *view);
+static void schedule_outputs(struct engineos_shell_server *server);
+static void set_toplevel_suspended(struct wlr_xdg_toplevel *toplevel,
+	bool suspended);
 static void clear_keyboard_focus(struct engineos_shell_server *server);
 static void clear_pointer_focus(struct engineos_shell_server *server,
 	const char *reason);
@@ -261,8 +291,6 @@ static void sync_pointer_constraint(struct engineos_shell_server *server,
 	const char *reason);
 static void set_view_activated(struct engineos_shell_view *view, bool activated);
 static void focus_view(struct engineos_shell_view *view);
-static void focus_matching_role(struct engineos_shell_server *server,
-	enum engineos_surface_role role);
 static void set_active_slot(struct engineos_shell_server *server,
 	enum engineos_surface_role role, const char *reason);
 static void apply_launchpad_visibility(struct engineos_shell_server *server,
@@ -781,6 +809,155 @@ static void output_geometry_for_role(struct engineos_shell_server *server,
 	}
 }
 
+static bool is_managed_floating_view(struct engineos_shell_view *view) {
+	return view != NULL && !is_launchpad_role(view->role);
+}
+
+static void ensure_floating_geometry(struct engineos_shell_view *view) {
+	if (view == NULL || view->has_floating_geometry) {
+		return;
+	}
+
+	int output_x = 0;
+	int output_y = 0;
+	int output_width = 1280;
+	int output_height = 720;
+	output_geometry_for_role(view->server, ENGINEOS_SURFACE_TERMINAL,
+		&output_x, &output_y, &output_width, &output_height);
+
+	int width = (output_width * 3) / 4;
+	int height = (output_height * 3) / 4;
+	if (width > 1200) {
+		width = 1200;
+	}
+	if (height > 820) {
+		height = 820;
+	}
+	if (output_width >= 720 && width < 640) {
+		width = 640;
+	}
+	if (output_height >= 560 && height < 480) {
+		height = 480;
+	}
+	if (width > output_width) {
+		width = output_width;
+	}
+	if (height > output_height) {
+		height = output_height;
+	}
+
+	int margin = output_width > 160 && output_height > 120 ? 40 : 0;
+	int available_x = output_width - width - margin;
+	int available_y = output_height - height - margin;
+	unsigned int index = view->server->view_count > 0 ?
+		view->server->view_count - 1 : 0;
+	int cascade = (int)(index * 32);
+
+	view->x = output_x + margin +
+		(available_x > 0 ? cascade % available_x : 0);
+	view->y = output_y + margin +
+		(available_y > 0 ? cascade % available_y : 0);
+	view->width = width;
+	view->height = height;
+	view->saved_x = view->x;
+	view->saved_y = view->y;
+	view->saved_width = view->width;
+	view->saved_height = view->height;
+	view->has_floating_geometry = true;
+}
+
+static void floating_output_geometry(struct engineos_shell_view *view,
+		int *x, int *y, int *width, int *height) {
+	output_geometry_for_role(view->server, ENGINEOS_SURFACE_TERMINAL,
+		x, y, width, height);
+}
+
+static void save_floating_geometry(struct engineos_shell_view *view) {
+	if (view == NULL || !view->has_floating_geometry) {
+		return;
+	}
+	if (view->maximized || view->fullscreen) {
+		return;
+	}
+	view->saved_x = view->x;
+	view->saved_y = view->y;
+	view->saved_width = view->width;
+	view->saved_height = view->height;
+}
+
+static void set_floating_maximized(struct engineos_shell_view *view,
+		bool maximized, const char *reason) {
+	if (!is_managed_floating_view(view)) {
+		return;
+	}
+	ensure_floating_geometry(view);
+	if (view->maximized == maximized) {
+		apply_view_layout(view);
+		return;
+	}
+
+	if (maximized) {
+		save_floating_geometry(view);
+		int x = 0;
+		int y = 0;
+		int width = 0;
+		int height = 0;
+		floating_output_geometry(view, &x, &y, &width, &height);
+		view->x = x;
+		view->y = y;
+		view->width = width;
+		view->height = height;
+		view->maximized = true;
+	} else {
+		view->maximized = false;
+		view->x = view->saved_x;
+		view->y = view->saved_y;
+		view->width = view->saved_width;
+		view->height = view->saved_height;
+	}
+
+	if (view->minimized) {
+		view->minimized = false;
+	}
+	wlr_log(WLR_INFO,
+		"window maximize role=%s maximized=%s reason=%s title=%s app_id=%s",
+		surface_role_name(view->role), view->maximized ? "true" : "false",
+		reason != NULL ? reason : "unspecified",
+		view_title(view), view_app_id(view));
+	apply_view_layout(view);
+	write_shell_state(view->server, reason != NULL ? reason : "window-maximize");
+}
+
+static void set_view_minimized(struct engineos_shell_view *view,
+		bool minimized, const char *reason) {
+	if (view == NULL || !view->mapped) {
+		return;
+	}
+	if (is_launchpad_role(view->role) && minimized) {
+		wlr_log(WLR_INFO,
+			"window minimize ignored role=%s reason=launchpad-slot title=%s app_id=%s",
+			surface_role_name(view->role), view_title(view), view_app_id(view));
+		return;
+	}
+	view->minimized = minimized;
+	wlr_scene_node_set_enabled(&view->scene_tree->node, !minimized);
+	if (view->xdg_surface != NULL && view->xdg_surface->toplevel != NULL) {
+		set_toplevel_suspended(view->xdg_surface->toplevel, minimized);
+	}
+	if (minimized && view->server->focused_view == view) {
+		view->server->focused_view = NULL;
+		set_view_activated(view, false);
+		wlr_seat_keyboard_notify_clear_focus(view->server->seat);
+	}
+	wlr_log(WLR_INFO,
+		"window minimize role=%s minimized=%s reason=%s title=%s app_id=%s",
+		surface_role_name(view->role), minimized ? "true" : "false",
+		reason != NULL ? reason : "unspecified",
+		view_title(view), view_app_id(view));
+	schedule_outputs(view->server);
+	write_shell_state(view->server, reason != NULL ? reason : "window-minimize");
+}
+
 static bool parse_nonnegative_int(const char *value, int *out) {
 	if (value == NULL || value[0] == '\0') {
 		return false;
@@ -843,7 +1020,7 @@ static bool read_layout_request(struct engineos_shell_server *server,
 			request->output = strcmp(value, "output") == 0;
 			request->fullscreen = strcmp(value, "fullscreen") == 0;
 		} else if (strcmp(key, "source") == 0) {
-			snprintf(request->source, sizeof(request->source), "%s", value);
+			snprintf(request->source, sizeof(request->source), "%.31s", value);
 		} else if (strcmp(key, "pane_left") == 0) {
 			parse_nonnegative_int(value, &request->pane_left);
 		} else if (strcmp(key, "pane_top") == 0) {
@@ -934,9 +1111,21 @@ static bool compute_view_geometry(struct engineos_shell_view *view,
 	geometry->layout = "floating";
 
 	if (!is_launchpad_role(view->role)) {
-		geometry->x = 40 + (int)(view->server->view_count * 24);
-		geometry->y = 40 + (int)(view->server->view_count * 24);
-		return false;
+		ensure_floating_geometry(view);
+		if (view->fullscreen) {
+			floating_output_geometry(view, &geometry->x, &geometry->y,
+				&geometry->width, &geometry->height);
+			geometry->fullscreen = true;
+			geometry->layout = "fullscreen";
+		} else {
+			geometry->x = view->x;
+			geometry->y = view->y;
+			geometry->width = view->width;
+			geometry->height = view->height;
+			geometry->fullscreen = false;
+			geometry->layout = view->maximized ? "maximized" : "floating";
+		}
+		return true;
 	}
 
 	output_geometry_for_role(view->server, view->role, &geometry->x,
@@ -987,6 +1176,9 @@ static bool view_geometry_visible(struct engineos_shell_server *server,
 		struct engineos_shell_view *view,
 		const struct engineos_view_geometry *geometry) {
 	if (view == NULL || !view->mapped) {
+		return false;
+	}
+	if (view->minimized) {
 		return false;
 	}
 	if (server->active_slot == view->role || is_terminal_role(view->role)) {
@@ -1732,7 +1924,11 @@ static void preview_write_response(int client_fd, const char *status,
 			"{\"version\":1,\"status\":\"error\",\"error\":\"%s\"}\n",
 			escaped);
 	}
-	(void)write(client_fd, response, strlen(response));
+	ssize_t written = write(client_fd, response, strlen(response));
+	if (written < 0) {
+		wlr_log(WLR_ERROR, "preview ipc response write failed: %s",
+			strerror(errno));
+	}
 }
 
 static void handle_preview_request(struct engineos_shell_server *server,
@@ -1945,7 +2141,40 @@ static void write_shell_state(struct engineos_shell_server *server,
 	write_slot_state(file, server, ENGINEOS_SURFACE_CUBE);
 	fprintf(file, ",\n");
 	write_slot_state(file, server, ENGINEOS_SURFACE_ENGINE);
-	fprintf(file, "\n  },\n  \"launches\": [");
+	fprintf(file, "\n  },\n  \"windows\": [");
+
+	bool first_window = true;
+	struct engineos_shell_view *view;
+	wl_list_for_each(view, &server->views, link) {
+		if (!view->mapped) {
+			continue;
+		}
+		struct engineos_view_geometry geometry = {0};
+		compute_view_geometry(view, &geometry);
+		bool visible = view_geometry_visible(server, view, &geometry);
+		if (!first_window) {
+			fprintf(file, ",");
+		}
+		first_window = false;
+		fprintf(file, "\n    {\"role\": ");
+		json_write_string(file, surface_role_name(view->role));
+		fprintf(file, ", \"focused\": %s, \"visible\": %s, \"minimized\": %s, \"maximized\": %s, \"layout\": ",
+			server->focused_view == view ? "true" : "false",
+			visible ? "true" : "false",
+			view->minimized ? "true" : "false",
+			view->maximized ? "true" : "false");
+		json_write_string(file, geometry.layout);
+		fprintf(file, ", \"x\": %d, \"y\": %d, \"width\": %d, \"height\": %d, \"title\": ",
+			geometry.x, geometry.y, geometry.width, geometry.height);
+		json_write_string(file, view_title(view));
+		fprintf(file, ", \"app_id\": ");
+		json_write_string(file, view_app_id(view));
+		fprintf(file, "}");
+	}
+	if (!first_window) {
+		fprintf(file, "\n  ");
+	}
+	fprintf(file, "],\n  \"launches\": [");
 
 	bool first = true;
 	struct engineos_shell_launch *launch;
@@ -2336,6 +2565,54 @@ static bool xdg_toplevel_supports_configure_bounds(
 		XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION;
 }
 
+static bool xdg_toplevel_supports_wm_capabilities(
+		struct wlr_xdg_toplevel *toplevel) {
+	if (toplevel == NULL || toplevel->resource == NULL ||
+			toplevel->base == NULL || toplevel->base->client == NULL ||
+			toplevel->base->client->shell == NULL) {
+		return false;
+	}
+	if (toplevel->base->client->shell->version <
+			XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION) {
+		return false;
+	}
+	return wl_resource_get_version(toplevel->resource) >=
+		XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION;
+}
+
+static void set_toplevel_wm_capabilities(struct wlr_xdg_toplevel *toplevel) {
+	if (!xdg_toplevel_supports_wm_capabilities(toplevel)) {
+		return;
+	}
+	wlr_xdg_toplevel_set_wm_capabilities(toplevel,
+		WLR_XDG_TOPLEVEL_WM_CAPABILITIES_MAXIMIZE |
+		WLR_XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN |
+		WLR_XDG_TOPLEVEL_WM_CAPABILITIES_MINIMIZE);
+}
+
+static bool xdg_toplevel_supports_suspended(
+		struct wlr_xdg_toplevel *toplevel) {
+	if (toplevel == NULL || toplevel->resource == NULL ||
+			toplevel->base == NULL || toplevel->base->client == NULL ||
+			toplevel->base->client->shell == NULL) {
+		return false;
+	}
+	if (toplevel->base->client->shell->version <
+			XDG_TOPLEVEL_STATE_SUSPENDED_SINCE_VERSION) {
+		return false;
+	}
+	return wl_resource_get_version(toplevel->resource) >=
+		XDG_TOPLEVEL_STATE_SUSPENDED_SINCE_VERSION;
+}
+
+static void set_toplevel_suspended(struct wlr_xdg_toplevel *toplevel,
+		bool suspended) {
+	if (!xdg_toplevel_supports_suspended(toplevel)) {
+		return;
+	}
+	wlr_xdg_toplevel_set_suspended(toplevel, suspended);
+}
+
 static void set_toplevel_geometry(struct wlr_xdg_toplevel *toplevel,
 		const struct engineos_view_geometry *geometry) {
 	if (toplevel == NULL || geometry == NULL) {
@@ -2371,6 +2648,16 @@ static void apply_view_layout(struct engineos_shell_view *view) {
 		break;
 	case ENGINEOS_SURFACE_UNKNOWN:
 	default:
+		if (view->xdg_surface != NULL &&
+				view->xdg_surface->toplevel != NULL) {
+			wlr_xdg_toplevel_set_fullscreen(view->xdg_surface->toplevel,
+				geometry.fullscreen);
+			wlr_xdg_toplevel_set_maximized(view->xdg_surface->toplevel,
+				view->maximized);
+			set_toplevel_suspended(view->xdg_surface->toplevel, view->minimized);
+			wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel,
+				geometry.width, geometry.height);
+		}
 		break;
 	}
 	wlr_scene_node_set_position(&view->scene_tree->node, geometry.x,
@@ -2384,9 +2671,13 @@ static void apply_view_layout(struct engineos_shell_view *view) {
 			surface_role_name(view->server->active_slot),
 			view_title(view), view_app_id(view));
 	} else {
-		wlr_log(WLR_INFO, "layout view role=%s x=%d y=%d title=%s app_id=%s",
-			surface_role_name(view->role), geometry.x, geometry.y, view_title(view),
-			view_app_id(view));
+		wlr_log(WLR_INFO,
+			"layout view role=%s layout=%s x=%d y=%d size=%dx%d maximized=%s minimized=%s title=%s app_id=%s",
+			surface_role_name(view->role), geometry.layout,
+			geometry.x, geometry.y, geometry.width, geometry.height,
+			view->maximized ? "true" : "false",
+			view->minimized ? "true" : "false",
+			view_title(view), view_app_id(view));
 	}
 }
 
@@ -2577,6 +2868,14 @@ static void focus_view(struct engineos_shell_view *view) {
 	}
 
 	struct engineos_shell_server *server = view->server;
+	if (view->minimized) {
+		view->minimized = false;
+		wlr_scene_node_set_enabled(&view->scene_tree->node, true);
+		if (view->xdg_surface != NULL && view->xdg_surface->toplevel != NULL) {
+			set_toplevel_suspended(view->xdg_surface->toplevel, false);
+		}
+		apply_view_layout(view);
+	}
 	if (server->focused_view != NULL && server->focused_view != view &&
 			server->focused_view->mapped) {
 		set_view_activated(server->focused_view, false);
@@ -2604,33 +2903,51 @@ static void focus_view(struct engineos_shell_view *view) {
 		surface_role_name(view->role), view_title(view), view_app_id(view));
 }
 
-static void focus_matching_role(struct engineos_shell_server *server,
-		enum engineos_surface_role role) {
-	struct engineos_shell_view *view;
-	wl_list_for_each(view, &server->views, link) {
-		if (view->mapped && view->role == role) {
-			focus_view(view);
-			return;
-		}
+static void activate_view(struct engineos_shell_view *view, const char *reason) {
+	if (view == NULL || !view->mapped) {
+		return;
 	}
 
-	wlr_log(WLR_INFO, "focus role unavailable mode=%s requested_role=%s",
-		input_mode_name(server->input_mode), surface_role_name(role));
-	clear_keyboard_focus(server);
+	struct engineos_shell_server *server = view->server;
+	if (is_launchpad_role(view->role)) {
+		set_active_slot(server, view->role, reason);
+		return;
+	}
+
+	server->game_capture = false;
+	server->input_mode = ENGINEOS_INPUT_TERMINAL;
+	if (view->minimized) {
+		view->minimized = false;
+		wlr_scene_node_set_enabled(&view->scene_tree->node, true);
+	}
+	focus_view(view);
+	sync_pointer_constraint(server, reason);
+	sync_cursor_image(server, reason);
+	write_shell_state(server, reason);
 }
 
-static void focus_next_view(struct engineos_shell_server *server) {
+static struct engineos_shell_view *first_mapped_view(
+		struct engineos_shell_server *server) {
+	struct engineos_shell_view *view;
+	wl_list_for_each(view, &server->views, link) {
+		if (view->mapped) {
+			return view;
+		}
+	}
+	return NULL;
+}
+
+static void focus_next_window(struct engineos_shell_server *server,
+		const char *reason) {
 	if (wl_list_empty(&server->views)) {
 		return;
 	}
 
 	struct engineos_shell_view *view;
 	if (server->focused_view == NULL) {
-		wl_list_for_each(view, &server->views, link) {
-			if (view->mapped) {
-				focus_view(view);
-				return;
-			}
+		view = first_mapped_view(server);
+		if (view != NULL) {
+			activate_view(view, reason);
 		}
 		return;
 	}
@@ -2638,19 +2955,22 @@ static void focus_next_view(struct engineos_shell_server *server) {
 	bool after_focused = false;
 	wl_list_for_each(view, &server->views, link) {
 		if (after_focused && view->mapped) {
-			focus_view(view);
+			activate_view(view, reason);
 			return;
 		}
 		if (view == server->focused_view) {
 			after_focused = true;
 		}
 	}
-	wl_list_for_each(view, &server->views, link) {
-		if (view->mapped) {
-			focus_view(view);
-			return;
-		}
+
+	view = first_mapped_view(server);
+	if (view != NULL) {
+		activate_view(view, reason);
+		return;
 	}
+
+	wlr_log(WLR_INFO, "window cycle ignored reason=no-mapped-windows trigger=%s",
+		reason != NULL ? reason : "unspecified");
 }
 
 static void launch_or_activate_slot(struct engineos_shell_server *server,
@@ -2678,34 +2998,54 @@ static void launch_or_activate_slot(struct engineos_shell_server *server,
 	spawn_command(server, surface_role_name(role), role, cmd);
 }
 
-static void cycle_launchpad_slot(struct engineos_shell_server *server,
+static void nudge_focused_window(struct engineos_shell_server *server,
+		int dx, int dy, const char *reason) {
+	struct engineos_shell_view *view = server->focused_view;
+	if (!is_managed_floating_view(view) || !view->mapped) {
+		wlr_log(WLR_INFO, "window move ignored reason=no-floating-focus trigger=%s",
+			reason != NULL ? reason : "unspecified");
+		return;
+	}
+	ensure_floating_geometry(view);
+	if (view->maximized) {
+		set_floating_maximized(view, false, reason);
+	}
+	view->x += dx;
+	view->y += dy;
+	save_floating_geometry(view);
+	apply_view_layout(view);
+	schedule_outputs(server);
+	wlr_log(WLR_INFO,
+		"window move role=%s x=%d y=%d trigger=%s title=%s app_id=%s",
+		surface_role_name(view->role), view->x, view->y,
+		reason != NULL ? reason : "unspecified",
+		view_title(view), view_app_id(view));
+	write_shell_state(server, reason != NULL ? reason : "window-move");
+}
+
+static void toggle_focused_maximized(struct engineos_shell_server *server,
 		const char *reason) {
-	static const enum engineos_surface_role slots[] = {
-		ENGINEOS_SURFACE_TERMINAL,
-		ENGINEOS_SURFACE_TERMINAL_SECONDARY,
-		ENGINEOS_SURFACE_CUBE,
-		ENGINEOS_SURFACE_ENGINE,
-	};
-	size_t count = sizeof(slots) / sizeof(slots[0]);
-	size_t start = count;
-
-	for (size_t i = 0; i < count; i++) {
-		if (slots[i] == server->active_slot) {
-			start = i;
-			break;
-		}
+	struct engineos_shell_view *view = server->focused_view;
+	if (!is_managed_floating_view(view) || !view->mapped) {
+		wlr_log(WLR_INFO, "window maximize ignored reason=no-floating-focus trigger=%s",
+			reason != NULL ? reason : "unspecified");
+		return;
 	}
+	set_floating_maximized(view, !view->maximized, reason);
+}
 
-	for (size_t offset = 1; offset <= count; offset++) {
-		enum engineos_surface_role role = slots[(start + offset) % count];
-		if (find_mapped_role(server, role) != NULL) {
-			set_active_slot(server, role, reason);
-			return;
-		}
+static void minimize_focused_window(struct engineos_shell_server *server,
+		const char *reason) {
+	struct engineos_shell_view *view = server->focused_view;
+	if (view == NULL || !view->mapped) {
+		wlr_log(WLR_INFO, "window minimize ignored reason=no-focus trigger=%s",
+			reason != NULL ? reason : "unspecified");
+		return;
 	}
-
-	wlr_log(WLR_INFO, "launchpad cycle ignored reason=no-mapped-slots trigger=%s",
-		reason != NULL ? reason : "unspecified");
+	set_view_minimized(view, true, reason);
+	if (view->minimized) {
+		focus_next_window(server, "minimized-focus-next");
+	}
 }
 
 static bool handle_keybinding(struct engineos_shell_server *server,
@@ -2766,10 +3106,41 @@ static bool handle_keybinding(struct engineos_shell_server *server,
 		wlr_log(WLR_INFO, "keybinding alt+f3: game mode");
 		set_input_mode(server, ENGINEOS_INPUT_GAME, "alt+f3");
 		return true;
+	case XKB_KEY_F9:
+		wlr_log(WLR_INFO, "keybinding alt+f9: minimize focused window");
+		minimize_focused_window(server, "alt+f9");
+		return true;
+	case XKB_KEY_F10:
+		wlr_log(WLR_INFO, "keybinding alt+f10: maximize focused window");
+		toggle_focused_maximized(server, "alt+f10");
+		return true;
 	case XKB_KEY_c:
 	case XKB_KEY_C:
 		wlr_log(WLR_INFO, "keybinding alt+c: toggle game capture");
 		toggle_game_capture(server);
+		return true;
+	case XKB_KEY_m:
+	case XKB_KEY_M:
+	case XKB_KEY_minus:
+		wlr_log(WLR_INFO, "keybinding alt+m/minus: minimize focused window");
+		minimize_focused_window(server, "alt+minimize");
+		return true;
+	case XKB_KEY_x:
+	case XKB_KEY_X:
+		wlr_log(WLR_INFO, "keybinding alt+x: maximize focused window");
+		toggle_focused_maximized(server, "alt+x");
+		return true;
+	case XKB_KEY_Left:
+		nudge_focused_window(server, -32, 0, "alt+left");
+		return true;
+	case XKB_KEY_Right:
+		nudge_focused_window(server, 32, 0, "alt+right");
+		return true;
+	case XKB_KEY_Up:
+		nudge_focused_window(server, 0, -32, "alt+up");
+		return true;
+	case XKB_KEY_Down:
+		nudge_focused_window(server, 0, 32, "alt+down");
 		return true;
 	case XKB_KEY_Return:
 		wlr_log(WLR_INFO, "keybinding alt+return: launch terminal");
@@ -2781,8 +3152,8 @@ static bool handle_keybinding(struct engineos_shell_server *server,
 		launch_or_activate_slot(server, ENGINEOS_SURFACE_ENGINE, "alt+g");
 		return true;
 	case XKB_KEY_Tab:
-		wlr_log(WLR_INFO, "keybinding alt+tab: cycle launchpad slot");
-		cycle_launchpad_slot(server, "alt+tab");
+		wlr_log(WLR_INFO, "keybinding alt+tab: cycle managed windows");
+		focus_next_window(server, "alt+tab");
 		return true;
 	default:
 		return false;
@@ -3022,6 +3393,41 @@ static void send_game_relative_motion(struct engineos_shell_server *server,
 		dx, dy, reason != NULL ? reason : "unspecified");
 }
 
+static void update_interactive_move(struct engineos_shell_server *server,
+		const char *reason) {
+	struct engineos_shell_view *view = server->moving_view;
+	if (!is_managed_floating_view(view) || !view->mapped) {
+		server->moving_view = NULL;
+		return;
+	}
+
+	view->x = (int)(server->cursor->x - server->move_grab_x);
+	view->y = (int)(server->cursor->y - server->move_grab_y);
+	save_floating_geometry(view);
+	apply_view_layout(view);
+	schedule_outputs(server);
+	wlr_log(WLR_DEBUG,
+		"window interactive-move role=%s x=%d y=%d reason=%s title=%s app_id=%s",
+		surface_role_name(view->role), view->x, view->y,
+		reason != NULL ? reason : "unspecified",
+		view_title(view), view_app_id(view));
+}
+
+static void end_interactive_move(struct engineos_shell_server *server,
+		const char *reason) {
+	if (server->moving_view == NULL) {
+		return;
+	}
+	struct engineos_shell_view *view = server->moving_view;
+	server->moving_view = NULL;
+	wlr_log(WLR_INFO,
+		"window move complete role=%s x=%d y=%d reason=%s title=%s app_id=%s",
+		surface_role_name(view->role), view->x, view->y,
+		reason != NULL ? reason : "unspecified",
+		view_title(view), view_app_id(view));
+	write_shell_state(server, reason != NULL ? reason : "window-move-complete");
+}
+
 static void cursor_handle_motion(struct wl_listener *listener, void *data) {
 	struct engineos_shell_server *server =
 		wl_container_of(listener, server, cursor_motion);
@@ -3029,6 +3435,10 @@ static void cursor_handle_motion(struct wl_listener *listener, void *data) {
 
 	wlr_cursor_move(server->cursor, &event->pointer->base,
 		event->delta_x, event->delta_y);
+	if (server->moving_view != NULL) {
+		update_interactive_move(server, "pointer-motion");
+		return;
+	}
 	cursor_log_event(server, "motion", event->pointer);
 	if (cursor_update_pointer_focus(server, event->time_msec, "motion")) {
 		sync_pointer_constraint(server, "motion");
@@ -3045,6 +3455,10 @@ static void cursor_handle_motion_absolute(struct wl_listener *listener, void *da
 
 	wlr_cursor_warp_absolute(server->cursor, &event->pointer->base,
 		event->x, event->y);
+	if (server->moving_view != NULL) {
+		update_interactive_move(server, "pointer-motion-absolute");
+		return;
+	}
 	cursor_log_event(server, "motion-absolute", event->pointer);
 	cursor_update_pointer_focus(server, event->time_msec, "motion-absolute");
 }
@@ -3055,6 +3469,10 @@ static void cursor_handle_button(struct wl_listener *listener, void *data) {
 	struct wlr_pointer_button_event *event = data;
 
 	cursor_log_event(server, "button", event->pointer);
+	if (event->state == WL_POINTER_BUTTON_STATE_RELEASED &&
+			server->moving_view != NULL) {
+		end_interactive_move(server, "pointer-button-release");
+	}
 	if (event->state == WL_POINTER_BUTTON_STATE_PRESSED &&
 			!server->game_capture) {
 		struct wlr_surface *surface = NULL;
@@ -3381,9 +3799,8 @@ static void xdg_surface_map(struct wl_listener *listener, void *data) {
 		wlr_log(WLR_INFO, "launchpad unknown view excluded title=%s app_id=%s",
 			view_title(view), view_app_id(view));
 		wlr_scene_node_set_enabled(&view->scene_tree->node, true);
-		if (view->server->focused_view == NULL &&
-				view->server->input_mode != ENGINEOS_INPUT_SHELL) {
-			focus_view(view);
+		if (view->server->input_mode != ENGINEOS_INPUT_SHELL) {
+			activate_view(view, "floating-view-mapped");
 		}
 	}
 	wlr_log(WLR_INFO, "view mapped role=%s title=%s app_id=%s mapped_total=%u",
@@ -3397,6 +3814,9 @@ static void xdg_surface_unmap(struct wl_listener *listener, void *data) {
 	struct engineos_shell_view *view = wl_container_of(listener, view, unmap);
 	view->mapped = false;
 	wlr_scene_node_set_enabled(&view->scene_tree->node, false);
+	if (view->server->moving_view == view) {
+		view->server->moving_view = NULL;
+	}
 	if (view->server->focused_view == view) {
 		view->server->focused_view = NULL;
 		set_view_activated(view, false);
@@ -3433,6 +3853,7 @@ static void xdg_surface_commit(struct wl_listener *listener, void *data) {
 	if (view->xdg_surface->initial_commit &&
 			view->xdg_surface->toplevel != NULL) {
 		view->role = classify_view_role(view);
+		set_toplevel_wm_capabilities(view->xdg_surface->toplevel);
 		if (is_launchpad_role(view->role)) {
 			struct engineos_view_geometry geometry = {0};
 			compute_view_geometry(view, &geometry);
@@ -3444,7 +3865,10 @@ static void xdg_surface_commit(struct wl_listener *listener, void *data) {
 					geometry.width, geometry.height);
 			}
 		} else {
-			wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel, 0, 0);
+			struct engineos_view_geometry geometry = {0};
+			compute_view_geometry(view, &geometry);
+			wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel,
+				geometry.width, geometry.height);
 		}
 		wlr_log(WLR_INFO, "view initial configure role=%s title=%s app_id=%s",
 			surface_role_name(view->role), view_title(view), view_app_id(view));
@@ -3462,6 +3886,11 @@ static void xdg_toplevel_request_fullscreen(struct wl_listener *listener,
 	}
 
 	view->fullscreen = view->xdg_surface->toplevel->requested.fullscreen;
+	if (is_managed_floating_view(view) && view->fullscreen) {
+		save_floating_geometry(view);
+		view->maximized = false;
+		view->minimized = false;
+	}
 	wlr_log(WLR_INFO,
 		"view fullscreen request role=%s fullscreen=%s title=%s app_id=%s",
 		surface_role_name(view->role),
@@ -3474,6 +3903,114 @@ static void xdg_toplevel_request_fullscreen(struct wl_listener *listener,
 	write_shell_state(view->server, "fullscreen-request");
 }
 
+static void xdg_toplevel_request_maximize(struct wl_listener *listener,
+		void *data) {
+	(void)data;
+	struct engineos_shell_view *view =
+		wl_container_of(listener, view, request_maximize);
+
+	if (view->xdg_surface == NULL || view->xdg_surface->toplevel == NULL) {
+		return;
+	}
+
+	bool requested = view->xdg_surface->toplevel->requested.maximized;
+	if (is_managed_floating_view(view)) {
+		view->fullscreen = false;
+		set_floating_maximized(view, requested, "maximize-request");
+	} else {
+		view->maximized = requested;
+		wlr_xdg_toplevel_set_maximized(view->xdg_surface->toplevel,
+			view->maximized);
+		apply_view_layout(view);
+		write_shell_state(view->server, "maximize-request");
+	}
+}
+
+static void xdg_toplevel_request_minimize(struct wl_listener *listener,
+		void *data) {
+	(void)data;
+	struct engineos_shell_view *view =
+		wl_container_of(listener, view, request_minimize);
+
+	if (view->xdg_surface == NULL || view->xdg_surface->toplevel == NULL) {
+		return;
+	}
+
+	set_view_minimized(view,
+		view->xdg_surface->toplevel->requested.minimized,
+		"minimize-request");
+	if (view->minimized) {
+		focus_next_window(view->server, "minimized-focus-next");
+	}
+}
+
+static void xdg_toplevel_request_move(struct wl_listener *listener,
+		void *data) {
+	(void)data;
+	struct engineos_shell_view *view =
+		wl_container_of(listener, view, request_move);
+
+	if (!is_managed_floating_view(view) || !view->mapped || view->minimized) {
+		wlr_log(WLR_INFO,
+			"window move request ignored role=%s reason=not-floating title=%s app_id=%s",
+			surface_role_name(view->role), view_title(view), view_app_id(view));
+		return;
+	}
+
+	ensure_floating_geometry(view);
+	if (view->fullscreen) {
+		view->fullscreen = false;
+		view->x = view->saved_x;
+		view->y = view->saved_y;
+		view->width = view->saved_width;
+		view->height = view->saved_height;
+	}
+	if (view->maximized) {
+		set_floating_maximized(view, false, "move-request-unmaximize");
+	}
+	int vx = 0;
+	int vy = 0;
+	if (!wlr_scene_node_coords(&view->scene_tree->node, &vx, &vy)) {
+		vx = view->x;
+		vy = view->y;
+	}
+	view->server->moving_view = view;
+	view->server->move_grab_x = view->server->cursor->x - vx;
+	view->server->move_grab_y = view->server->cursor->y - vy;
+	activate_view(view, "move-request");
+	wlr_log(WLR_INFO,
+		"window move request role=%s grab=%.1f,%.1f title=%s app_id=%s",
+		surface_role_name(view->role),
+		view->server->move_grab_x, view->server->move_grab_y,
+		view_title(view), view_app_id(view));
+}
+
+static void xdg_toplevel_request_resize(struct wl_listener *listener,
+		void *data) {
+	(void)data;
+	struct engineos_shell_view *view =
+		wl_container_of(listener, view, request_resize);
+
+	if (view->xdg_surface == NULL || view->xdg_surface->toplevel == NULL) {
+		return;
+	}
+	wlr_xdg_toplevel_set_resizing(view->xdg_surface->toplevel, false);
+	apply_view_layout(view);
+	wlr_log(WLR_INFO,
+		"window resize request acknowledged role=%s reason=manual-resize-unimplemented title=%s app_id=%s",
+		surface_role_name(view->role), view_title(view), view_app_id(view));
+}
+
+static void xdg_toplevel_request_show_window_menu(struct wl_listener *listener,
+		void *data) {
+	(void)data;
+	struct engineos_shell_view *view =
+		wl_container_of(listener, view, request_show_window_menu);
+	wlr_log(WLR_INFO,
+		"window menu request ignored role=%s reason=no-shell-menu title=%s app_id=%s",
+		surface_role_name(view->role), view_title(view), view_app_id(view));
+}
+
 static void xdg_surface_destroy(struct wl_listener *listener, void *data) {
 	(void)data;
 	struct engineos_shell_view *view = wl_container_of(listener, view, destroy);
@@ -3484,6 +4021,9 @@ static void xdg_surface_destroy(struct wl_listener *listener, void *data) {
 	if (server->focused_view == view) {
 		server->focused_view = NULL;
 		wlr_seat_keyboard_notify_clear_focus(server->seat);
+	}
+	if (server->moving_view == view) {
+		server->moving_view = NULL;
 	}
 	if (view->role == ENGINEOS_SURFACE_ENGINE && server->game_capture) {
 		server->game_capture = false;
@@ -3501,7 +4041,12 @@ static void xdg_surface_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&view->unmap.link);
 	wl_list_remove(&view->commit.link);
 	wl_list_remove(&view->destroy.link);
+	wl_list_remove(&view->request_maximize.link);
 	wl_list_remove(&view->request_fullscreen.link);
+	wl_list_remove(&view->request_minimize.link);
+	wl_list_remove(&view->request_move.link);
+	wl_list_remove(&view->request_resize.link);
+	wl_list_remove(&view->request_show_window_menu.link);
 	if (server->view_count > 0) {
 		server->view_count--;
 	}
@@ -3580,9 +4125,23 @@ static void server_new_xdg_surface(struct wl_listener *listener, void *data) {
 	wl_signal_add(&xdg_surface->surface->events.commit, &view->commit);
 	view->destroy.notify = xdg_surface_destroy;
 	wl_signal_add(&toplevel->events.destroy, &view->destroy);
+	view->request_maximize.notify = xdg_toplevel_request_maximize;
+	wl_signal_add(&toplevel->events.request_maximize,
+		&view->request_maximize);
 	view->request_fullscreen.notify = xdg_toplevel_request_fullscreen;
 	wl_signal_add(&toplevel->events.request_fullscreen,
 		&view->request_fullscreen);
+	view->request_minimize.notify = xdg_toplevel_request_minimize;
+	wl_signal_add(&toplevel->events.request_minimize,
+		&view->request_minimize);
+	view->request_move.notify = xdg_toplevel_request_move;
+	wl_signal_add(&toplevel->events.request_move, &view->request_move);
+	view->request_resize.notify = xdg_toplevel_request_resize;
+	wl_signal_add(&toplevel->events.request_resize, &view->request_resize);
+	view->request_show_window_menu.notify =
+		xdg_toplevel_request_show_window_menu;
+	wl_signal_add(&toplevel->events.request_show_window_menu,
+		&view->request_show_window_menu);
 	wl_list_insert(&server->views, &view->link);
 	server->view_count++;
 
@@ -3684,7 +4243,7 @@ static bool setup_server(struct engineos_shell_server *server) {
 	wl_list_init(&server->keyboards);
 	wl_list_init(&server->pointers);
 	server->xdg_shell = wlr_xdg_shell_create(server->display,
-		XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION);
+		XDG_TOPLEVEL_STATE_SUSPENDED_SINCE_VERSION);
 	if (server->xdg_shell == NULL) {
 		wlr_log(WLR_ERROR, "failed to create xdg-shell global");
 		return false;
