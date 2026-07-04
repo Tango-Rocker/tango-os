@@ -1,0 +1,105 @@
+diff --git a/src/filemanager/layout.c b/src/filemanager/layout.c
+index ad27811f6..efe174986 100644
+--- a/src/filemanager/layout.c
++++ b/src/filemanager/layout.c
+@@ -1207,6 +1207,7 @@ create_panel (int num, panel_view_mode_t type)
+                     file_name = fe->fname->str;
+             }
+
++            mcview_engineos_quick_preview_update (file_name);
+             mcview_load ((WView *) new_widget, 0, file_name, 0, 0, 0);
+             break;
+         }
+diff --git a/src/viewer/actions_cmd.c b/src/viewer/actions_cmd.c
+index 3cd8f75eb..43b43a3c3 100644
+--- a/src/viewer/actions_cmd.c
++++ b/src/viewer/actions_cmd.c
+@@ -45,6 +45,7 @@
+ #include <config.h>
+
+ #include <stdlib.h>
++#include <string.h>
+
+ #include "lib/global.h"
+
+@@ -97,6 +98,58 @@ mcview_remove_ext_script (WView *view)
+
+ /* --------------------------------------------------------------------------------------------- */
+
++static gboolean
++mcview_engineos_is_preview_image (const char *file)
++{
++    const char *suffix;
++
++    if (file == NULL)
++        return FALSE;
++
++    suffix = strrchr (file, '.');
++    if (suffix == NULL)
++        return FALSE;
++
++    return g_ascii_strcasecmp (suffix, ".png") == 0
++        || g_ascii_strcasecmp (suffix, ".jpg") == 0
++        || g_ascii_strcasecmp (suffix, ".jpeg") == 0;
++}
++
++/* --------------------------------------------------------------------------------------------- */
++
++void
++mcview_engineos_quick_preview_update (const char *file)
++{
++    gchar *show_argv[] = {
++        "engine-image-preview",
++        "--quick-view",
++        (gchar *) file,
++        "--panel",
++        "right",
++        NULL
++    };
++    gchar *hide_argv[] = { "engine-image-preview", "--hide", NULL };
++    GError *error = NULL;
++
++    if (!mcview_engineos_is_preview_image (file))
++    {
++        (void) g_spawn_async (NULL, hide_argv, NULL,
++                              G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL
++                                  | G_SPAWN_STDERR_TO_DEV_NULL,
++                              NULL, NULL, NULL, &error);
++        g_clear_error (&error);
++        return;
++    }
++
++    (void) g_spawn_async (NULL, show_argv, NULL,
++                          G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL
++                              | G_SPAWN_STDERR_TO_DEV_NULL,
++                          NULL, NULL, NULL, &error);
++    g_clear_error (&error);
++}
++
++/* --------------------------------------------------------------------------------------------- */
++
+ static void
+ mcview_continue_search_cmd (WView *view)
+ {
+@@ -158,6 +211,8 @@ mcview_hook (void *v)
+     if (fe == NULL)
+         return;
+
++    mcview_engineos_quick_preview_update (fe->fname->str);
++
+     mcview_done (view);
+     mcview_init (view);
+     mcview_load (view, 0, fe->fname->str, 0, 0, 0);
+diff --git a/src/viewer/mcviewer.h b/src/viewer/mcviewer.h
+index e9b8577db..097cea675 100644
+--- a/src/viewer/mcviewer.h
++++ b/src/viewer/mcviewer.h
+@@ -50,6 +50,8 @@ extern gboolean mcview_viewer (const char *command, const vfs_path_t * file_vpat
+ extern gboolean mcview_load (WView * view, const char *command, const char *file, int start_line,
+                              off_t search_start, off_t search_end);
+
++extern void mcview_engineos_quick_preview_update (const char *file);
++
+ extern void mcview_clear_mode_flags (mcview_mode_flags_t * flags);
+
+ /*** inline functions ****************************************************************************/
