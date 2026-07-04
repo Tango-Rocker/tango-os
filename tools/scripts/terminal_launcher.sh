@@ -15,17 +15,120 @@ LOG_DIR="${ENGINEOS_LOG_DIR:-$(engineos_default_log_dir "$ROOT")}"
 usage() {
   cat <<'HELP'
 Usage: terminal_launcher.sh [--dry-run] [--print-command] [--] [terminal-args...]
+       terminal_launcher.sh save-layout [--dry-run]
 
 Launch the first available Wayland graphical terminal. ENGINEOS_TERMINAL_CMD
 overrides auto-detection. ENGINEOS_TERMINAL_CANDIDATES can override the fallback
 list. ENGINEOS_TERMINAL_SESSION_CMD runs a shell command inside terminals that
 support an argv separator, such as foot.
+
+save-layout records the current tmux sessions, windows, panes, layouts, and
+restart commands through tmux-resurrect. The EngineOS tmux config restores the
+saved layout automatically on future logins.
 HELP
 }
 
 log_line() {
   mkdir -p "$LOG_DIR"
   printf '[%s] terminal %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG_DIR/terminal.log"
+}
+
+find_resurrect_save_script() {
+  local candidate
+
+  for candidate in \
+      "${ENGINEOS_TMUX_RESURRECT_SAVE_SCRIPT:-}" \
+      /usr/share/tmux/plugins/tmux-resurrect/scripts/save.sh \
+      "$HOME/.tmux/plugins/tmux-resurrect/scripts/save.sh" \
+      "$HOME/.config/tmux/plugins/tmux-resurrect/scripts/save.sh"; do
+    [[ -n "$candidate" ]] || continue
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+cmd_save_layout() {
+  local dry_run=false
+  local save_script=""
+  local session_count=""
+  local hostname_dir=""
+  local save_status=0
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run)
+        dry_run=true
+        ;;
+      help|--help|-h)
+        cat <<'HELP'
+Usage: eos-terminal save-layout [--dry-run]
+
+Save the current tmux sessions/windows/panes as the login default. The
+EngineOS shell-owned terminal monitors attach to their restored tmux sessions
+on the next login.
+HELP
+        return 0
+        ;;
+      *)
+        printf 'eos-terminal: unknown save-layout option: %s\n' "$1" >&2
+        return 2
+        ;;
+    esac
+    shift
+  done
+
+  if ! have_cmd tmux; then
+    printf 'eos-terminal: tmux is required to save the terminal layout.\n' >&2
+    return 127
+  fi
+
+  if ! session_count="$(tmux list-sessions 2>/dev/null | wc -l)"; then
+    printf 'eos-terminal: no tmux server is running; open the EngineOS terminal first.\n' >&2
+    return 1
+  fi
+
+  if ! save_script="$(find_resurrect_save_script)"; then
+    printf 'eos-terminal: tmux-resurrect save script is missing. Install engineos-tmux-plugins.\n' >&2
+    return 127
+  fi
+
+  if [[ "$dry_run" == true ]]; then
+    printf 'EngineOS terminal save-layout dry-run\n'
+    printf '  tmux sessions: %s\n' "$session_count"
+    printf '  save script:   %s\n' "$save_script"
+    printf '  restore:       enabled by EngineOS tmux config\n'
+    return 0
+  fi
+
+  tmux set-option -gq @continuum-restore on
+  tmux set-option -gq @resurrect-capture-pane-contents off
+  tmux set-option -gq @resurrect-processes ':all:'
+
+  if ! have_cmd hostname; then
+    hostname_dir="$(mktemp -d "${TMPDIR:-/tmp}/engineos-hostname.XXXXXX")"
+    cat >"$hostname_dir/hostname" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "${HOSTNAME:-engineos}"
+EOF
+    chmod 0755 "$hostname_dir/hostname"
+  fi
+
+  if [[ -n "$hostname_dir" ]]; then
+    PATH="$hostname_dir:$PATH" "$save_script" || save_status=$?
+    rm -rf "$hostname_dir"
+  else
+    "$save_script" || save_status=$?
+  fi
+  if [[ "$save_status" -ne 0 ]]; then
+    printf 'eos-terminal: tmux-resurrect save failed with status %s.\n' "$save_status" >&2
+    return "$save_status"
+  fi
+  log_line "saved tmux layout sessions=$session_count script=$save_script"
+  printf 'Saved current tmux layout as the EngineOS login default.\n'
 }
 
 terminal_candidates() {
@@ -98,6 +201,14 @@ terminal_metadata_args() {
       ;;
   esac
 }
+
+case "${1:-}" in
+  save|save-layout)
+    shift || true
+    cmd_save_layout "$@"
+    exit $?
+    ;;
+esac
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

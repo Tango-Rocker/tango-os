@@ -2166,6 +2166,49 @@ FAKE
   grep -F 'command: alacritty' "$out" >/dev/null ||
     die "eos-terminal did not route to terminal launcher"
 
+  cat >"$fake_bin/tmux" <<'FAKE'
+#!/usr/bin/env bash
+printf 'tmux %s\n' "$*" >>"$ENGINEOS_FAKE_TMUX_LOG"
+case "$1" in
+  list-sessions)
+    printf 'engineos: 2 windows\n'
+    ;;
+esac
+FAKE
+  chmod +x "$fake_bin/tmux"
+  mkdir -p "$tmp_dir/tmux-resurrect/scripts"
+  cat >"$tmp_dir/tmux-resurrect/scripts/save.sh" <<'FAKE'
+#!/usr/bin/env bash
+printf 'resurrect-save\n' >>"$ENGINEOS_FAKE_TMUX_LOG"
+FAKE
+  chmod +x "$tmp_dir/tmux-resurrect/scripts/save.sh"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_FAKE_TMUX_LOG="$tmp_dir/tmux.log" \
+    ENGINEOS_TMUX_RESURRECT_SAVE_SCRIPT="$tmp_dir/tmux-resurrect/scripts/save.sh" \
+    "$ROOT/tools/engineos/eos-terminal" save-layout --dry-run >"$out"
+  grep -F 'tmux sessions: 1' "$out" >/dev/null ||
+    die "eos-terminal save-layout dry-run did not count tmux sessions"
+  grep -F "$tmp_dir/tmux-resurrect/scripts/save.sh" "$out" >/dev/null ||
+    die "eos-terminal save-layout dry-run did not report save script"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_FAKE_TMUX_LOG="$tmp_dir/tmux.log" \
+    ENGINEOS_TMUX_RESURRECT_SAVE_SCRIPT="$tmp_dir/tmux-resurrect/scripts/save.sh" \
+    "$ROOT/tools/engineos/eos-terminal" save-layout >"$out"
+  grep -F 'tmux set-option -gq @continuum-restore on' "$tmp_dir/tmux.log" >/dev/null ||
+    die "eos-terminal save-layout did not enable tmux continuum restore"
+  grep -F 'tmux set-option -gq @resurrect-capture-pane-contents off' "$tmp_dir/tmux.log" >/dev/null ||
+    die "eos-terminal save-layout did not disable pane content capture"
+  grep -F "tmux set-option -gq @resurrect-processes :all:" "$tmp_dir/tmux.log" >/dev/null ||
+    die "eos-terminal save-layout did not enable process restore"
+  grep -F 'resurrect-save' "$tmp_dir/tmux.log" >/dev/null ||
+    die "eos-terminal save-layout did not run tmux-resurrect save"
+  grep -F 'saved tmux layout sessions=1' "$log_dir/terminal.log" >/dev/null ||
+    die "eos-terminal save-layout did not log the saved layout"
+
   printf 'terminal launcher smoke test passed\n'
 }
 
@@ -2923,6 +2966,12 @@ run_post_first_deploy() {
     die "post-first-deploy tmux config does not wire EngineOS pane sync hooks"
   grep -F 'after-select-pane' "$payload_dir/assets/tmux.conf" >/dev/null ||
     die "post-first-deploy tmux config does not sync after pane selection"
+  grep -F "set -g @continuum-restore 'on'" "$payload_dir/assets/tmux.conf" >/dev/null ||
+    die "post-first-deploy tmux config does not auto-restore saved layouts"
+  grep -F "set -g @resurrect-capture-pane-contents 'off'" "$payload_dir/assets/tmux.conf" >/dev/null ||
+    die "post-first-deploy tmux config should avoid brittle pane content capture"
+  grep -F "set -g @resurrect-processes ':all:'" "$payload_dir/assets/tmux.conf" >/dev/null ||
+    die "post-first-deploy tmux config does not persist pane commands"
   if grep -F 'eos-app pane sync --all >/dev/null 2>&1 || true' "$payload_dir/assets/tmux.conf" >/dev/null ||
       grep -F 'eos-app pane sync >/dev/null 2>&1 || true' "$payload_dir/assets/tmux.conf" >/dev/null; then
     die "post-first-deploy tmux config silently ignores pane sync failures"
