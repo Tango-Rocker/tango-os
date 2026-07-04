@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import json
 import os
 import socket
@@ -12,6 +13,7 @@ from pathlib import Path
 
 MAX_FILE_BYTES = 100 * 1024 * 1024
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+PREVIEW_PANELS = {"left", "right", "active"}
 
 
 def error(message: str, code: int = 1) -> int:
@@ -59,6 +61,23 @@ def owner_token() -> str:
         return override
     pane = os.environ.get("TMUX_PANE") or "no-pane"
     return f"{os.getppid()}:{os.getpid()}:{pane}"
+
+
+def quick_view_panel(cli_panel: str | None = None) -> str:
+    value = cli_panel or os.environ.get("ENGINEOS_MC_PREVIEW_PANEL") or "right"
+    if value not in PREVIEW_PANELS:
+        return "right"
+    return value
+
+
+def quick_view_owner_token(panel: str) -> str:
+    override = os.environ.get("ENGINEOS_PREVIEW_OWNER")
+    if override:
+        return override
+    pane = os.environ.get("TMUX_PANE") or "no-pane"
+    mc_pid = mc_ancestor_pid() or os.getppid()
+    slot = shell_slot() or "terminal"
+    return f"mc-quick-view:{mc_pid}:{pane}:{slot}:{panel}"
 
 
 def process_exists(pid: int) -> bool:
@@ -196,6 +215,23 @@ def tmux_bounds() -> dict[str, int] | None:
     }
 
 
+def preview_panel_bounds(bounds: dict[str, int], panel: str) -> dict[str, int]:
+    if panel == "active":
+        return bounds
+    left_width = max(1, bounds["width"] // 2)
+    if panel == "left":
+        return {
+            **bounds,
+            "width": left_width,
+        }
+    right_width = max(1, bounds["width"] - left_width)
+    return {
+        **bounds,
+        "x": bounds["x"] + left_width,
+        "width": right_width,
+    }
+
+
 def build_request(args: argparse.Namespace) -> tuple[dict[str, object] | None, str | None]:
     if args.ping:
         return {"version": 1, "op": "ping"}, None
@@ -205,26 +241,31 @@ def build_request(args: argparse.Namespace) -> tuple[dict[str, object] | None, s
             request["owner"] = args.owner
         return request, None
 
-    raw_path = args.view or args.open
+    raw_path = args.view or args.open or args.quick_view
     if raw_path is None:
-        return None, "expected --view PATH, --open PATH, --hide, or --ping"
+        return None, "expected --view PATH, --open PATH, --quick-view PATH, --hide, or --ping"
     path, path_error = validate_image_path(raw_path)
     if path_error is not None or path is None:
         return None, path_error
 
+    panel = quick_view_panel(args.panel) if args.quick_view else "active"
     request: dict[str, object] = {
         "version": 1,
         "op": "show",
         "path": str(path),
-        "anchor": "active-pane",
+        "anchor": "mc-preview-panel" if args.quick_view else "active-pane",
         "fit": "contain",
-        "owner": args.owner or owner_token(),
+        "owner": args.owner or (
+            quick_view_owner_token(panel) if args.quick_view else owner_token()
+        ),
     }
     slot = shell_slot()
     if slot is not None:
         request["slot"] = slot
     bounds = tmux_bounds()
     if bounds is not None:
+        if args.quick_view:
+            bounds = preview_panel_bounds(bounds, panel)
         request["bounds"] = bounds
     return request, None
 
@@ -265,9 +306,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--view", metavar="PATH", help="show an image from MC View")
     action.add_argument("--open", metavar="PATH", help="show an image from MC Open")
+    action.add_argument(
+        "--quick-view",
+        metavar="PATH",
+        help="show an image from MC Quick View selection updates",
+    )
     action.add_argument("--hide", action="store_true", help="hide the active preview")
     action.add_argument("--ping", action="store_true", help="check shell preview IPC")
     parser.add_argument("--socket", help="override the shell preview socket path")
+    parser.add_argument(
+        "--panel",
+        choices=sorted(PREVIEW_PANELS),
+        help="Quick View panel to cover when tmux bounds are available",
+    )
     parser.add_argument("--owner", help=argparse.SUPPRESS)
     parser.add_argument("--wait-pid", type=int, help=argparse.SUPPRESS)
     parser.add_argument(
@@ -307,6 +358,55 @@ def start_parent_watcher(parent_pid: int, owner: str, sock_path: str) -> None:
     )
 
 
+def watcher_state_dir() -> Path:
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime_dir:
+        return Path(runtime_dir) / "engineos" / "preview-watchers"
+    return Path("/tmp/engineos/preview-watchers")
+
+
+def start_parent_watcher_once(parent_pid: int, owner: str, sock_path: str) -> None:
+    if parent_pid <= 1:
+        return
+    try:
+        state_dir = watcher_state_dir()
+        state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError:
+        start_parent_watcher(parent_pid, owner, sock_path)
+        return
+
+    digest = hashlib.sha256(owner.encode("utf-8")).hexdigest()[:24]
+    pid_file = state_dir / f"{digest}.pid"
+    try:
+        old_pid = int(pid_file.read_text(encoding="utf-8").strip())
+        if process_exists(old_pid):
+            return
+    except (OSError, ValueError):
+        pass
+
+    watcher = subprocess.Popen(
+        [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--hide",
+            "--owner",
+            owner,
+            "--wait-pid",
+            str(parent_pid),
+            "--socket",
+            sock_path,
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        pid_file.write_text(f"{watcher.pid}\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     sock_path = args.socket or preview_socket_path()
@@ -331,6 +431,8 @@ def main(argv: list[str]) -> int:
         print("engine-image-preview: shell preview IPC ready", file=sys.stderr)
         if caps:
             print("engine-image-preview: capabilities=" + ",".join(map(str, caps)), file=sys.stderr)
+    elif args.quick_view and parent_looks_like_mc():
+        start_parent_watcher_once(mc_ancestor_pid() or os.getppid(), str(request["owner"]), sock_path)
     elif (args.view or args.open) and parent_looks_like_mc():
         start_parent_watcher(mc_ancestor_pid() or os.getppid(), str(request["owner"]), sock_path)
     return 0

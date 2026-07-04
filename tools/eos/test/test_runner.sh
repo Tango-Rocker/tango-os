@@ -1021,6 +1021,34 @@ FAKE
       die "image preview dry-run did not include tmux bounds field $field"
   done
 
+  PATH="$fake_bin:$PATH" \
+    TMUX_PANE="%1" \
+    "$preview_bin" --quick-view "$png" --panel right --dry-run >"$out"
+  grep -F '"anchor":"mc-preview-panel"' "$out" >/dev/null ||
+    die "image preview quick-view did not request preview panel anchor"
+  for field in '"x":50' '"y":5' '"width":40' '"height":24' '"window_width":160' '"window_height":48'; do
+    grep -F "$field" "$out" >/dev/null ||
+      die "image preview quick-view right panel did not include bounds field $field"
+  done
+  grep -F '"owner":"mc-quick-view:' "$out" >/dev/null ||
+    die "image preview quick-view did not use a stable MC owner token"
+
+  PATH="$fake_bin:$PATH" \
+    TMUX_PANE="%1" \
+    "$preview_bin" --quick-view "$png" --panel left --dry-run >"$out"
+  for field in '"x":10' '"y":5' '"width":40' '"height":24'; do
+    grep -F "$field" "$out" >/dev/null ||
+      die "image preview quick-view left panel did not include bounds field $field"
+  done
+
+  PATH="$fake_bin:$PATH" \
+    TMUX_PANE="%1" \
+    "$preview_bin" --quick-view "$png" --panel active --dry-run >"$out"
+  for field in '"x":10' '"y":5' '"width":80' '"height":24'; do
+    grep -F "$field" "$out" >/dev/null ||
+      die "image preview quick-view active panel did not include bounds field $field"
+  done
+
   if "$preview_bin" --view "$tmp_dir/missing.png" --dry-run >"$out" 2>"$err"; then
     die "image preview accepted missing path"
   fi

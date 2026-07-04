@@ -171,6 +171,28 @@ e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeO
   `terminal-secondary` preview placement at `x=1920` on the second output,
   stale-owner hide rejection, watcher-triggered hide, and working
   `engine-image-preview --ping`.
+- Source and the live EngineDev helper now include MC Quick View preview-panel
+  mode: `engine-image-preview --quick-view PATH --panel right|left|active`
+  sends `mc-preview-panel` requests, narrows tmux bounds to the selected panel
+  half by default, uses a stable MC/tmux owner token so Up/Down selection
+  changes replace the same preview, and starts only one MC-exit watcher per
+  Quick View owner. The live `dev` MC PNG/JPEG `View=` rules now call
+  `engine-image-preview --quick-view %f --panel right`; `engineos-tools
+  0.1.0-6` has been rebuilt and installed so `/usr/bin/engine-image-preview` is
+  package-owned by pacman. The live `dev` MC config keeps
+  `use_internal_view=true` and uses `%view{ascii}` for PNG/JPEG `View=` so F3
+  runs MC extension preprocessing instead of falling back to a raw external
+  pager that displays image bytes as binary.
+- Bare-metal EngineDev now has a local MC Quick View selection-update patch
+  deployed as `mc 4.8.33-2`. The tracked patch is
+  `packages/mc/patches/engineos-quick-view-preview.patch`; it keeps MC's normal
+  internal quick-view loading intact, but calls
+  `engine-image-preview --quick-view FILE --panel right` for PNG/JPEG
+  selections and `engine-image-preview --hide` for other selections. A tmux
+  disposable MC smoke test with a fake `engine-image-preview` proved Quick View
+  emits `--hide` on `..`, then `--quick-view alpha.png --panel right` and
+  `--quick-view beta.png --panel right` after Down/Down selection changes, with
+  no fresh `mc` coredumps after the narrowed patch.
 - The EngineDev shell relaunch path now refreshes the Wayland session before
   starting a new shell: the dev-shell wrapper terminates stale same-user
   `engineos-shell` processes, removes stale `wayland-*` runtime sockets, and
@@ -229,8 +251,10 @@ e4547a916d59765e962e7b0766ba3f18175f5cfd46e020df504451c8a2d7add2  EngineRuntimeO
 - Real audible output is not proven in the current Hyper-V/basic QEMU path. Hyper-V is not presenting a sound device to Linux, and the QEMU HDA proof uses an audio discard backend; prove audible output on hardware or an audio-forwarding VM/RDP path.
 - Accelerated VM graphics are not available in the current lab VM paths: the builder QEMU GL path fails without a host DRM render node, and the Hyper-V test guest reports llvmpipe.
 - Visible hardware/frame-capture proof of the Runtime shell is still missing; the current Runtime proof is headless QEMU evidence from logs, state JSON, and app renderer/frame logs.
-- MC image preview still needs an interactive live MC acceptance pass and a
-  captured shell frame showing a known image rendered in the active MC pane.
+- MC image preview still needs a visual live MC Quick View acceptance capture:
+  use the real `engine-image-preview`/shell path, move Up/Down across PNG/JPEG
+  files, confirm the shell-owned preview updates in the right MC panel, and
+  capture a frame with a known image.
 - Runtime launchpad with user-provided Quake assets is not proven yet, so the engine slot has not mapped as a live Quake surface in Runtime.
 - Real USB writing to removable media.
 - Secure Boot signed-ISO boot with an enrolled EngineOS db certificate. The signed ISO artifact exists and verifies locally, but target firmware enrollment and a real USB boot have not been executed yet.
