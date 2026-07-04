@@ -37,6 +37,11 @@ These are historical proof artifacts only; they are not the active work path:
   rebuild, including pane-bounds app launch, game cursor capture, MC image
   preview, Quick View preview integration, and the Falkon startup crash fix.
   The live shell package is `engineos-shell 0.1.0-8`.
+- Bare-metal EngineDev has a systemd-boot fallback entry,
+  `enginedev-restore-engineos-20260704.conf`, pointing at copied
+  `/boot/vmlinuz-linux-restore-engineos-20260704` and
+  `/boot/initramfs-linux-restore-engineos-20260704.img`. The normal default
+  remains `enginedev.conf`.
 - EngineDev-only Quake level-agent V1 is live-proven without an ISO rebuild:
   terminal `serve/build/status/load` works, Quake console
   `agent` / `agent_status` / `agent_load` works through the tracked

@@ -250,6 +250,10 @@ cmd_install() {
     dev)
       exec_eos_module bare-metal/install_dev.sh "$@"
       ;;
+    restore-point|restore)
+      shift || true
+      exec_eos_module bare-metal/create_restore_point.sh "$@"
+      ;;
     guide|installation-guide|install-guide)
       shift || true
       exec_script installation_guide.sh "$@"
@@ -258,6 +262,7 @@ cmd_install() {
       cat <<'HELP'
 Usage:
   eos-install dev --dry-run [--device <block-device>] [options]
+  eos-install restore-point [--label <name>] [--default] [--dry-run]
   eos-install guide
 HELP
       ;;

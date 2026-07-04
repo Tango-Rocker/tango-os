@@ -48,6 +48,7 @@ Usage: test_runner.sh [smoke|all]
        test_runner.sh update-check
        test_runner.sh installation-guide
        test_runner.sh install
+       test_runner.sh restore-point
        test_runner.sh proof
        test_runner.sh installed-preflight
        test_runner.sh ci
@@ -2744,6 +2745,81 @@ FAKE
   printf 'EngineDev installer dry-run test passed\n'
 }
 
+run_restore_point() {
+  local tmp_dir="${TMPDIR:-/tmp}/engineos-restore-point-test-$$"
+  local boot_dir="$tmp_dir/boot"
+  local fake_bin="$tmp_dir/bin"
+  local out="$tmp_dir/restore.txt"
+  local log="$tmp_dir/commands.log"
+
+  cleanup_restore_point() {
+    rm -rf "$tmp_dir"
+  }
+  trap cleanup_restore_point RETURN
+
+  mkdir -p "$boot_dir/loader/entries" "$fake_bin"
+  printf 'kernel\n' >"$boot_dir/vmlinuz-linux"
+  printf 'initramfs\n' >"$boot_dir/initramfs-linux.img"
+  cat >"$boot_dir/loader/loader.conf" <<'EOF_LOADER'
+default enginedev.conf
+timeout 8
+console-mode max
+editor no
+EOF_LOADER
+  cat >"$boot_dir/loader/entries/enginedev.conf" <<'EOF_ENTRY'
+title EngineDev OS
+linux /vmlinuz-linux
+initrd /initramfs-linux.img
+options root=UUID=00000000-0000-4000-8000-000000000000 rw
+EOF_ENTRY
+  cat >"$fake_bin/sudo" <<'FAKE'
+#!/usr/bin/env bash
+printf 'sudo %s\n' "$*" >>"$ENGINEOS_FAKE_RESTORE_LOG"
+exec "$@"
+FAKE
+  chmod +x "$fake_bin/sudo"
+
+  ENGINEOS_BOOT_DIR="$boot_dir" \
+    "$BARE_METAL_DIR/create_restore_point.sh" --label "Before Shell Update" --dry-run >"$out"
+  grep -F 'DRY-RUN sudo install -m 0644' "$out" >/dev/null ||
+    die "restore-point dry-run did not show kernel copy"
+  grep -F 'title EngineDev OS restore before-shell-update' "$out" >/dev/null ||
+    die "restore-point dry-run did not sanitize label in title"
+  grep -F 'options root=UUID=00000000-0000-4000-8000-000000000000 rw' "$out" >/dev/null ||
+    die "restore-point dry-run did not preserve root options"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_BOOT_DIR="$boot_dir" \
+    ENGINEOS_FAKE_RESTORE_LOG="$log" \
+    "$BARE_METAL_DIR/create_restore_point.sh" --label "Before Shell Update" --default >"$out"
+
+  [[ -f "$boot_dir/vmlinuz-linux-restore-before-shell-update" ]] ||
+    die "restore-point did not copy kernel"
+  [[ -f "$boot_dir/initramfs-linux-restore-before-shell-update.img" ]] ||
+    die "restore-point did not copy initramfs"
+  grep -F 'linux /vmlinuz-linux-restore-before-shell-update' "$boot_dir/loader/entries/enginedev-restore-before-shell-update.conf" >/dev/null ||
+    die "restore-point entry does not point at restore kernel"
+  grep -F 'initrd /initramfs-linux-restore-before-shell-update.img' "$boot_dir/loader/entries/enginedev-restore-before-shell-update.conf" >/dev/null ||
+    die "restore-point entry does not point at restore initramfs"
+  grep -F 'default enginedev-restore-before-shell-update.conf' "$boot_dir/loader/loader.conf" >/dev/null ||
+    die "restore-point --default did not update loader default"
+
+  if PATH="$fake_bin:$PATH" \
+    ENGINEOS_BOOT_DIR="$boot_dir" \
+    ENGINEOS_FAKE_RESTORE_LOG="$log" \
+    "$BARE_METAL_DIR/create_restore_point.sh" --label "Before Shell Update" >"$tmp_dir/duplicate.txt" 2>"$tmp_dir/duplicate.err"; then
+    die "restore-point should reject duplicate labels"
+  fi
+  grep -F 'restore point already exists for label: before-shell-update' "$tmp_dir/duplicate.err" >/dev/null ||
+    die "restore-point duplicate error was not clear"
+
+  "$ROOT/tools/engineos/eos-install" restore-point --help >"$out"
+  grep -F 'Create a systemd-boot restore entry' "$out" >/dev/null ||
+    die "eos-install restore-point did not dispatch to restore helper"
+
+  printf 'EngineDev restore-point test passed\n'
+}
+
 run_proof() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-proof-test-$$"
 
@@ -3891,6 +3967,9 @@ case "$SCOPE" in
     ;;
   install)
     run_install
+    ;;
+  restore-point)
+    run_restore_point
     ;;
   proof)
     run_proof
