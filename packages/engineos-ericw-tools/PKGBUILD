@@ -1,0 +1,47 @@
+pkgname=engineos-ericw-tools
+pkgver=0.18.2_rc1
+pkgrel=2
+pkgdesc="ericw-tools Quake map compiler suite for EngineOS level generation"
+arch=('x86_64')
+url="https://github.com/ericwa/ericw-tools"
+license=('custom:EngineOS-TBD')
+depends=()
+makedepends=('git' 'cmake' 'ninja' 'gcc' 'groff')
+_tag='v0.18.2-rc1'
+source=("$pkgname::git+https://github.com/ericwa/ericw-tools.git#tag=$_tag"
+        "engineos-enable-bsp-light-backend.patch")
+sha256sums=('SKIP'
+            'SKIP')
+
+prepare() {
+  cd "$srcdir/$pkgname"
+  git submodule update --init --recursive
+  git apply "$srcdir/engineos-enable-bsp-light-backend.patch"
+  sed -i 's|size = offsetof(winding_t, p\[w->numpoints\]);|size = offsetof(winding_t, p) + sizeof(((winding_t *)0)->p[0]) * w->numpoints;|' common/polylib.cc
+  sed -i 's|size = offsetof(winding_t, points\[w->numpoints\]);|size = offsetof(winding_t, points) + sizeof(((winding_t *)0)->points[0]) * w->numpoints;|' qbsp/winding.cc vis/vis.cc
+  sed -i 's|size = offsetof(winding_t, points\[points\]);|size = offsetof(winding_t, points) + sizeof(((winding_t *)0)->points[0]) * points;|' vis/vis.cc
+  sed -i 's|size = (size_t)((winding_t *)0)->p\[w->numpoints\];|size = offsetof(winding_t, p) + sizeof(((winding_t *)0)->p[0]) * w->numpoints;|' qbsp3/common/polylib.cc
+  sed -i 's|cSize = offsetof(winding_t, points\[cElements\]) + sizeof(int);|cSize = offsetof(winding_t, points) + sizeof(((winding_t *)0)->points[0]) * cElements + sizeof(int);|' qbsp/util.cc
+}
+
+build() {
+  cmake -S "$srcdir/$pkgname" -B "$srcdir/build" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -DCMAKE_INSTALL_PREFIX=/usr
+  cmake --build "$srcdir/build"
+}
+
+package() {
+  local tool
+  local path
+  for tool in qbsp vis light bspinfo bsputil; do
+    path="$(find "$srcdir/build" -type f -perm -111 -name "$tool" -print -quit)"
+    [[ -n "$path" ]] || {
+      printf 'missing ericw-tools binary after build: %s\n' "$tool" >&2
+      exit 1
+    }
+    install -Dm755 "$path" "$pkgdir/usr/bin/$tool"
+  done
+  install -Dm644 "$startdir/../../LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ -f "$SCRIPT_DIR/engineos_level_agent.py" ]]; then
+  exec python "$SCRIPT_DIR/engineos_level_agent.py" "$@"
+fi
+exec python /usr/lib/engineos/level-agent/engineos_level_agent.py "$@"

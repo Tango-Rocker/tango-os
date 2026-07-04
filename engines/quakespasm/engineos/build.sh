@@ -15,6 +15,11 @@ MP3LIB="${QUAKESPASM_MP3LIB:-mpg123}"
 VORBISLIB="${QUAKESPASM_VORBISLIB:-vorbis}"
 DRY_RUN=false
 FETCH=false
+if [[ -d "$ROOT/engines/quakespasm/engineos/patches" ]]; then
+  PATCH_DIR="$ROOT/engines/quakespasm/engineos/patches"
+else
+  PATCH_DIR="/usr/share/engineos/quake/patches"
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,6 +54,9 @@ if [[ "$DRY_RUN" == true ]]; then
     printf '  fetch:    %s/engines/quakespasm/engineos/fetch.sh\n' "$ROOT"
   fi
   printf '  command:  make -C %s USE_SDL2=1 MP3LIB=%s VORBISLIB=%s -j%s\n' "$BUILD_DIR" "$MP3LIB" "$VORBISLIB" "$JOBS"
+  if [[ -d "$PATCH_DIR" ]]; then
+    printf '  patches:  %s/*.patch\n' "$PATCH_DIR"
+  fi
   exit 0
 fi
 
@@ -89,6 +97,29 @@ fi
   printf 'QuakeSpasm build directory is missing: %s\n' "$BUILD_DIR" >&2
   exit 1
 }
+
+apply_engineos_patches() {
+  local patch
+  [[ -d "$PATCH_DIR" ]] || return 0
+  command -v git >/dev/null 2>&1 || {
+    printf 'git is required to apply EngineOS QuakeSpasm patches\n' >&2
+    exit 1
+  }
+  for patch in "$PATCH_DIR"/*.patch; do
+    [[ -e "$patch" ]] || continue
+    if git -C "$UPSTREAM" apply --check "$patch" >/dev/null 2>&1; then
+      git -C "$UPSTREAM" apply "$patch"
+      printf 'Applied QuakeSpasm patch: %s\n' "$patch" | tee -a "$LOG_DIR/engine-build.log"
+    elif git -C "$UPSTREAM" apply --reverse --check "$patch" >/dev/null 2>&1; then
+      printf 'QuakeSpasm patch already applied: %s\n' "$patch" | tee -a "$LOG_DIR/engine-build.log"
+    else
+      printf 'QuakeSpasm patch failed to apply cleanly: %s\n' "$patch" >&2
+      exit 1
+    fi
+  done
+}
+
+apply_engineos_patches
 
 {
   printf '[%s] build quakespasm\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"

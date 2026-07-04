@@ -15,6 +15,8 @@ BIN=""
 BIN_SOURCE=""
 SMOKE=false
 ID1_PATH=""
+MAP_NAME=""
+GAME_NAME=""
 QUAKE_ARGS=()
 CLI_QUAKE_ARGS=()
 CHILD_PID=""
@@ -145,6 +147,7 @@ while [[ $# -gt 0 ]]; do
     --help|-h)
       cat <<'HELP'
 Usage: run.sh [--smoke] [--window|--fullscreen] [--width N] [--height N]
+              [--map NAME] [--game MOD]
 
 Run QuakeSpasm through the EngineOS wrapper.
 
@@ -176,6 +179,22 @@ HELP
         exit 2
       }
       CLI_QUAKE_ARGS+=("-height" "$1")
+      ;;
+    --map)
+      shift
+      [[ -n "${1:-}" && "$1" =~ ^[A-Za-z0-9_.-]+$ ]] || {
+        printf 'quakespasm run: --map expects a map name containing only letters, numbers, dot, underscore, or dash\n' >&2
+        exit 2
+      }
+      MAP_NAME="$1"
+      ;;
+    --game)
+      shift
+      [[ -n "${1:-}" && "$1" =~ ^[A-Za-z0-9_.-]+$ ]] || {
+        printf 'quakespasm run: --game expects a mod name containing only letters, numbers, dot, underscore, or dash\n' >&2
+        exit 2
+      }
+      GAME_NAME="$1"
       ;;
     *)
       printf 'quakespasm run: unknown option: %s\n' "$1" >&2
@@ -224,6 +243,12 @@ resolve_binary
 load_quake_config
 append_configured_quake_args
 append_cli_quake_args
+if [[ -n "$GAME_NAME" ]]; then
+  QUAKE_ARGS+=("-game" "$GAME_NAME")
+fi
+if [[ -n "$MAP_NAME" ]]; then
+  QUAKE_ARGS+=("+map" "$MAP_NAME")
+fi
 
 if [[ -n "${ENGINEOS_QUAKE_SDL_AUDIODRIVER:-}" && -z "${SDL_AUDIODRIVER:-}" ]]; then
   export SDL_AUDIODRIVER="$ENGINEOS_QUAKE_SDL_AUDIODRIVER"

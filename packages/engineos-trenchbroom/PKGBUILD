@@ -1,0 +1,38 @@
+pkgname=engineos-trenchbroom
+pkgver=2026.1
+pkgrel=1
+pkgdesc="TrenchBroom level editor built from source for EngineOS"
+arch=('x86_64')
+url="https://github.com/TrenchBroom/TrenchBroom"
+license=('custom:EngineOS-TBD')
+depends=('qt6-base' 'qt6-svg' 'glew' 'glu' 'freeglut' 'glm' 'freetype2' 'tinyxml2' 'libxi' 'libxrandr' 'libxxf86vm' 'mesa')
+makedepends=('git' 'cmake' 'ninja' 'gcc' 'pandoc' 'p7zip' 'pkgconf' 'curl' 'qt6-tools')
+_tag='v2026.1'
+source=("$pkgname::git+https://github.com/TrenchBroom/TrenchBroom.git#tag=$_tag"
+        "engineos-trenchbroom.desktop")
+sha256sums=('SKIP'
+            'SKIP')
+
+prepare() {
+  cd "$srcdir/$pkgname"
+  git submodule update --init --recursive
+  sed -i '/"name": "freeimage"/,/}/ s/\("version>=": "3.18.0#25"\),/\1/' vcpkg.json
+  sed -i '/"name": "freeimage"/,/}/ {/"platform": "!linux"/d;}' vcpkg.json
+  sed -i '/"name": "freetype"/,/}/ s/\("version>=": "2.11.1"\),/\1/' vcpkg.json
+  sed -i '/"name": "freetype"/,/}/ {/"platform": "!linux"/d;}' vcpkg.json
+}
+
+build() {
+  cmake -S "$srcdir/$pkgname" -B "$srcdir/build" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_PREFIX_PATH=/usr \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DTB_SUPPRESS_UPDATE_NOTIFICATION=ON
+  cmake --build "$srcdir/build" --target TrenchBroom
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install "$srcdir/build"
+  install -Dm644 "$srcdir/engineos-trenchbroom.desktop" "$pkgdir/usr/share/applications/engineos-trenchbroom.desktop"
+  install -Dm644 "$startdir/../../LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

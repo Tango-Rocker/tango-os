@@ -1,0 +1,61 @@
+diff --git a/light/trace.cc b/light/trace.cc
+index 6db9e2d..5b4dd8f 100644
+--- a/light/trace.cc
++++ b/light/trace.cc
+@@ -749,9 +749,10 @@ qboolean TestSky(const vec3_t start, const vec3_t dirn, const modelinfo_t *self)
+         return Embree_TestSky(start, dirn, self);
+     }
+ #endif
+-#if 0
++#if 1
+     if (rtbackend == backend_bsp) {
+-        return BSP_TestSky(start, dirn, self);
++        const dmodel_t *self_model = self && self->shadowself.boolValue() ? self->model : nullptr;
++        return BSP_TestSky(start, dirn, self_model);
+     }
+ #endif
+     Error("no backend available");
+@@ -765,9 +766,10 @@ qboolean TestLight(const vec3_t start, const vec3_t stop, const modelinfo_t *sel
+         return Embree_TestLight(start, stop, self);
+     }
+ #endif
+-#if 0
++#if 1
+     if (rtbackend == backend_bsp) {
+-        return BSP_TestLight(start, stop, self);
++        const dmodel_t *self_model = self && self->shadowself.boolValue() ? self->model : nullptr;
++        return BSP_TestLight(start, stop, self_model);
+     }
+ #endif
+     Error("no backend available");
+@@ -782,9 +784,10 @@ hittype_t DirtTrace(const vec3_t start, const vec3_t dirn, vec_t dist, const mod
+         return Embree_DirtTrace(start, dirn, dist, self, hitdist_out, hitplane_out, face_out);
+     }
+ #endif
+-#if 0
++#if 1
+     if (rtbackend == backend_bsp) {
+-        return BSP_DirtTrace(start, dirn, dist, self, hitdist_out, hitplane_out, face_out);
++        const dmodel_t *self_model = self && self->shadowself.boolValue() ? self->model : nullptr;
++        return BSP_DirtTrace(start, dirn, dist, self_model, hitdist_out, hitplane_out, face_out);
+     }
+ #endif
+     Error("no backend available");
+@@ -925,7 +928,7 @@ raystream_t *MakeRayStream(int maxrays)
+         return Embree_MakeRayStream(maxrays);
+     }
+ #endif
+-#if 0
++#if 1
+     if (rtbackend == backend_bsp) {
+         return BSP_MakeRayStream(maxrays);
+     }
+@@ -942,7 +945,7 @@ void MakeTnodes(const mbsp_t *bsp)
+         return;
+     }
+ #endif
+-#if 0
++#if 1
+     if (rtbackend == backend_bsp) {
+         BSP_MakeTnodes(bsp);
+         return;

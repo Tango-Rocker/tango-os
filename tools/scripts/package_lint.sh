@@ -44,7 +44,7 @@ pkgbuild_install_targets() {
     target="${target//\$\{pkgname\}/$pkg}"
     target="${target//\$pkgname/$pkg}"
     printf '%s\n' "$target"
-  done < <(sed -n 's/.*"\$pkgdir\([^"]*\)".*/\1/p' "$pkgbuild") | sort -u
+  done < <(sed '/^[[:space:]]*rm[[:space:]]/d; s/.*"\$pkgdir\([^"]*\)".*/\1/p; t; d' "$pkgbuild") | sort -u
 }
 
 pkgbuild_dependency_names() {
@@ -289,6 +289,54 @@ lint_pkgbuild() {
       fi
       if ! grep -q 'quakespasm.pak' "$pkg_dir/PKGBUILD"; then
         fail "$pkg: quakespasm.pak is not installed"
+        return
+      fi
+      ;;
+    engineos-ericw-tools)
+      for tool in qbsp vis light bspinfo bsputil; do
+        if ! grep -q "$tool" "$pkg_dir/PKGBUILD"; then
+          fail "$pkg: expected ericw-tools binary is not packaged: $tool"
+          return
+        fi
+      done
+      if ! grep -q 'v0.18.2-rc1' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: expected ericw-tools v0.18.2-rc1 tag"
+        return
+      fi
+      ;;
+    engineos-trenchbroom)
+      if ! grep -q 'v2026.1' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: expected TrenchBroom v2026.1 tag"
+        return
+      fi
+      if ! grep -q 'cmake --build.*TrenchBroom' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: TrenchBroom source build target is not used"
+        return
+      fi
+      if ! grep -q 'engineos-trenchbroom.desktop' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: launch entry is not installed"
+        return
+      fi
+      ;;
+    engineos-level-agent)
+      if ! grep -q 'usr/bin/engineos-level-agent' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: engineos-level-agent command is not installed"
+        return
+      fi
+      if ! grep -q 'usr/bin/eos-level-agent' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: eos-level-agent command alias is not installed"
+        return
+      fi
+      if ! grep -q 'engineos-dgen.wad' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: generated dgen WAD is not installed"
+        return
+      fi
+      if grep -q 'codex-cli' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: Codex CLI must remain user-managed, not a package dependency"
+        return
+      fi
+      if ! grep -q 'codex mcp-server' "$ROOT/tools/level-agent/engineos_level_agent.py"; then
+        fail "$pkg: level-agent does not invoke user-managed Codex MCP"
         return
       fi
       ;;

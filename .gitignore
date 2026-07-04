@@ -16,6 +16,7 @@
 # Diagnostics
 /artifacts/
 /*engineos-release-*/
+/*.log
 
 # Local secrets
 /pat_token*

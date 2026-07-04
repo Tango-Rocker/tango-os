@@ -18,5 +18,7 @@ package() {
   install -Dm755 "$_engineos_root/engines/quakespasm/engineos/fetch.sh" "$pkgdir/usr/share/engineos/quake/fetch.sh"
   install -Dm755 "$_engineos_root/engines/quakespasm/engineos/run.sh" "$pkgdir/usr/share/engineos/quake/run.sh"
   install -Dm755 "$_engineos_root/engines/quakespasm/engineos/smoke-test.sh" "$pkgdir/usr/share/engineos/quake/smoke-test.sh"
+  install -d -m0755 "$pkgdir/usr/share/engineos/quake/patches"
+  cp -a "$_engineos_root/engines/quakespasm/engineos/patches"/. "$pkgdir/usr/share/engineos/quake/patches/"
   install -Dm644 "$_engineos_root/LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

@@ -6,9 +6,15 @@ redistributable = true
 allowed_in_iso = true
 
 [[asset]]
+name = "engineos-dgen.wad"
+source = "generated"
+license = "CC0"
+redistributable = true
+allowed_in_iso = true
+
+[[asset]]
 name = "id1/pak0.pak"
 source = "user-provided"
 license = "commercial"
 redistributable = false
 allowed_in_iso = false
-

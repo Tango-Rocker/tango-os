@@ -1,6 +1,6 @@
 pkgname=engineos-tools
 pkgver=0.1.0
-pkgrel=6
+pkgrel=8
 pkgdesc="EngineOS command, proof, agent, and observability tools"
 arch=('any')
 url="https://example.invalid/engineos"
@@ -41,6 +41,7 @@ package() {
   cp -a "$_engineos_root/tools/eos"/. "$pkgdir/usr/lib/engineos/eos/"
   rm -f "$pkgdir/usr/lib/engineos/scripts/engine_runner.sh" \
     "$pkgdir/usr/lib/engineos/scripts/engine_runner_daemon.py"
+  rm -f "$pkgdir/usr/lib/engineos/scripts"/generate_dgen_wad.py
   rm -rf "$pkgdir/usr/lib/engineos/scripts/__pycache__"
   chmod -R a+rX "$pkgdir/usr/lib/engineos/scripts" "$pkgdir/usr/lib/engineos/eos"
   find "$pkgdir/usr/lib/engineos/scripts" "$pkgdir/usr/lib/engineos/eos" -type f \( -name '*.sh' -o -name '*.ps1' \) -exec chmod 0755 {} +

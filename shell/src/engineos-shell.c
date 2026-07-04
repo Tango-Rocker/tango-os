@@ -2580,8 +2580,14 @@ static bool xdg_toplevel_supports_wm_capabilities(
 		XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION;
 }
 
+static bool xdg_toplevel_can_configure(struct wlr_xdg_toplevel *toplevel) {
+	return toplevel != NULL && toplevel->base != NULL &&
+		toplevel->base->initialized;
+}
+
 static void set_toplevel_wm_capabilities(struct wlr_xdg_toplevel *toplevel) {
-	if (!xdg_toplevel_supports_wm_capabilities(toplevel)) {
+	if (!xdg_toplevel_can_configure(toplevel) ||
+			!xdg_toplevel_supports_wm_capabilities(toplevel)) {
 		return;
 	}
 	wlr_xdg_toplevel_set_wm_capabilities(toplevel,
@@ -2607,7 +2613,8 @@ static bool xdg_toplevel_supports_suspended(
 
 static void set_toplevel_suspended(struct wlr_xdg_toplevel *toplevel,
 		bool suspended) {
-	if (!xdg_toplevel_supports_suspended(toplevel)) {
+	if (!xdg_toplevel_can_configure(toplevel) ||
+			!xdg_toplevel_supports_suspended(toplevel)) {
 		return;
 	}
 	wlr_xdg_toplevel_set_suspended(toplevel, suspended);
@@ -2615,7 +2622,7 @@ static void set_toplevel_suspended(struct wlr_xdg_toplevel *toplevel,
 
 static void set_toplevel_geometry(struct wlr_xdg_toplevel *toplevel,
 		const struct engineos_view_geometry *geometry) {
-	if (toplevel == NULL || geometry == NULL) {
+	if (!xdg_toplevel_can_configure(toplevel) || geometry == NULL) {
 		return;
 	}
 	wlr_xdg_toplevel_set_fullscreen(toplevel, geometry->fullscreen);
@@ -2636,7 +2643,7 @@ static void apply_view_layout(struct engineos_shell_view *view) {
 	case ENGINEOS_SURFACE_CUBE:
 	case ENGINEOS_SURFACE_ENGINE:
 		if (view->xdg_surface != NULL &&
-				view->xdg_surface->toplevel != NULL) {
+				xdg_toplevel_can_configure(view->xdg_surface->toplevel)) {
 			if (view->role == ENGINEOS_SURFACE_CUBE ||
 					view->role == ENGINEOS_SURFACE_ENGINE) {
 				set_toplevel_geometry(view->xdg_surface->toplevel, &geometry);
@@ -2649,7 +2656,7 @@ static void apply_view_layout(struct engineos_shell_view *view) {
 	case ENGINEOS_SURFACE_UNKNOWN:
 	default:
 		if (view->xdg_surface != NULL &&
-				view->xdg_surface->toplevel != NULL) {
+				xdg_toplevel_can_configure(view->xdg_surface->toplevel)) {
 			wlr_xdg_toplevel_set_fullscreen(view->xdg_surface->toplevel,
 				geometry.fullscreen);
 			wlr_xdg_toplevel_set_maximized(view->xdg_surface->toplevel,
@@ -2845,7 +2852,7 @@ static void emergency_release(struct engineos_shell_server *server) {
 
 static void set_view_activated(struct engineos_shell_view *view, bool activated) {
 	if (view != NULL && view->xdg_surface != NULL &&
-			view->xdg_surface->toplevel != NULL) {
+			xdg_toplevel_can_configure(view->xdg_surface->toplevel)) {
 		wlr_xdg_toplevel_set_activated(view->xdg_surface->toplevel, activated);
 	}
 }
@@ -3860,15 +3867,17 @@ static void xdg_surface_commit(struct wl_listener *listener, void *data) {
 			if (view->role == ENGINEOS_SURFACE_CUBE ||
 					view->role == ENGINEOS_SURFACE_ENGINE) {
 				set_toplevel_geometry(view->xdg_surface->toplevel, &geometry);
-			} else {
+			} else if (xdg_toplevel_can_configure(view->xdg_surface->toplevel)) {
 				wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel,
 					geometry.width, geometry.height);
 			}
 		} else {
 			struct engineos_view_geometry geometry = {0};
 			compute_view_geometry(view, &geometry);
-			wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel,
-				geometry.width, geometry.height);
+			if (xdg_toplevel_can_configure(view->xdg_surface->toplevel)) {
+				wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel,
+					geometry.width, geometry.height);
+			}
 		}
 		wlr_log(WLR_INFO, "view initial configure role=%s title=%s app_id=%s",
 			surface_role_name(view->role), view_title(view), view_app_id(view));
@@ -3919,8 +3928,10 @@ static void xdg_toplevel_request_maximize(struct wl_listener *listener,
 		set_floating_maximized(view, requested, "maximize-request");
 	} else {
 		view->maximized = requested;
-		wlr_xdg_toplevel_set_maximized(view->xdg_surface->toplevel,
-			view->maximized);
+		if (xdg_toplevel_can_configure(view->xdg_surface->toplevel)) {
+			wlr_xdg_toplevel_set_maximized(view->xdg_surface->toplevel,
+				view->maximized);
+		}
 		apply_view_layout(view);
 		write_shell_state(view->server, "maximize-request");
 	}
@@ -3994,7 +4005,9 @@ static void xdg_toplevel_request_resize(struct wl_listener *listener,
 	if (view->xdg_surface == NULL || view->xdg_surface->toplevel == NULL) {
 		return;
 	}
-	wlr_xdg_toplevel_set_resizing(view->xdg_surface->toplevel, false);
+	if (xdg_toplevel_can_configure(view->xdg_surface->toplevel)) {
+		wlr_xdg_toplevel_set_resizing(view->xdg_surface->toplevel, false);
+	}
 	apply_view_layout(view);
 	wlr_log(WLR_INFO,
 		"window resize request acknowledged role=%s reason=manual-resize-unimplemented title=%s app_id=%s",

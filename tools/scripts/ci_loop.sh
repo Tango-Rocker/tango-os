@@ -103,6 +103,15 @@ infer_changed_packages() {
       engines/quakespasm/*|packages/engineos-quakespasm/*)
         add_package engineos-quakespasm
         ;;
+      tools/level-agent/*|packages/engineos-level-agent/*)
+        add_package engineos-level-agent
+        ;;
+      packages/engineos-ericw-tools/*)
+        add_package engineos-ericw-tools
+        ;;
+      packages/engineos-trenchbroom/*)
+        add_package engineos-trenchbroom
+        ;;
       packages/engineos-config/*|archiso/*)
         add_package engineos-config
         ;;

@@ -1,0 +1,179 @@
+diff --git a/Quake/host_cmd.c b/Quake/host_cmd.c
+index 5bb728f..6023c3a 100644
+--- a/Quake/host_cmd.c
++++ b/Quake/host_cmd.c
+@@ -26,6 +26,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ #ifndef _WIN32
+ #include <dirent.h>
+ #endif
++#ifndef _WIN32
++#include <errno.h>
++#include <sys/socket.h>
++#include <sys/un.h>
++#include <unistd.h>
++#endif
+ #ifdef __EMSCRIPTEN__
+ #include <emscripten.h>
+ #endif
+@@ -2349,6 +2355,150 @@ void Host_Resetdemos (void)
+ 
+ //=============================================================================
+ 
++#ifndef _WIN32
++static void Host_AgentSocketPath (char *path, size_t path_size)
++{
++	const char *override_path;
++	const char *runtime_dir;
++
++	override_path = getenv("ENGINEOS_LEVEL_AGENT_SOCKET");
++	if (override_path && override_path[0])
++	{
++		q_strlcpy(path, override_path, path_size);
++		return;
++	}
++
++	runtime_dir = getenv("XDG_RUNTIME_DIR");
++	if (!runtime_dir || !runtime_dir[0])
++		runtime_dir = "/tmp";
++	q_snprintf(path, path_size, "%s/engineos/level-agent.sock", runtime_dir);
++}
++
++static void Host_AgentSanitizeArg (const char *in, char *out, size_t out_size)
++{
++	size_t i;
++	size_t j;
++
++	for (i = 0, j = 0; in[i] && j + 1 < out_size; ++i)
++	{
++		if (in[i] == '\n' || in[i] == '\r' || in[i] == '\t')
++			out[j++] = ' ';
++		else
++			out[j++] = in[i];
++	}
++	out[j] = 0;
++}
++
++static void Host_AgentSendRequest (const char *verb, const char *arg)
++{
++	int fd;
++	struct sockaddr_un addr;
++	char socket_path[MAX_OSPATH];
++	char clean_arg[1536];
++	char request[1792];
++	char response[4096];
++	ssize_t written;
++	ssize_t got;
++
++	Host_AgentSocketPath(socket_path, sizeof(socket_path));
++	Host_AgentSanitizeArg(arg ? arg : "", clean_arg, sizeof(clean_arg));
++	q_snprintf(request, sizeof(request), "%s\t%s\n", verb, clean_arg);
++
++	fd = socket(AF_UNIX, SOCK_STREAM, 0);
++	if (fd < 0)
++	{
++		Con_SafePrintf("agent: socket() failed: %s\n", strerror(errno));
++		return;
++	}
++
++	memset(&addr, 0, sizeof(addr));
++	addr.sun_family = AF_UNIX;
++	q_strlcpy(addr.sun_path, socket_path, sizeof(addr.sun_path));
++
++	if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
++	{
++		Con_SafePrintf("agent: sidecar unavailable at %s: %s\n", socket_path, strerror(errno));
++		Con_SafePrintf("agent: start it with engineos-level-agent serve\n");
++		close(fd);
++		return;
++	}
++
++	written = write(fd, request, strlen(request));
++	if (written < 0)
++	{
++		Con_SafePrintf("agent: write failed: %s\n", strerror(errno));
++		close(fd);
++		return;
++	}
++	shutdown(fd, SHUT_WR);
++
++	while ((got = read(fd, response, sizeof(response) - 1)) > 0)
++	{
++		response[got] = 0;
++		Con_SafePrintf("%s", response);
++	}
++	if (got < 0)
++		Con_SafePrintf("agent: read failed: %s\n", strerror(errno));
++	close(fd);
++}
++#else
++static void Host_AgentSendRequest (const char *verb, const char *arg)
++{
++	(void)verb;
++	(void)arg;
++	Con_SafePrintf("agent: EngineOS level-agent socket client is only available on Unix-like hosts\n");
++}
++#endif
++
++/*
++==================
++Host_Agent_f
++==================
++*/
++static void Host_Agent_f (void)
++{
++	const char *prompt;
++
++	if (Cmd_Argc() < 2)
++	{
++		Con_SafePrintf("usage: agent \"prompt\"\n");
++		return;
++	}
++
++	prompt = Cmd_Args();
++	Host_AgentSendRequest("build\t0", prompt);
++}
++
++/*
++==================
++Host_AgentStatus_f
++==================
++*/
++static void Host_AgentStatus_f (void)
++{
++	const char *job_id;
++
++	job_id = "";
++	if (Cmd_Argc() >= 2)
++		job_id = Cmd_Argv(1);
++	Host_AgentSendRequest("status", job_id);
++}
++
++/*
++==================
++Host_AgentLoad_f
++==================
++*/
++static void Host_AgentLoad_f (void)
++{
++	const char *job_id;
++
++	job_id = "";
++	if (Cmd_Argc() >= 2)
++		job_id = Cmd_Argv(1);
++	Host_AgentSendRequest("load", job_id);
++}
++
+ /*
+ ==================
+ Host_InitCommands
+@@ -2363,6 +2513,10 @@ void Host_InitCommands (void)
+ 	Cmd_AddCommand ("mapname", Host_Mapname_f); //johnfitz
+ 	Cmd_AddCommand ("randmap", Host_Randmap_f); //ericw
+ 
++	Cmd_AddCommand ("agent", Host_Agent_f);
++	Cmd_AddCommand ("agent_status", Host_AgentStatus_f);
++	Cmd_AddCommand ("agent_load", Host_AgentLoad_f);
++
+ 	Cmd_AddCommand ("status", Host_Status_f);
+ 	Cmd_AddCommand ("quit", Host_Quit_f);
+ 	Cmd_AddCommand ("god", Host_God_f);

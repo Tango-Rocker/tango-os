@@ -340,6 +340,7 @@ check_package_inputs() {
     engineos-quakespasm)
       require_file "engines/quakespasm/engineos/build.sh"
       require_file "engines/quakespasm/engineos/fetch.sh"
+      require_file "engines/quakespasm/engineos/patches/0001-engineos-level-agent-console-commands.patch"
       ;;
     engineos-quake-template)
       require_file "packages/engineos-quake-template/assets.toml"
@@ -347,6 +348,19 @@ check_package_inputs() {
       require_file "engines/quakespasm/engineos/fetch.sh"
       require_file "engines/quakespasm/engineos/run.sh"
       require_file "engines/quakespasm/engineos/smoke-test.sh"
+      ;;
+    engineos-ericw-tools)
+      require_file "packages/engineos-ericw-tools/PKGBUILD"
+      ;;
+    engineos-trenchbroom)
+      require_file "packages/engineos-trenchbroom/PKGBUILD"
+      require_file "packages/engineos-trenchbroom/engineos-trenchbroom.desktop"
+      ;;
+    engineos-level-agent)
+      require_file "tools/level-agent/engineos-level-agent"
+      require_file "tools/level-agent/engineos_level_agent.py"
+      require_file "tools/scripts/generate_dgen_wad.py"
+      require_file "packages/engineos-level-agent/PKGBUILD"
       ;;
     *)
       fail "unknown package in preflight input map: $pkg"
@@ -620,6 +634,9 @@ check_iso() {
     require_profile_package "$profile_dir" "engineos-engine-runner"
     require_profile_package "$profile_dir" "engineos-quakespasm"
     require_profile_package "$profile_dir" "engineos-quake-template"
+    require_profile_package "$profile_dir" "engineos-ericw-tools"
+    require_profile_package "$profile_dir" "engineos-trenchbroom"
+    require_profile_package "$profile_dir" "engineos-level-agent"
     require_file "$profile_dir/airootfs/etc/issue"
     require_file "$profile_dir/airootfs/etc/udev/rules.d/70-engineos-device-access.rules"
     require_file "$profile_dir/airootfs/etc/skel/.bash_profile"

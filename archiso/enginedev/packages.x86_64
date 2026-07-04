@@ -147,5 +147,8 @@ engineos-tmux-plugins
 engineos-cube
 engineos-shell
 engineos-engine-runner
+engineos-ericw-tools
+engineos-trenchbroom
 engineos-quakespasm
 engineos-quake-template
+engineos-level-agent

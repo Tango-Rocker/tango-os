@@ -138,8 +138,11 @@ engineos_packages() {
     engineos-tmux-plugins \
     engineos-cube \
     engineos-shell \
+    engineos-ericw-tools \
+    engineos-trenchbroom \
     engineos-quakespasm \
-    engineos-quake-template
+    engineos-quake-template \
+    engineos-level-agent
 }
 
 engineos_eos_commands() {

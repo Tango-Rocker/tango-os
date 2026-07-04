@@ -27,7 +27,7 @@ usage() {
 Usage: app.sh launch terminal [args...]
        app.sh launch terminal-secondary [args...]
        app.sh launch cube [--smoke]
-       app.sh launch quake [--smoke] [--pane|--fullscreen|--output]
+       app.sh launch quake [--smoke] [--pane|--fullscreen|--output] [--map NAME] [--game MOD]
        app.sh pane sync [--all|cube|engine|quake]
        app.sh status [--json]
        app.sh manifest path|show|validate

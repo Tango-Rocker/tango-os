@@ -35,6 +35,7 @@ Usage: test_runner.sh [smoke|all]
        test_runner.sh engine-runner-env
        test_runner.sh image-preview
        test_runner.sh app
+       test_runner.sh level-agent
        test_runner.sh assets
        test_runner.sh reliability
        test_runner.sh logs
@@ -89,6 +90,7 @@ run_all() {
   run_all_step engine-runner-env
   run_all_step image-preview
   run_all_step app
+  run_all_step level-agent
   run_all_step assets
   run_all_step reliability
   run_all_step logs
@@ -1194,6 +1196,16 @@ FAKE
     ENGINEOS_RUNTIME_CMD="$fake_bin/eos-runtime" \
     ENGINEOS_FAKE_APP_LAUNCHED="$launched" \
     WAYLAND_DISPLAY="engineos-test-wayland" \
+    "$SCRIPT_DIR/app.sh" launch quake --map dgen_smoke --game id1 --output >"$out"
+  grep -F 'engine launch quake --map dgen_smoke --game id1' "$launched" >/dev/null ||
+    die "app launcher did not pass quake map/game arguments"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    ENGINEOS_RUNTIME_CMD="$fake_bin/eos-runtime" \
+    ENGINEOS_FAKE_APP_LAUNCHED="$launched" \
+    WAYLAND_DISPLAY="engineos-test-wayland" \
     TMUX="$tmp_dir/tmux-socket,1,0" \
     TMUX_PANE="%1" \
     "$SCRIPT_DIR/app.sh" launch quake >"$out"
@@ -1349,6 +1361,159 @@ JSON
   printf 'app launcher smoke test passed\n'
 }
 
+run_level_agent() {
+  local tmp_dir="${TMPDIR:-/tmp}/engineos-level-agent-test-$$"
+  local fake_bin="$tmp_dir/bin"
+  local sock="$tmp_dir/run/level-agent.sock"
+  local out="$tmp_dir/out.txt"
+  local launch_args="$tmp_dir/launch-args.txt"
+  local server_pid=""
+
+  cleanup_level_agent() {
+    if [[ -n "$server_pid" ]]; then
+      kill "$server_pid" >/dev/null 2>&1 || true
+      wait "$server_pid" >/dev/null 2>&1 || true
+    fi
+    rm -rf "$tmp_dir"
+  }
+  trap cleanup_level_agent RETURN
+
+  mkdir -p "$fake_bin" "$tmp_dir/run" "$tmp_dir/state" "$tmp_dir/logs" "$tmp_dir/dgen-root/src" "$tmp_dir/quake/id1"
+
+  cat >"$fake_bin/fake-codex-mcp" <<'PY'
+#!/usr/bin/env python3
+import json
+import re
+import sys
+from pathlib import Path
+
+for line in sys.stdin:
+    request = json.loads(line)
+    request_id = request.get("id")
+    method = request.get("method")
+    if method == "initialize":
+        print(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {"name": "fake-codex"}}}), flush=True)
+    elif method == "notifications/initialized":
+        continue
+    elif method == "tools/call":
+        args = request["params"]["arguments"]
+        prompt = args["prompt"]
+        cwd = Path(args.get("cwd", "."))
+        match = re.search(r"jobs/[^\s]+/job\.dungeon", prompt)
+        rel = match.group(0) if match else "jobs/fallback/job.dungeon"
+        path = cwd / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("""dungeon fake_agent_job
+version dungeon-spec/v2
+seed 77
+layout linear
+tag dynamic
+tag meaning
+beat gate role entry count 1 require [entry vertical] meaning [entry combat]
+beat flood role hazard_combat count 1 require [water vertical] meaning [hazard combat]
+""", encoding="utf-8")
+        print(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": {"structuredContent": {"threadId": "thread-1", "content": "wrote dungeon"}}}), flush=True)
+    else:
+        print(json.dumps({"jsonrpc": "2.0", "id": request_id, "error": {"message": "unknown method"}}), flush=True)
+PY
+  cat >"$fake_bin/dgen" <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == "build-dungeon" ]] || exit 64
+shift
+dungeon="$1"
+shift
+out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --out)
+      shift
+      out="$1"
+      ;;
+  esac
+  shift || true
+done
+[[ -n "$out" ]] || exit 65
+grep -F 'version dungeon-spec/v2' "$dungeon" >/dev/null
+mkdir -p "$(dirname "$out")"
+printf '// fake map\n' >"$out"
+printf 'fake bsp\n' >"${out%.map}.bsp"
+printf 'wrote: %s\n' "$out"
+FAKE
+  cat >"$fake_bin/eos-app" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >"$ENGINEOS_FAKE_LEVEL_AGENT_LAUNCH"
+FAKE
+  chmod +x "$fake_bin/fake-codex-mcp" "$fake_bin/dgen" "$fake_bin/eos-app"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_CODEX_MCP_COMMAND="$fake_bin/fake-codex-mcp" \
+    ENGINEOS_LEVEL_AGENT_DGEN_CMD="$fake_bin/dgen" \
+    ENGINEOS_LEVEL_AGENT_STATE_DIR="$tmp_dir/state" \
+    ENGINEOS_LEVEL_AGENT_LOG_DIR="$tmp_dir/logs" \
+    ENGINEOS_DGEN_ROOT="$tmp_dir/dgen-root" \
+    ENGINEOS_QUAKE_ID1="$tmp_dir/quake/id1" \
+    ENGINEOS_FAKE_LEVEL_AGENT_LAUNCH="$launch_args" \
+    ENGINEOS_LEVEL_AGENT_EOS_APP="$fake_bin/eos-app" \
+    "$ROOT/tools/level-agent/engineos-level-agent" serve --socket "$sock" >"$tmp_dir/server.log" 2>&1 &
+  server_pid="$!"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [[ -S "$sock" ]] && break
+    sleep 0.1
+  done
+  [[ -S "$sock" ]] || die "level-agent server did not create socket"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_LEVEL_AGENT_STATE_DIR="$tmp_dir/state" \
+    ENGINEOS_LEVEL_AGENT_LOG_DIR="$tmp_dir/logs" \
+    ENGINEOS_DGEN_ROOT="$tmp_dir/dgen-root" \
+    "$ROOT/tools/level-agent/engineos-level-agent" build "make a short flooded gatehouse descent" --wait --socket "$sock" >"$out"
+  grep -F 'state=accepted' "$out" >/dev/null ||
+    die "level-agent build did not reach accepted state"
+  grep -F 'map=make_a_short_flooded_gatehouse' "$out" >/dev/null ||
+    die "level-agent build did not derive stable map name"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_LEVEL_AGENT_STATE_DIR="$tmp_dir/state" \
+    "$ROOT/tools/level-agent/engineos-level-agent" status --socket "$sock" >"$out"
+  grep -F 'state=accepted' "$out" >/dev/null ||
+    die "level-agent status did not report accepted job"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_QUAKE_ID1="$tmp_dir/quake/id1" \
+    ENGINEOS_FAKE_LEVEL_AGENT_LAUNCH="$launch_args" \
+    ENGINEOS_LEVEL_AGENT_EOS_APP="$fake_bin/eos-app" \
+    ENGINEOS_LEVEL_AGENT_STATE_DIR="$tmp_dir/state" \
+    "$ROOT/tools/level-agent/engineos-level-agent" load --socket "$sock" >"$out"
+  grep -F 'loaded make_a_short_flooded_gatehouse' "$out" >/dev/null ||
+    die "level-agent load did not report loaded map"
+  grep -F 'launch quake --map make_a_short_flooded_gatehouse' "$launch_args" >/dev/null ||
+    die "level-agent load did not launch Quake through eos-app with map"
+  [[ -f "$tmp_dir/quake/id1/maps/make_a_short_flooded_gatehouse.bsp" ]] ||
+    die "level-agent load did not deploy BSP into id1/maps"
+
+  python "$ROOT/tools/scripts/generate_dgen_wad.py" --out "$tmp_dir/engineos-dgen.wad"
+  python - "$tmp_dir/engineos-dgen.wad" <<'PY'
+from pathlib import Path
+import sys
+data = Path(sys.argv[1]).read_bytes()
+assert data[:4] == b"WAD2"
+assert b"wizmet1_1" in data
+PY
+
+  ENGINEOS_TRENCHBROOM_USER_DIR="$tmp_dir/tb" \
+    ENGINEOS_QUAKE_ID1="$tmp_dir/quake/id1" \
+    "$ROOT/tools/level-agent/engineos-level-agent" trenchbroom-setup >"$out"
+  grep -F 'EngineOS Quake' "$tmp_dir/tb/games/EngineOSQuake/GameConfig.cfg" >/dev/null ||
+    die "trenchbroom setup did not write EngineOS game config"
+  grep -F '/usr/bin/qbsp' "$tmp_dir/tb/games/EngineOSQuake/CompilationProfiles.cfg" >/dev/null ||
+    die "trenchbroom setup did not write ericw tool paths"
+  grep -F 'launch quake --map ${MAP_BASE_NAME}' "$tmp_dir/tb/games/EngineOSQuake/Engines.cfg" >/dev/null ||
+    die "trenchbroom setup did not write EngineOS launch profile"
+
+  printf 'level-agent socket contract test passed\n'
+}
+
 run_assets() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-assets-test-$$"
   local id1="$tmp_dir/home/.local/share/engineos/quake/id1"
@@ -1408,6 +1573,16 @@ FAKE
     die "quake run wrapper did not log configured SDL audio driver"
   grep -F "QuakeSpasm configured_args=-window -width 640 -height 480" "$log_dir/engine.log" >/dev/null ||
     die "quake run wrapper did not log configured launch args"
+  HOME="$tmp_dir/home" \
+    ENGINEOS_QUAKE_ID1="$id1" \
+    ENGINEOS_QUAKE_ARGS="" \
+    PATH="$tmp_dir/bin:$PATH" \
+    ENGINEOS_ROOT="$ROOT" \
+    ENGINEOS_LOG_DIR="$log_dir" \
+    QUAKESPASM_BIN="quakespasm" \
+    "$ROOT/engines/quakespasm/engineos/run.sh" --map dgen_smoke --game id1 >/dev/null
+  grep -F "QuakeSpasm configured_args=-game id1 +map dgen_smoke" "$log_dir/engine.log" >/dev/null ||
+    die "quake run wrapper did not translate map/game launch args"
   [[ -f "$id1/autoexec.cfg" ]] ||
     die "quake run wrapper did not create default autoexec.cfg"
   grep -F 'bind "w" "+forward"' "$id1/autoexec.cfg" >/dev/null ||
@@ -3466,6 +3641,9 @@ case "$SCOPE" in
     ;;
   app)
     run_app
+    ;;
+  level-agent)
+    run_level_agent
     ;;
   assets)
     run_assets
