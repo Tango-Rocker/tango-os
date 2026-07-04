@@ -1578,8 +1578,12 @@ PY
     "$ROOT/tools/level-agent/engineos-level-agent" trenchbroom-setup >"$out"
   grep -F 'EngineOS Quake' "$tmp_dir/tb/games/EngineOSQuake/GameConfig.cfg" >/dev/null ||
     die "trenchbroom setup did not write EngineOS game config"
+  grep -F '"version": 1' "$tmp_dir/tb/games/EngineOSQuake/CompilationProfiles.cfg" >/dev/null ||
+    die "trenchbroom setup did not write compilation profile schema version"
   grep -F '/usr/bin/qbsp' "$tmp_dir/tb/games/EngineOSQuake/CompilationProfiles.cfg" >/dev/null ||
     die "trenchbroom setup did not write ericw tool paths"
+  grep -F '"version": 1' "$tmp_dir/tb/games/EngineOSQuake/Engines.cfg" >/dev/null ||
+    die "trenchbroom setup did not write engine profile schema version"
   grep -F 'launch quake --map ${MAP_BASE_NAME}' "$tmp_dir/tb/games/EngineOSQuake/Engines.cfg" >/dev/null ||
     die "trenchbroom setup did not write EngineOS launch profile"
 

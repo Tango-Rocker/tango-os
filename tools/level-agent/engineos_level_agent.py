@@ -694,6 +694,7 @@ def engineos_game_config() -> str:
 
 def engineos_compile_profiles(id1: str, wad: str) -> str:
     return f"""{{
+  "version": 1,
   "profiles": [
     {{
       "name": "EngineOS pr_smoke",
@@ -723,6 +724,7 @@ def engineos_compile_profiles(id1: str, wad: str) -> str:
 
 def engineos_engines_profile() -> str:
     return """{
+  "version": 1,
   "profiles": [
     {
       "name": "EngineOS QuakeSpasm",
