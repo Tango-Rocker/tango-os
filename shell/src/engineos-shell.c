@@ -30,6 +30,7 @@
 #include <wlr/types/wlr_buffer.h>
 #include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_cursor.h>
+#include <wlr/types/wlr_data_control_v1.h>
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
@@ -37,6 +38,8 @@
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_pointer.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
+#include <wlr/types/wlr_primary_selection.h>
+#include <wlr/types/wlr_primary_selection_v1.h>
 #include <wlr/types/wlr_relative_pointer_v1.h>
 #include <wlr/types/wlr_scene.h>
 #include <wlr/types/wlr_seat.h>
@@ -136,6 +139,9 @@ struct engineos_shell_server {
 	struct wlr_allocator *allocator;
 	struct wlr_seat *seat;
 	struct wlr_xdg_shell *xdg_shell;
+	struct wlr_data_device_manager *data_device_mgr;
+	struct wlr_data_control_manager_v1 *data_control_mgr;
+	struct wlr_primary_selection_v1_device_manager *primary_selection_mgr;
 	struct wlr_output_layout *output_layout;
 	struct wlr_cursor *cursor;
 	struct wlr_xcursor_manager *cursor_mgr;
@@ -158,6 +164,8 @@ struct engineos_shell_server {
 	struct wl_listener cursor_axis;
 	struct wl_listener cursor_frame;
 	struct wl_listener request_cursor;
+	struct wl_listener request_set_selection;
+	struct wl_listener request_set_primary_selection;
 	struct wl_listener new_relative_pointer;
 	struct wl_listener new_pointer_constraint;
 	struct wl_listener active_pointer_constraint_destroy;
@@ -3601,6 +3609,27 @@ static void seat_request_cursor(struct wl_listener *listener, void *data) {
 	}
 }
 
+static void seat_request_set_selection(struct wl_listener *listener, void *data) {
+	struct engineos_shell_server *server =
+		wl_container_of(listener, server, request_set_selection);
+	struct wlr_seat_request_set_selection_event *event = data;
+
+	wlr_seat_set_selection(server->seat, event->source, event->serial);
+	wlr_log(WLR_INFO, "clipboard selection accepted source=%s serial=%u",
+		event->source != NULL ? "client" : "clear", event->serial);
+}
+
+static void seat_request_set_primary_selection(struct wl_listener *listener,
+		void *data) {
+	struct engineos_shell_server *server =
+		wl_container_of(listener, server, request_set_primary_selection);
+	struct wlr_seat_request_set_primary_selection_event *event = data;
+
+	wlr_seat_set_primary_selection(server->seat, event->source, event->serial);
+	wlr_log(WLR_INFO, "primary selection accepted source=%s serial=%u",
+		event->source != NULL ? "client" : "clear", event->serial);
+}
+
 static void pointer_destroy(struct wl_listener *listener, void *data) {
 	(void)data;
 	struct engineos_shell_pointer *pointer =
@@ -4314,7 +4343,22 @@ static bool setup_server(struct engineos_shell_server *server) {
 
 	wlr_compositor_create(server->display, 5, server->renderer);
 	wlr_subcompositor_create(server->display);
-	wlr_data_device_manager_create(server->display);
+	server->data_device_mgr = wlr_data_device_manager_create(server->display);
+	if (server->data_device_mgr == NULL) {
+		wlr_log(WLR_ERROR, "failed to create data device manager");
+		return false;
+	}
+	server->primary_selection_mgr =
+		wlr_primary_selection_v1_device_manager_create(server->display);
+	if (server->primary_selection_mgr == NULL) {
+		wlr_log(WLR_ERROR, "failed to create primary selection manager");
+		return false;
+	}
+	server->data_control_mgr = wlr_data_control_manager_v1_create(server->display);
+	if (server->data_control_mgr == NULL) {
+		wlr_log(WLR_ERROR, "failed to create data control manager");
+		return false;
+	}
 	server->relative_pointer_mgr =
 		wlr_relative_pointer_manager_v1_create(server->display);
 	if (server->relative_pointer_mgr == NULL) {
@@ -4388,6 +4432,13 @@ static bool setup_server(struct engineos_shell_server *server) {
 	server->request_cursor.notify = seat_request_cursor;
 	wl_signal_add(&server->seat->events.request_set_cursor,
 		&server->request_cursor);
+	server->request_set_selection.notify = seat_request_set_selection;
+	wl_signal_add(&server->seat->events.request_set_selection,
+		&server->request_set_selection);
+	server->request_set_primary_selection.notify =
+		seat_request_set_primary_selection;
+	wl_signal_add(&server->seat->events.request_set_primary_selection,
+		&server->request_set_primary_selection);
 
 	server->new_output.notify = server_new_output;
 	wl_signal_add(&server->backend->events.new_output, &server->new_output);
@@ -4431,6 +4482,8 @@ static void destroy_server(struct engineos_shell_server *server) {
 	remove_listener_if_linked(&server->cursor_axis);
 	remove_listener_if_linked(&server->cursor_frame);
 	remove_listener_if_linked(&server->request_cursor);
+	remove_listener_if_linked(&server->request_set_selection);
+	remove_listener_if_linked(&server->request_set_primary_selection);
 	remove_listener_if_linked(&server->new_relative_pointer);
 	remove_listener_if_linked(&server->new_pointer_constraint);
 	remove_listener_if_linked(&server->active_pointer_constraint_destroy);
