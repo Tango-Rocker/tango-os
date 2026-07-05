@@ -1132,6 +1132,17 @@ JSON
     die "image preview quick-view did not prefer owning tmux terminal over active shell slot"
 
   PATH="$fake_bin:$PATH" \
+    ENGINEOS_FAKE_TMUX_SESSION=engineos \
+    ENGINEOS_TERMINAL_ROLE=terminal-secondary \
+    TMUX_PANE="%2" \
+    "$preview_bin" --quick-view "$png" --panel right --dry-run >"$out"
+  grep -F '"slot":"terminal"' "$out" >/dev/null ||
+    die "image preview quick-view did not prefer owning tmux terminal over stale terminal role"
+  if grep -F '"slot":"terminal-secondary"' "$out" >/dev/null; then
+    die "image preview quick-view let stale terminal role override tmux session"
+  fi
+
+  PATH="$fake_bin:$PATH" \
     TMUX_PANE="%1" \
     "$preview_bin" --quick-view "$png" --panel left --dry-run >"$out"
   for field in '"x":10' '"y":5' '"width":40' '"height":24'; do

@@ -37,35 +37,25 @@ def preview_socket_path() -> str:
     return "/tmp/engineos/preview.sock"
 
 
-def shell_state_path() -> Path:
-    state_dir = os.environ.get("ENGINEOS_STATE_DIR")
-    if state_dir:
-        return Path(state_dir) / "shell-state.json"
-    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
-    if runtime_dir:
-        return Path(runtime_dir) / "engineos" / "shell-state.json"
-    return Path("/tmp/engineos/shell-state.json")
-
-
 def shell_slot() -> str | None:
-    env_slot = explicit_shell_slot()
-    if env_slot in TERMINAL_SLOTS:
-        return env_slot
+    preview_slot = explicit_preview_slot()
+    if preview_slot is not None:
+        return preview_slot
     tmux_slot = tmux_shell_slot()
     if tmux_slot is not None:
         return tmux_slot
-    try:
-        state = json.loads(shell_state_path().read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    active = state.get("active_slot")
-    if active in TERMINAL_SLOTS:
-        return str(active)
+    return explicit_terminal_role()
+
+
+def explicit_preview_slot() -> str | None:
+    env_slot = os.environ.get("ENGINEOS_PREVIEW_SLOT")
+    if env_slot in TERMINAL_SLOTS:
+        return env_slot
     return None
 
 
-def explicit_shell_slot() -> str | None:
-    env_slot = os.environ.get("ENGINEOS_TERMINAL_ROLE") or os.environ.get("ENGINEOS_PREVIEW_SLOT")
+def explicit_terminal_role() -> str | None:
+    env_slot = os.environ.get("ENGINEOS_TERMINAL_ROLE")
     if env_slot in TERMINAL_SLOTS:
         return env_slot
     return None
@@ -304,7 +294,7 @@ def build_request(args: argparse.Namespace) -> tuple[dict[str, object] | None, s
             "fit": "cover",
             "opacity": args.opacity,
         }
-        slot = explicit_shell_slot()
+        slot = explicit_preview_slot() or tmux_shell_slot()
         if slot is not None:
             request["slot"] = slot
         bounds = tmux_bounds()
