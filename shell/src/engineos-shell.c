@@ -168,9 +168,17 @@ struct engineos_shell_server {
 	struct wl_listener request_cursor;
 	struct wl_listener request_set_selection;
 	struct wl_listener request_set_primary_selection;
+	struct wl_listener request_start_drag;
+	struct wl_listener start_drag;
+	struct wl_listener active_drag_motion;
+	struct wl_listener active_drag_drop;
+	struct wl_listener active_drag_destroy;
+	struct wl_listener drag_icon_node_destroy;
 	struct wl_listener new_relative_pointer;
 	struct wl_listener new_pointer_constraint;
 	struct wl_listener active_pointer_constraint_destroy;
+	struct wlr_drag *active_drag;
+	struct wlr_scene_tree *drag_icon_tree;
 	struct engineos_shell_view *focused_view;
 	struct engineos_shell_view *moving_view;
 	double move_grab_x;
@@ -299,6 +307,8 @@ static void set_toplevel_suspended(struct wlr_xdg_toplevel *toplevel,
 	bool suspended);
 static void clear_keyboard_focus(struct engineos_shell_server *server);
 static void clear_pointer_focus(struct engineos_shell_server *server,
+	const char *reason);
+static void update_drag_icon_position(struct engineos_shell_server *server,
 	const char *reason);
 static bool should_lock_game_cursor(struct engineos_shell_server *server);
 static void sync_cursor_image(struct engineos_shell_server *server,
@@ -2608,6 +2618,135 @@ static void sync_pointer_constraint(struct engineos_shell_server *server,
 		reason != NULL ? reason : "unspecified");
 }
 
+static void drag_icon_node_destroy(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct engineos_shell_server *server =
+		wl_container_of(listener, server, drag_icon_node_destroy);
+
+	remove_listener_if_linked(&server->drag_icon_node_destroy);
+	server->drag_icon_tree = NULL;
+	wlr_log(WLR_INFO, "drag icon scene node destroyed");
+}
+
+static void clear_active_drag(struct engineos_shell_server *server,
+		const char *reason) {
+	if (server == NULL) {
+		return;
+	}
+
+	remove_listener_if_linked(&server->active_drag_motion);
+	remove_listener_if_linked(&server->active_drag_drop);
+	remove_listener_if_linked(&server->active_drag_destroy);
+	remove_listener_if_linked(&server->drag_icon_node_destroy);
+
+	if (server->drag_icon_tree != NULL) {
+		wlr_scene_node_destroy(&server->drag_icon_tree->node);
+		server->drag_icon_tree = NULL;
+	}
+
+	if (server->active_drag != NULL) {
+		wlr_log(WLR_INFO, "drag cleared reason=%s",
+			reason != NULL ? reason : "unspecified");
+	}
+	server->active_drag = NULL;
+	schedule_outputs(server);
+}
+
+static void update_drag_icon_position(struct engineos_shell_server *server,
+		const char *reason) {
+	if (server == NULL || server->drag_icon_tree == NULL ||
+			server->cursor == NULL) {
+		return;
+	}
+
+	wlr_scene_node_set_position(&server->drag_icon_tree->node,
+		(int)server->cursor->x, (int)server->cursor->y);
+	wlr_scene_node_raise_to_top(&server->drag_icon_tree->node);
+	wlr_log(WLR_DEBUG, "drag icon position x=%.1f y=%.1f reason=%s",
+		server->cursor->x, server->cursor->y,
+		reason != NULL ? reason : "unspecified");
+	schedule_outputs(server);
+}
+
+static void active_drag_motion(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct engineos_shell_server *server =
+		wl_container_of(listener, server, active_drag_motion);
+
+	update_drag_icon_position(server, "drag-motion");
+}
+
+static void active_drag_drop(struct wl_listener *listener, void *data) {
+	struct engineos_shell_server *server =
+		wl_container_of(listener, server, active_drag_drop);
+	struct wlr_drag_drop_event *event = data;
+
+	wlr_log(WLR_INFO, "drag drop time=%u", event != NULL ? event->time : 0);
+	update_drag_icon_position(server, "drag-drop");
+}
+
+static void active_drag_destroy(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct engineos_shell_server *server =
+		wl_container_of(listener, server, active_drag_destroy);
+
+	clear_active_drag(server, "drag-destroy");
+}
+
+static void seat_start_drag(struct wl_listener *listener, void *data) {
+	struct engineos_shell_server *server =
+		wl_container_of(listener, server, start_drag);
+	struct wlr_drag *drag = data;
+
+	clear_active_drag(server, "new-drag");
+	server->active_drag = drag;
+
+	server->active_drag_motion.notify = active_drag_motion;
+	wl_signal_add(&drag->events.motion, &server->active_drag_motion);
+	server->active_drag_drop.notify = active_drag_drop;
+	wl_signal_add(&drag->events.drop, &server->active_drag_drop);
+	server->active_drag_destroy.notify = active_drag_destroy;
+	wl_signal_add(&drag->events.destroy, &server->active_drag_destroy);
+
+	if (drag->icon != NULL) {
+		server->drag_icon_tree =
+			wlr_scene_drag_icon_create(&server->scene->tree, drag->icon);
+		if (server->drag_icon_tree != NULL) {
+			server->drag_icon_tree->node.data = drag->icon;
+			server->drag_icon_node_destroy.notify = drag_icon_node_destroy;
+			wl_signal_add(&server->drag_icon_tree->node.events.destroy,
+				&server->drag_icon_node_destroy);
+			update_drag_icon_position(server, "drag-start");
+		} else {
+			wlr_log(WLR_ERROR, "failed to create drag icon scene node");
+		}
+	}
+
+	wlr_log(WLR_INFO, "drag started source=%s icon=%s",
+		drag->source != NULL ? "client" : "none",
+		drag->icon != NULL ? "present" : "none");
+}
+
+static void seat_request_start_drag(struct wl_listener *listener, void *data) {
+	struct engineos_shell_server *server =
+		wl_container_of(listener, server, request_start_drag);
+	struct wlr_seat_request_start_drag_event *event = data;
+
+	if (wlr_seat_validate_pointer_grab_serial(server->seat,
+			event->origin, event->serial)) {
+		wlr_log(WLR_INFO, "drag request accepted type=pointer serial=%u",
+			event->serial);
+		wlr_seat_start_pointer_drag(server->seat, event->drag, event->serial);
+		return;
+	}
+
+	wlr_log(WLR_INFO, "drag request rejected invalid pointer serial=%u",
+		event->serial);
+	if (event->drag != NULL && event->drag->source != NULL) {
+		wlr_data_source_destroy(event->drag->source);
+	}
+}
+
 static bool view_cursor_bounds(struct engineos_shell_view *view,
 		double *min_x, double *min_y, double *max_x, double *max_y) {
 	if (view == NULL || !view->mapped || view->scene_tree == NULL) {
@@ -3687,6 +3826,7 @@ static void cursor_handle_motion(struct wl_listener *listener, void *data) {
 
 	wlr_cursor_move(server->cursor, &event->pointer->base,
 		event->delta_x, event->delta_y);
+	update_drag_icon_position(server, "pointer-motion");
 	if (server->moving_view != NULL) {
 		update_interactive_move(server, "pointer-motion");
 		return;
@@ -3707,6 +3847,7 @@ static void cursor_handle_motion_absolute(struct wl_listener *listener, void *da
 
 	wlr_cursor_warp_absolute(server->cursor, &event->pointer->base,
 		event->x, event->y);
+	update_drag_icon_position(server, "pointer-motion-absolute");
 	if (server->moving_view != NULL) {
 		update_interactive_move(server, "pointer-motion-absolute");
 		return;
@@ -4625,6 +4766,11 @@ static bool setup_server(struct engineos_shell_server *server) {
 		seat_request_set_primary_selection;
 	wl_signal_add(&server->seat->events.request_set_primary_selection,
 		&server->request_set_primary_selection);
+	server->request_start_drag.notify = seat_request_start_drag;
+	wl_signal_add(&server->seat->events.request_start_drag,
+		&server->request_start_drag);
+	server->start_drag.notify = seat_start_drag;
+	wl_signal_add(&server->seat->events.start_drag, &server->start_drag);
 
 	server->new_output.notify = server_new_output;
 	wl_signal_add(&server->backend->events.new_output, &server->new_output);
@@ -4671,6 +4817,9 @@ static void destroy_server(struct engineos_shell_server *server) {
 	remove_listener_if_linked(&server->request_cursor);
 	remove_listener_if_linked(&server->request_set_selection);
 	remove_listener_if_linked(&server->request_set_primary_selection);
+	remove_listener_if_linked(&server->request_start_drag);
+	remove_listener_if_linked(&server->start_drag);
+	clear_active_drag(server, "shell-destroy");
 	remove_listener_if_linked(&server->new_relative_pointer);
 	remove_listener_if_linked(&server->new_pointer_constraint);
 	remove_listener_if_linked(&server->active_pointer_constraint_destroy);

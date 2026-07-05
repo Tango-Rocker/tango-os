@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+engineos-level-agent trenchbroom-setup
+exec /usr/lib/engineos-trenchbroom/trenchbroom-bin "$@"

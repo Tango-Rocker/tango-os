@@ -354,6 +354,8 @@ check_package_inputs() {
       ;;
     engineos-trenchbroom)
       require_file "packages/engineos-trenchbroom/PKGBUILD"
+      require_file "packages/engineos-trenchbroom/engineos-entity-browser-click-create.patch"
+      require_file "packages/engineos-trenchbroom/engineos-trenchbroom-wrapper"
       require_file "packages/engineos-trenchbroom/engineos-trenchbroom.desktop"
       ;;
     engineos-level-agent)

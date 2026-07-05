@@ -1,0 +1,25 @@
+diff --git a/lib/TbUiLib/include/ui/EntityBrowserView.h b/lib/TbUiLib/include/ui/EntityBrowserView.h
+index a642b8d2f..2bc4f9622 100644
+--- a/lib/TbUiLib/include/ui/EntityBrowserView.h
++++ b/lib/TbUiLib/include/ui/EntityBrowserView.h
+@@ -128,0 +129 @@ private:
++  void doLeftClick(Layout& layout, float x, float y) override;
+diff --git a/lib/TbUiLib/src/EntityBrowserView.cpp b/lib/TbUiLib/src/EntityBrowserView.cpp
+index 271e33f26..5dc657e89 100644
+--- a/lib/TbUiLib/src/EntityBrowserView.cpp
++++ b/lib/TbUiLib/src/EntityBrowserView.cpp
+@@ -38,0 +39 @@
++#include "mdl/Map_Entities.h"
+@@ -309,0 +311,12 @@ void EntityBrowserView::doRender(
++void EntityBrowserView::doLeftClick(Layout& layout, const float x, const float y)
++{
++  if (const auto* cell = layout.cellAt(x, y))
++  {
++    const auto& definition = cellData(*cell).entityDefinition;
++    if (definition.pointEntityDefinition)
++    {
++      mdl::createPointEntity(m_document.map(), definition, vm::vec3d{0.0, 0.0, 0.0});
++    }
++  }
++}
++

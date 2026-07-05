@@ -1,16 +1,20 @@
 pkgname=engineos-trenchbroom
 pkgver=2026.1
-pkgrel=1
+pkgrel=4
 pkgdesc="TrenchBroom level editor built from source for EngineOS"
 arch=('x86_64')
 url="https://github.com/TrenchBroom/TrenchBroom"
 license=('custom:EngineOS-TBD')
-depends=('qt6-base' 'qt6-svg' 'glew' 'glu' 'freeglut' 'glm' 'freetype2' 'tinyxml2' 'libxi' 'libxrandr' 'libxxf86vm' 'mesa')
+depends=('qt6-base' 'qt6-svg' 'glew' 'glu' 'freeglut' 'glm' 'freetype2' 'tinyxml2' 'libxi' 'libxrandr' 'libxxf86vm' 'mesa' 'engineos-level-agent')
 makedepends=('git' 'cmake' 'ninja' 'gcc' 'pandoc' 'p7zip' 'pkgconf' 'curl' 'qt6-tools')
 _tag='v2026.1'
 source=("$pkgname::git+https://github.com/TrenchBroom/TrenchBroom.git#tag=$_tag"
+        "engineos-entity-browser-click-create.patch"
+        "engineos-trenchbroom-wrapper"
         "engineos-trenchbroom.desktop")
 sha256sums=('SKIP'
+            'SKIP'
+            'SKIP'
             'SKIP')
 
 prepare() {
@@ -20,6 +24,9 @@ prepare() {
   sed -i '/"name": "freeimage"/,/}/ {/"platform": "!linux"/d;}' vcpkg.json
   sed -i '/"name": "freetype"/,/}/ s/\("version>=": "2.11.1"\),/\1/' vcpkg.json
   sed -i '/"name": "freetype"/,/}/ {/"platform": "!linux"/d;}' vcpkg.json
+  if ! patch -Np1 --reverse --dry-run -i "$srcdir/engineos-entity-browser-click-create.patch" >/dev/null; then
+    patch -Np1 --forward -i "$srcdir/engineos-entity-browser-click-create.patch"
+  fi
 }
 
 build() {
@@ -33,6 +40,9 @@ build() {
 
 package() {
   DESTDIR="$pkgdir" cmake --install "$srcdir/build"
+  install -Dm755 "$pkgdir/usr/bin/trenchbroom" "$pkgdir/usr/lib/engineos-trenchbroom/trenchbroom-bin"
+  install -Dm755 "$srcdir/engineos-trenchbroom-wrapper" "$pkgdir/usr/bin/trenchbroom"
+  install -Dm755 "$srcdir/engineos-trenchbroom-wrapper" "$pkgdir/usr/bin/engineos-trenchbroom"
   install -Dm644 "$srcdir/engineos-trenchbroom.desktop" "$pkgdir/usr/share/applications/engineos-trenchbroom.desktop"
   install -Dm644 "$startdir/../../LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
