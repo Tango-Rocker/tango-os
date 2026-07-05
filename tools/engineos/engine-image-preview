@@ -15,6 +15,11 @@ MAX_FILE_BYTES = 100 * 1024 * 1024
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 PREVIEW_PANELS = {"left", "right", "active"}
 WALLPAPER_TARGETS = {"output", "pane"}
+TERMINAL_SLOTS = {"terminal", "terminal-secondary"}
+TMUX_SESSION_SLOTS = {
+    "engineos": "terminal",
+    "engineos-side": "terminal-secondary",
+}
 
 
 def error(message: str, code: int = 1) -> int:
@@ -44,22 +49,54 @@ def shell_state_path() -> Path:
 
 def shell_slot() -> str | None:
     env_slot = explicit_shell_slot()
-    if env_slot in {"terminal", "terminal-secondary"}:
+    if env_slot in TERMINAL_SLOTS:
         return env_slot
+    tmux_slot = tmux_shell_slot()
+    if tmux_slot is not None:
+        return tmux_slot
     try:
         state = json.loads(shell_state_path().read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     active = state.get("active_slot")
-    if active in {"terminal", "terminal-secondary"}:
+    if active in TERMINAL_SLOTS:
         return str(active)
     return None
 
 
 def explicit_shell_slot() -> str | None:
     env_slot = os.environ.get("ENGINEOS_TERMINAL_ROLE") or os.environ.get("ENGINEOS_PREVIEW_SLOT")
-    if env_slot in {"terminal", "terminal-secondary"}:
+    if env_slot in TERMINAL_SLOTS:
         return env_slot
+    return None
+
+
+def tmux_session_name() -> str | None:
+    pane = os.environ.get("TMUX_PANE")
+    if not pane:
+        return None
+    try:
+        result = subprocess.run(
+            ["tmux", "display-message", "-p", "-t", pane, "#{session_name}"],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=1.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    name = result.stdout.strip()
+    return name or None
+
+
+def tmux_shell_slot() -> str | None:
+    name = tmux_session_name()
+    if name is None:
+        return None
+    slot = TMUX_SESSION_SLOTS.get(name)
+    if slot in TERMINAL_SLOTS:
+        return slot
     return None
 
 

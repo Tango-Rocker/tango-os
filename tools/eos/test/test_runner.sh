@@ -1061,6 +1061,10 @@ PY
   cat >"$fake_bin/tmux" <<'FAKE'
 #!/usr/bin/env bash
 if [[ "$1" == "display-message" ]]; then
+  if [[ "${*: -1}" == "#{session_name}" ]]; then
+    printf '%s\n' "${ENGINEOS_FAKE_TMUX_SESSION:-engineos}"
+    exit 0
+  fi
   printf '10 5 80 24 160 48\n'
   exit 0
 fi
@@ -1115,6 +1119,17 @@ FAKE
   done
   grep -F '"owner":"mc-quick-view:' "$out" >/dev/null ||
     die "image preview quick-view did not use a stable MC owner token"
+
+  cat >"$tmp_dir/shell-state.json" <<'JSON'
+{"active_slot":"terminal"}
+JSON
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_STATE_DIR="$tmp_dir" \
+    ENGINEOS_FAKE_TMUX_SESSION=engineos-side \
+    TMUX_PANE="%1" \
+    "$preview_bin" --quick-view "$png" --panel right --dry-run >"$out"
+  grep -F '"slot":"terminal-secondary"' "$out" >/dev/null ||
+    die "image preview quick-view did not prefer owning tmux terminal over active shell slot"
 
   PATH="$fake_bin:$PATH" \
     TMUX_PANE="%1" \
