@@ -2,7 +2,7 @@
 Type=Application
 Name=EngineOS TrenchBroom
 Comment=Edit Quake maps with EngineOS compiler and launch profiles
-Exec=trenchbroom
+Exec=engineos-trenchbroom
 Icon=trenchbroom
 Terminal=false
-Categories=Development;Game;
+Categories=Development;

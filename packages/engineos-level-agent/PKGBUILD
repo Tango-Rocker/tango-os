@@ -1,6 +1,6 @@
 pkgname=engineos-level-agent
 pkgver=0.1.0
-pkgrel=4
+pkgrel=8
 pkgdesc="EngineOS Quake level generation sidecar for Codex, dgen, QuakeSpasm, and TrenchBroom"
 arch=('any')
 url="https://example.invalid/engineos"

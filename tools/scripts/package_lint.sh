@@ -313,8 +313,32 @@ lint_pkgbuild() {
         fail "$pkg: TrenchBroom source build target is not used"
         return
       fi
+      if ! grep -q 'engineos-entity-browser-click-create.patch' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: EngineOS entity browser click patch is not applied"
+        return
+      fi
+      if ! grep -q 'createPointEntity' "$pkg_dir/engineos-entity-browser-click-create.patch"; then
+        fail "$pkg: entity browser click patch does not create point entities"
+        return
+      fi
       if ! grep -q 'engineos-trenchbroom.desktop' "$pkg_dir/PKGBUILD"; then
         fail "$pkg: launch entry is not installed"
+        return
+      fi
+      if ! grep -q 'usr/bin/engineos-trenchbroom' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: EngineOS TrenchBroom wrapper is not installed"
+        return
+      fi
+      if ! grep -q 'usr/lib/engineos-trenchbroom/trenchbroom-bin' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: real TrenchBroom binary is not moved behind EngineOS wrapper"
+        return
+      fi
+      if ! grep -q 'usr/bin/trenchbroom' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: default trenchbroom command is not wrapped"
+        return
+      fi
+      if ! grep -q 'Exec=engineos-trenchbroom' "$pkg_dir/engineos-trenchbroom.desktop"; then
+        fail "$pkg: desktop entry does not launch the EngineOS TrenchBroom wrapper"
         return
       fi
       ;;

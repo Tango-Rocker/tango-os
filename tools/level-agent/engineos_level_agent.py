@@ -21,6 +21,7 @@ from typing import Any
 SCHEMA = "engineos-level-agent/v1"
 DEFAULT_DGEN_ROOT = Path("/home/dev/quake-generator")
 DEFAULT_WAD = Path("/usr/share/engineos/quake/engineos-dgen.wad")
+DEFAULT_TRENCHBROOM_QUAKE_GAME_DIR = Path("/usr/share/TrenchBroom/games/Quake")
 DEFAULT_SOCKET_NAME = "level-agent.sock"
 
 
@@ -648,19 +649,61 @@ def trenchbroom_setup(_: argparse.Namespace) -> int:
     id1 = Path(os.environ["ENGINEOS_QUAKE_ID1"]) if os.environ.get("ENGINEOS_QUAKE_ID1") else resolve_quake_id1()
     if id1 is None:
         id1 = quake_root / "id1"
+    game_path = id1.parent if id1.name == "id1" else quake_root
     wad = Path(os.environ.get("ENGINEOS_LEVEL_AGENT_WAD", str(DEFAULT_WAD)))
 
     (game_dir / "GameConfig.cfg").write_text(engineos_game_config(), encoding="utf-8")
     (game_dir / "CompilationProfiles.cfg").write_text(engineos_compile_profiles(str(id1), str(wad)), encoding="utf-8")
     (game_dir / "Engines.cfg").write_text(engineos_engines_profile(), encoding="utf-8")
+    install_trenchbroom_quake_metadata(game_dir)
+    write_trenchbroom_preferences(tb_root, game_path)
     print(f"wrote TrenchBroom EngineOS Quake setup under {game_dir}")
     return 0
+
+
+def install_trenchbroom_quake_metadata(game_dir: Path) -> None:
+    source_dir = Path(os.environ.get("ENGINEOS_TRENCHBROOM_QUAKE_GAME_DIR", str(DEFAULT_TRENCHBROOM_QUAKE_GAME_DIR)))
+    required_files = [
+        "Icon.png",
+        "Quake.fgd",
+        "Quoth2.fgd",
+        "Rubicon2.def",
+        "Teamfortress.fgd",
+    ]
+    missing = [str(source_dir / name) for name in required_files if not (source_dir / name).is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "TrenchBroom Quake editor metadata is missing; install engineos-trenchbroom "
+            f"or set ENGINEOS_TRENCHBROOM_QUAKE_GAME_DIR. Missing: {', '.join(missing)}"
+        )
+
+    for name in required_files:
+        shutil.copy2(source_dir / name, game_dir / name)
+
+
+def write_trenchbroom_preferences(tb_root: Path, game_path: Path) -> None:
+    prefs_path = tb_root / "Preferences.json"
+    if prefs_path.is_file():
+        with prefs_path.open("r", encoding="utf-8") as fh:
+            preferences = json.load(fh)
+        if not isinstance(preferences, dict):
+            raise ValueError(f"TrenchBroom preferences must be a JSON object: {prefs_path}")
+    else:
+        preferences = {}
+
+    game_path_text = str(game_path)
+    preferences["Games/EngineOS Quake/Path"] = game_path_text
+    preferences["Games/EngineOSQuake/Path"] = game_path_text
+    preferences["Games/Quake/Path"] = game_path_text
+    prefs_path.parent.mkdir(parents=True, exist_ok=True)
+    prefs_path.write_text(json.dumps(preferences, indent=4, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def engineos_game_config() -> str:
     return """{
   "version": 9,
   "name": "EngineOS Quake",
+  "icon": "Icon.png",
   "fileformats": [
     { "format": "Valve" },
     { "format": "Standard" }
@@ -672,10 +715,11 @@ def engineos_game_config() -> str:
   "materials": {
     "root": ".",
     "extensions": [ ".wad" ],
+    "palette": "gfx/palette.lmp",
     "property": "wad"
   },
   "entities": {
-    "definitions": [ "Quake/Quake.fgd" ],
+    "definitions": [ "Quake.fgd", "Quoth2.fgd", "Rubicon2.def", "Teamfortress.fgd" ],
     "defaultcolor": "0.6 0.6 0.6 1.0",
     "scale": 1,
     "setDefaultProperties": true

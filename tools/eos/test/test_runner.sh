@@ -1665,6 +1665,26 @@ PY
     "$ROOT/tools/level-agent/engineos-level-agent" trenchbroom-setup >"$out"
   grep -F 'EngineOS Quake' "$tmp_dir/tb/games/EngineOSQuake/GameConfig.cfg" >/dev/null ||
     die "trenchbroom setup did not write EngineOS game config"
+  grep -F '"definitions": [ "Quake.fgd", "Quoth2.fgd", "Rubicon2.def", "Teamfortress.fgd" ]' "$tmp_dir/tb/games/EngineOSQuake/GameConfig.cfg" >/dev/null ||
+    die "trenchbroom setup did not write direct EngineOS Quake entity definitions"
+  grep -F '"palette": "gfx/palette.lmp"' "$tmp_dir/tb/games/EngineOSQuake/GameConfig.cfg" >/dev/null ||
+    die "trenchbroom setup did not write Quake model palette path"
+  ! grep -F 'Quake/Quake.fgd' "$tmp_dir/tb/games/EngineOSQuake/GameConfig.cfg" >/dev/null ||
+    die "trenchbroom setup wrote stale nested Quake entity definition path"
+  [[ -f "$tmp_dir/tb/games/EngineOSQuake/Quake.fgd" ]] ||
+    die "trenchbroom setup did not copy Quake.fgd into the EngineOS game profile"
+  python - "$tmp_dir/tb/Preferences.json" "$tmp_dir/quake" <<'PY' ||
+import json
+import sys
+from pathlib import Path
+
+prefs = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected = sys.argv[2]
+assert prefs["Games/EngineOS Quake/Path"] == expected
+assert prefs["Games/EngineOSQuake/Path"] == expected
+assert prefs["Games/Quake/Path"] == expected
+PY
+    die "trenchbroom setup did not write EngineOS Quake game path preferences"
   grep -F '"version": 1' "$tmp_dir/tb/games/EngineOSQuake/CompilationProfiles.cfg" >/dev/null ||
     die "trenchbroom setup did not write compilation profile schema version"
   grep -F '/usr/bin/qbsp' "$tmp_dir/tb/games/EngineOSQuake/CompilationProfiles.cfg" >/dev/null ||

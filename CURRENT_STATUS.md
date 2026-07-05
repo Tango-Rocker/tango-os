@@ -35,8 +35,9 @@ These are historical proof artifacts only; they are not the active work path:
   no longer drives active work.
 - Bare-metal EngineDev has the current shell/app stack deployed without an ISO
   rebuild, including pane-bounds app launch, game cursor capture, MC image
-  preview, Quick View preview integration, and the Falkon startup crash fix.
-  The live shell package is `engineos-shell 0.1.0-8`.
+  preview, Quick View preview integration, the Falkon startup crash fix, and
+  Wayland drag-and-drop support for Qt/editor clients. The live shell package
+  is `engineos-shell 0.1.0-15`.
 - Bare-metal EngineDev has a systemd-boot fallback entry,
   `enginedev-restore-engineos-20260704.conf`, pointing at copied
   `/boot/vmlinuz-linux-restore-engineos-20260704` and
@@ -46,6 +47,17 @@ These are historical proof artifacts only; they are not the active work path:
   terminal `serve/build/status/load` works, Quake console
   `agent` / `agent_status` / `agent_load` works through the tracked
   QuakeSpasm command patch, and TrenchBroom setup/open-file smoke is packaged.
+  The live editor path now uses `engineos-level-agent 0.1.0-8` and
+  `engineos-trenchbroom 2026.1-4`; the packaged `trenchbroom` and
+  `engineos-trenchbroom` commands both regenerate the canonical
+  `EngineOSQuake` profile before opening the real editor binary, with entity
+  definitions resolved from `Quake.fgd` inside that profile, the TrenchBroom
+  game path set to the resolved EngineOS Quake asset root, and Quake model
+  loading configured with `gfx/palette.lmp`. The package also carries an
+  EngineOS source patch so clicking a point entity in the entity browser creates
+  it at the map origin and selects it. Entity browser placement through the
+  shell's Wayland drag/drop path is also live-confirmed on the current
+  EngineDev session.
 - Agent-pack hygiene currently passes. Canonical ownership is
   `.agents/index.toml` plus `docs/agent-roles.md`; reusable workflows belong
   in skills; CLI work stays on direct `eos-*` commands.
@@ -57,8 +69,10 @@ These are historical proof artifacts only; they are not the active work path:
 - Interactive Quake keyboard, mouse, and audible audio in a live Runtime
   console session with user assets.
 - Hardware GL shell startup proof on the AMD target.
-- Manual TrenchBroom GUI compile/run clicks. Setup generation, open-file smoke,
-  and the equivalent compile/launch command path are proven.
+- Manual TrenchBroom GUI compile/run click-through proof. Setup generation,
+  open-file smoke, packaged launcher setup, the equivalent compile/launch
+  command path, entity-browser placement, and OS-level Wayland drag-and-drop
+  are proven.
 - Visual live MC Quick View acceptance capture with the real
   `engine-image-preview` and shell preview path.
 - Persistent Quake asset handling outside generated ISO images.

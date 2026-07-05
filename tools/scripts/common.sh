@@ -139,10 +139,10 @@ engineos_packages() {
     engineos-cube \
     engineos-shell \
     engineos-ericw-tools \
+    engineos-level-agent \
     engineos-trenchbroom \
     engineos-quakespasm \
-    engineos-quake-template \
-    engineos-level-agent
+    engineos-quake-template
 }
 
 engineos_eos_commands() {
