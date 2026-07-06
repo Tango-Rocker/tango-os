@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -u
+
+log_warning() {
+  local state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/engineos"
+  mkdir -p "$state_dir" 2>/dev/null || return 0
+  printf '%s tmux-warning %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$state_dir/tmux.log" 2>/dev/null || true
+}
+
+if ! command -v tmux >/dev/null 2>&1 || ! command -v eos-app >/dev/null 2>&1; then
+  exit 0
+fi
+
+window_id="$(tmux show-options -p -v @engineos-window-id 2>/dev/null || true)"
+if [[ ! "$window_id" =~ ^[1-9][0-9]*$ ]]; then
+  exit 0
+fi
+
+pane_id="${TMUX_PANE:-$(tmux display-message -p '#{pane_id}' 2>/dev/null || true)}"
+if [[ -n "$pane_id" ]]; then
+  if ! eos-app window bind "$window_id" --pane "$pane_id" >/dev/null 2>&1; then
+    log_warning "eos-app window bind $window_id --pane $pane_id failed"
+  fi
+fi
+
+if ! eos-app window focus "$window_id" >/dev/null 2>&1; then
+  log_warning "eos-app window focus $window_id failed"
+fi
+
+exit 0

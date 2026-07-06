@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SESSION="${ENGINEOS_TMUX_APP_SESSION:-engineos}"
+INTERVAL="${ENGINEOS_TMUX_WINDOW_SYNC_INTERVAL:-2}"
+MODE="once"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --daemon)
+      MODE="daemon"
+      ;;
+    --once)
+      MODE="once"
+      ;;
+    help|--help|-h)
+      printf 'Usage: engineos-tmux-window-sync [--once|--daemon]\n'
+      exit 0
+      ;;
+    *)
+      printf 'engineos-tmux-window-sync: unknown option: %s\n' "$1" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+log_warning() {
+  local state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/engineos"
+  mkdir -p "$state_dir" 2>/dev/null || return 0
+  printf '%s tmux-warning %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$state_dir/tmux.log" 2>/dev/null || true
+}
+
+sync_once() {
+  command -v tmux >/dev/null 2>&1 || return 0
+  command -v eos-app >/dev/null 2>&1 || return 0
+  tmux has-session -t "$SESSION" 2>/dev/null || return 0
+
+  local json
+  json="$(eos-app window list --json 2>/dev/null)" || return 0
+  ENGINEOS_WINDOW_JSON="$json" python - "$SESSION" <<'PY' | while IFS=$'\t' read -r window_id name; do
+import json
+import os
+import re
+import sys
+
+session = sys.argv[1]
+data = json.loads(os.environ.get("ENGINEOS_WINDOW_JSON", "{}"))
+for window in data.get("windows", []):
+    if window.get("role") in ("terminal", "terminal-secondary"):
+        continue
+    window_id = window.get("id")
+    if not isinstance(window_id, int):
+        continue
+    app_id = window.get("app_id") or "app"
+    title = window.get("title") or app_id
+    label = re.sub(r"[^A-Za-z0-9_.-]+", "-", title or app_id).strip("-")[:24] or "app"
+    print(f"{window_id}\tgui-{window_id}-{label}")
+PY
+    [[ -n "$window_id" && -n "$name" ]] || continue
+    if tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -Fx -- "$name" >/dev/null; then
+      continue
+    fi
+    tmux new-window -d -t "$SESSION:" -n "$name" "engineos-tmux-window-proxy '$window_id'" ||
+      log_warning "tmux new-window proxy failed window_id=$window_id"
+  done
+}
+
+if [[ "$MODE" == "once" ]]; then
+  sync_once
+  exit 0
+fi
+
+runtime_dir="${XDG_RUNTIME_DIR:-/tmp}/engineos"
+mkdir -p "$runtime_dir" 2>/dev/null || true
+lock_dir="$runtime_dir/tmux-window-sync.lock"
+if ! mkdir "$lock_dir" 2>/dev/null; then
+  exit 0
+fi
+trap 'rmdir "$lock_dir" 2>/dev/null || true' EXIT
+
+while true; do
+  sync_once || log_warning "tmux window sync pass failed"
+  sleep "$INTERVAL"
+done

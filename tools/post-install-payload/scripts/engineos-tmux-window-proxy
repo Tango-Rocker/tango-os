@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+WINDOW_ID="${1:-}"
+if [[ ! "$WINDOW_ID" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'engineos-tmux-window-proxy: expected numeric window id\n' >&2
+  exit 2
+fi
+
+if command -v tmux >/dev/null 2>&1 && [[ -n "${TMUX_PANE:-}" ]]; then
+  tmux set-option -p -q @engineos-window-id "$WINDOW_ID" || true
+fi
+
+while true; do
+  if ! json="$(eos-app window list --json 2>/dev/null)"; then
+    printf '\033[H\033[JEngineOS GUI window %s\n\nshell state unavailable\n' "$WINDOW_ID"
+    sleep 2
+    continue
+  fi
+
+  if ! summary="$(ENGINEOS_WINDOW_JSON="$json" python - "$WINDOW_ID" <<'PY'
+import json
+import os
+import sys
+
+window_id = int(sys.argv[1])
+data = json.loads(os.environ.get("ENGINEOS_WINDOW_JSON", "{}"))
+for window in data.get("windows", []):
+    if window.get("id") == window_id:
+        print("{title}\napp_id={app_id}\nrole={role}\nfocused={focused}\nvisible={visible}\nlayout={layout}\nsize={width}x{height}\nbound={bound} pane={pane_id}".format(**window))
+        raise SystemExit(0)
+raise SystemExit(3)
+PY
+)"; then
+    printf '\033[H\033[JEngineOS GUI window %s closed\n' "$WINDOW_ID"
+    exit 0
+  fi
+
+  printf '\033[H\033[JEngineOS GUI window %s\n\n%s\n\nSelecting this tmux window focuses the GUI app.\n' \
+    "$WINDOW_ID" "$summary"
+  sleep 2
+done

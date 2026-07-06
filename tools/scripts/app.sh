@@ -11,6 +11,7 @@ STATE_DIR="${ENGINEOS_STATE_DIR:-$(engineos_default_state_dir "$ROOT")}"
 APP_STATE_DIR="$STATE_DIR/apps"
 SHELL_STATE_FILE="$STATE_DIR/shell-state.json"
 LAUNCH_BOUNDS_DIR="$STATE_DIR/launch-bounds"
+WINDOW_BOUNDS_DIR="$STATE_DIR/window-bounds"
 APPS_MANIFEST="$(engineos_apps_manifest "$ROOT")"
 DRY_RUN=false
 ACTION="${1:-help}"
@@ -30,6 +31,10 @@ Usage: app.sh launch terminal [args...]
        app.sh launch quake [--smoke] [--pane|--fullscreen|--output] [--map NAME] [--game MOD]
        app.sh recover preview|terminal|terminal-secondary|cube|quake
        app.sh pane sync [--all|cube|engine|quake]
+       app.sh window list [--json]
+       app.sh window focus WINDOW_ID
+       app.sh window bind WINDOW_ID [--pane TMUX_PANE]
+       app.sh window launch -- COMMAND [ARG...]
        app.sh status [--json]
        app.sh manifest path|show|validate
 
@@ -43,6 +48,8 @@ pane sync refreshes existing tmux-pane launch bounds and asks engineos-shell to
 re-layout mapped panel clients without restarting them.
 recover asks the running shell to refresh IPC or relaunch a shell-owned slot
 without restarting the compositor service.
+window commands inspect, focus, bind, or launch arbitrary shell-managed GUI
+windows such as Qt apps and browsers.
 HELP
 }
 
@@ -442,6 +449,214 @@ if response.get("status") != "ok":
     print(response.get("error") or "shell IPC request failed", file=sys.stderr)
     raise SystemExit(1)
 PY
+}
+
+shell_relayout_windows() {
+  local socket_path
+  local response
+  if [[ "${ENGINEOS_APP_NOTIFY_SHELL:-true}" != "true" ]]; then
+    log_line "window relayout notify=skipped reason=disabled"
+    return 0
+  fi
+  socket_path="$(shell_ipc_socket)"
+  if response="$(send_shell_ipc "$socket_path" '{"version":1,"op":"relayout-windows"}' 2>&1)"; then
+    log_line "window relayout method=shell-ipc socket=$socket_path"
+    return 0
+  fi
+  log_line "window relayout ipc=failed socket=$socket_path error=$response"
+  notify_shell_layout_sync
+}
+
+window_bounds_file() {
+  local window_id="$1"
+  printf '%s/%s.env\n' "$WINDOW_BOUNDS_DIR" "$window_id"
+}
+
+write_window_tmux_bounds() {
+  local window_id="$1"
+  local pane_left="$2"
+  local pane_top="$3"
+  local pane_width="$4"
+  local pane_height="$5"
+  local window_width="$6"
+  local window_height="$7"
+  local pane_id="${8:-${TMUX_PANE:-unknown}}"
+  local file
+  local tmp
+
+  mkdir -p "$WINDOW_BOUNDS_DIR"
+  file="$(window_bounds_file "$window_id")"
+  tmp="$file.$$"
+  {
+    printf 'schema=engineos-window-bounds-v0\n'
+    printf 'window_id=%s\n' "$window_id"
+    printf 'mode=pane\n'
+    printf 'source=tmux\n'
+    printf 'pane_id=%s\n' "$pane_id"
+    printf 'pane_left=%s\n' "$pane_left"
+    printf 'pane_top=%s\n' "$pane_top"
+    printf 'pane_width=%s\n' "$pane_width"
+    printf 'pane_height=%s\n' "$pane_height"
+    printf 'window_width=%s\n' "$window_width"
+    printf 'window_height=%s\n' "$window_height"
+    printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } >"$tmp"
+  mv "$tmp" "$file"
+}
+
+run_window_list() {
+  local json=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json)
+        json=true
+        ;;
+      help|--help|-h)
+        usage
+        return 0
+        ;;
+      *)
+        die "unknown app window list option: $1"
+        ;;
+    esac
+    shift
+  done
+
+  [[ -r "$SHELL_STATE_FILE" ]] || die "shell state is not readable: $SHELL_STATE_FILE"
+  python - "$SHELL_STATE_FILE" "$WINDOW_BOUNDS_DIR" "$json" <<'PY'
+import json
+import os
+import sys
+
+state_file, bounds_dir, as_json = sys.argv[1], sys.argv[2], sys.argv[3] == "true"
+with open(state_file, "r", encoding="utf-8") as handle:
+    state = json.load(handle)
+
+windows = []
+for item in state.get("windows", []):
+    window_id = item.get("id")
+    bound = False
+    pane_id = ""
+    if isinstance(window_id, int):
+        bounds_file = os.path.join(bounds_dir, f"{window_id}.env")
+        if os.path.exists(bounds_file):
+            bound = True
+            with open(bounds_file, "r", encoding="utf-8") as handle:
+                for line in handle:
+                    key, _, value = line.strip().partition("=")
+                    if key == "pane_id":
+                        pane_id = value
+                        break
+    windows.append({
+        "id": window_id,
+        "role": item.get("role", "unknown"),
+        "title": item.get("title", ""),
+        "app_id": item.get("app_id", ""),
+        "focused": bool(item.get("focused", False)),
+        "visible": bool(item.get("visible", False)),
+        "minimized": bool(item.get("minimized", False)),
+        "layout": item.get("layout", ""),
+        "x": item.get("x", 0),
+        "y": item.get("y", 0),
+        "width": item.get("width", 0),
+        "height": item.get("height", 0),
+        "bound": bound,
+        "pane_id": pane_id,
+    })
+
+if as_json:
+    print(json.dumps({"ok": True, "windows": windows}, separators=(",", ":")))
+else:
+    print("ID\tROLE\tFOCUS\tVISIBLE\tLAYOUT\tSIZE\tAPP_ID\tTITLE")
+    for window in windows:
+        print("{id}\t{role}\t{focused}\t{visible}\t{layout}\t{width}x{height}\t{app_id}\t{title}".format(**window))
+PY
+}
+
+run_window_focus() {
+  local window_id="${1:-}"
+  shift || true
+  [[ $# -eq 0 ]] || die "window focus takes exactly one window id"
+  is_positive_integer "$window_id" || die "window focus requires a positive numeric window id"
+
+  local socket_path
+  local request
+  socket_path="$(shell_ipc_socket)"
+  request="{\"version\":1,\"op\":\"focus-window\",\"window_id\":$window_id}"
+  send_shell_ipc "$socket_path" "$request" >/dev/null
+  log_line "window focus id=$window_id method=shell-ipc socket=$socket_path"
+  printf 'focused window %s\n' "$window_id"
+}
+
+run_window_bind() {
+  local window_id="${1:-}"
+  shift || true
+  is_positive_integer "$window_id" || die "window bind requires a positive numeric window id"
+
+  local pane_id="${TMUX_PANE:-}"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --pane)
+        shift
+        [[ $# -gt 0 ]] || die "window bind --pane requires a tmux pane id"
+        pane_id="$1"
+        ;;
+      help|--help|-h)
+        usage
+        return 0
+        ;;
+      *)
+        die "unknown app window bind option: $1"
+        ;;
+    esac
+    shift
+  done
+  [[ -n "$pane_id" ]] || die "window bind requires TMUX_PANE or --pane"
+
+  local geometry
+  geometry="$(tmux_pane_geometry "$pane_id")" ||
+    die "window bind could not read tmux geometry for pane $pane_id"
+  # shellcheck disable=SC2086
+  write_window_tmux_bounds "$window_id" $geometry "$pane_id"
+  shell_relayout_windows
+  log_line "window bind id=$window_id source=tmux pane=$pane_id bounds=$geometry"
+  printf 'bound window %s to pane %s bounds %s\n' "$window_id" "$pane_id" "$geometry"
+}
+
+run_window_launch() {
+  if [[ "${1:-}" == "--" ]]; then
+    shift
+  fi
+  [[ $# -gt 0 ]] || die "window launch requires a command"
+  require_shell_display "window"
+  prepare_client_env
+  log_line "window launch owner=engineos-shell display=${WAYLAND_DISPLAY:-missing} command=$(quote_cmd "$@")"
+  exec "$@"
+}
+
+run_window() {
+  local sub="${1:-help}"
+  shift || true
+  case "$sub" in
+    list)
+      run_window_list "$@"
+      ;;
+    focus)
+      run_window_focus "$@"
+      ;;
+    bind)
+      run_window_bind "$@"
+      ;;
+    launch)
+      run_window_launch "$@"
+      ;;
+    help|--help|-h)
+      usage
+      ;;
+    *)
+      die "unknown app window action: $sub"
+      ;;
+  esac
 }
 
 recover_preview_ipc() {
@@ -1146,6 +1361,9 @@ case "$ACTION" in
     ;;
   pane)
     run_pane "$@"
+    ;;
+  window)
+    run_window "$@"
     ;;
   manifest)
     run_manifest "$@"

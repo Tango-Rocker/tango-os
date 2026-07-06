@@ -263,6 +263,14 @@ configure_tmux() {
   else
     die "tmux pane sync helper payload missing"
   fi
+  for helper in engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
+    if [[ -f "$PAYLOAD/scripts/$helper" ]]; then
+      as_root install -Dm0755 "$PAYLOAD/scripts/$helper" "/usr/local/bin/$helper"
+      log "installed: /usr/local/bin/$helper"
+    else
+      die "tmux window helper payload missing: $helper"
+    fi
+  done
 }
 
 configure_zsh() {

@@ -1535,6 +1535,73 @@ JSON
   [[ -f "$tmp_dir/run/apps/cube.status" ]] ||
     die "app launcher did not write cube state record"
 
+  cat >"$tmp_dir/run/shell-state.json" <<'JSON'
+{
+  "schema": "engineos-shell-state-v0",
+  "windows": [
+    {"id": 7, "role": "unknown", "focused": false, "visible": true, "minimized": false, "maximized": false, "layout": "floating", "x": 40, "y": 40, "width": 900, "height": 700, "title": "Falkon", "app_id": "org.kde.falkon"},
+    {"id": 2, "role": "terminal", "focused": true, "visible": true, "minimized": false, "maximized": false, "layout": "output", "x": 0, "y": 0, "width": 1600, "height": 900, "title": "EngineOS", "app_id": "foot"}
+  ]
+}
+JSON
+  ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    "$SCRIPT_DIR/app.sh" window list --json >"$out"
+  grep -F '"id":7' "$out" >/dev/null ||
+    die "app window list json did not report Falkon window id"
+  grep -F '"app_id":"org.kde.falkon"' "$out" >/dev/null ||
+    die "app window list json did not report Falkon app id"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    ENGINEOS_APP_NOTIFY_SHELL=false \
+    ENGINEOS_FAKE_TMUX_GEOMETRY="12 4 90 26 180 52" \
+    TMUX="$tmp_dir/tmux-socket,1,0" \
+    TMUX_PANE="%9" \
+    "$SCRIPT_DIR/app.sh" window bind 7 >"$out"
+  grep -F 'window_id=7' "$tmp_dir/run/window-bounds/7.env" >/dev/null ||
+    die "app window bind did not write per-window bounds"
+  grep -F 'pane_id=%9' "$tmp_dir/run/window-bounds/7.env" >/dev/null ||
+    die "app window bind did not record tmux pane id"
+  grep -F 'pane_width=90' "$tmp_dir/run/window-bounds/7.env" >/dev/null ||
+    die "app window bind did not record tmux pane geometry"
+
+  local focus_sock="$tmp_dir/focus.sock"
+  python - "$focus_sock" "$tmp_dir/focus-request.txt" <<'PY' &
+import os
+import socket
+import sys
+sock_path = sys.argv[1]
+request_path = sys.argv[2]
+try:
+    os.unlink(sock_path)
+except FileNotFoundError:
+    pass
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(sock_path)
+server.listen(1)
+client, _ = server.accept()
+request = client.recv(4096)
+open(request_path, "wb").write(request)
+client.sendall(b'{"version":1,"status":"ok","capabilities":["focus-window"]}\n')
+client.close()
+server.close()
+PY
+  local focus_server_pid=$!
+  for _ in {1..50}; do
+    [[ -S "$focus_sock" ]] && break
+    sleep 0.02
+  done
+  ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    ENGINEOS_SHELL_IPC_SOCKET="$focus_sock" \
+    "$SCRIPT_DIR/app.sh" window focus 7 >"$out"
+  wait "$focus_server_pid"
+  grep -F 'focused window 7' "$out" >/dev/null ||
+    die "app window focus did not report focused window"
+  grep -F '"op":"focus-window","window_id":7' "$tmp_dir/focus-request.txt" >/dev/null ||
+    die "app window focus did not send shell IPC focus request"
+
   "$SCRIPT_DIR/app.sh" manifest validate >"$out"
   grep -F 'App manifest validation summary: 0 failure(s)' "$out" >/dev/null ||
     die "app manifest validation did not pass"
@@ -3172,6 +3239,10 @@ run_post_first_deploy() {
     die "post-first-deploy tmux config status line does not show pane path"
   grep -F 'engineos-tmux-pane-sync --all' "$payload_dir/assets/tmux.conf" >/dev/null ||
     die "post-first-deploy tmux config does not wire EngineOS pane sync hooks"
+  grep -F 'engineos-tmux-window-sync --daemon' "$payload_dir/assets/tmux.conf" >/dev/null ||
+    die "post-first-deploy tmux config does not start EngineOS GUI window sync"
+  grep -F 'engineos-tmux-window-focus' "$payload_dir/assets/tmux.conf" >/dev/null ||
+    die "post-first-deploy tmux config does not wire GUI window focus hooks"
   grep -F 'after-select-pane' "$payload_dir/assets/tmux.conf" >/dev/null ||
     die "post-first-deploy tmux config does not sync after pane selection"
   grep -F "set -g @continuum-restore 'on'" "$payload_dir/assets/tmux.conf" >/dev/null ||
@@ -3188,6 +3259,12 @@ run_post_first_deploy() {
     die "post-first-deploy payload missing tmux pane sync helper"
   grep -F 'tmux-warning' "$payload_dir/scripts/engineos-tmux-pane-sync" >/dev/null ||
     die "post-first-deploy tmux pane sync helper does not log failures"
+  for helper in engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
+    [[ -x "$payload_dir/scripts/$helper" ]] ||
+      die "post-first-deploy payload missing executable tmux GUI helper: $helper"
+  done
+  grep -F 'tmux-warning' "$payload_dir/scripts/engineos-tmux-window-focus" >/dev/null ||
+    die "post-first-deploy tmux GUI focus helper does not log failures"
   [[ -f "$payload_dir/assets/zshrc" ]] ||
     die "post-first-deploy payload missing zsh config"
   [[ -f "$payload_dir/assets/zprofile" ]] ||
@@ -3225,6 +3302,8 @@ run_post_first_deploy() {
     die "post-first-deploy dev shell start does not clear stale Wayland sockets"
   grep -F 'engineos-tmux-pane-sync' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not install tmux pane sync helper"
+  grep -F 'engineos-tmux-window-sync' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not install tmux GUI window helpers"
   [[ -f "$payload_dir/assets/systemd/engineos-dev-shell.service" ]] ||
     die "post-first-deploy payload missing dev shell service"
   grep -F 'ENGINEOS_TERMINAL_REQUIRE_WAYLAND=true' "$payload_dir/assets/systemd/engineos-dev-shell.service" >/dev/null ||
