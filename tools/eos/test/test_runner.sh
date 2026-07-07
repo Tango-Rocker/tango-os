@@ -1291,6 +1291,10 @@ FAKE
   cat >"$fake_bin/tmux" <<'FAKE'
 #!/usr/bin/env bash
 if [[ "$1" == "display-message" ]]; then
+  if [[ "${*: -1}" == *client_cell_width* ]]; then
+    printf '%s\n' "${ENGINEOS_FAKE_TMUX_CELL_SIZE:-9 18}"
+    exit 0
+  fi
   printf '%s\n' "${ENGINEOS_FAKE_TMUX_GEOMETRY:-10 5 80 24 160 48}"
   exit 0
 fi
@@ -1578,6 +1582,8 @@ JSON
     die "app window bind did not preserve tmux pane height"
   grep -F 'window_height=67' "$tmp_dir/run/window-bounds/7.env" >/dev/null ||
     die "app window bind did not use tmux client height to exclude statusline"
+  grep -F 'cell_height=18' "$tmp_dir/run/window-bounds/7.env" >/dev/null ||
+    die "app window bind did not record tmux cell pixel height"
 
   local focus_sock="$tmp_dir/focus.sock"
   python - "$focus_sock" "$tmp_dir/focus-request.txt" <<'PY' &

@@ -106,6 +106,8 @@ struct engineos_layout_request {
 	int pane_height;
 	int window_width;
 	int window_height;
+	int cell_width;
+	int cell_height;
 	char source[32];
 };
 
@@ -1076,6 +1078,10 @@ static bool read_layout_request(struct engineos_shell_server *server,
 			parse_nonnegative_int(value, &request->window_width);
 		} else if (strcmp(key, "window_height") == 0) {
 			parse_nonnegative_int(value, &request->window_height);
+		} else if (strcmp(key, "cell_width") == 0) {
+			parse_nonnegative_int(value, &request->cell_width);
+		} else if (strcmp(key, "cell_height") == 0) {
+			parse_nonnegative_int(value, &request->cell_height);
 		}
 	}
 	fclose(file);
@@ -1100,14 +1106,26 @@ static bool apply_pane_geometry(
 		const struct engineos_layout_request *request,
 		const struct engineos_view_geometry *output_geometry,
 		struct engineos_view_geometry *geometry) {
-	long x_offset = ((long)output_geometry->width * request->pane_left) /
-		request->window_width;
-	long y_offset = ((long)output_geometry->height * request->pane_top) /
-		request->window_height;
-	long width = ((long)output_geometry->width * request->pane_width +
-		request->window_width - 1) / request->window_width;
-	long height = ((long)output_geometry->height * request->pane_height +
-		request->window_height - 1) / request->window_height;
+	long x_offset = 0;
+	long y_offset = 0;
+	long width = 0;
+	long height = 0;
+
+	if (request->cell_width > 0 && request->cell_height > 0) {
+		x_offset = (long)request->pane_left * request->cell_width;
+		y_offset = (long)request->pane_top * request->cell_height;
+		width = (long)request->pane_width * request->cell_width;
+		height = (long)request->pane_height * request->cell_height;
+	} else {
+		x_offset = ((long)output_geometry->width * request->pane_left) /
+			request->window_width;
+		y_offset = ((long)output_geometry->height * request->pane_top) /
+			request->window_height;
+		width = ((long)output_geometry->width * request->pane_width) /
+			request->window_width;
+		height = ((long)output_geometry->height * request->pane_height) /
+			request->window_height;
+	}
 
 	if (width <= 0 || height <= 0 ||
 			x_offset < 0 || y_offset < 0 ||
@@ -1198,6 +1216,10 @@ static bool read_window_layout_request(struct engineos_shell_view *view,
 			parse_nonnegative_int(value, &request->window_width);
 		} else if (strcmp(key, "window_height") == 0) {
 			parse_nonnegative_int(value, &request->window_height);
+		} else if (strcmp(key, "cell_width") == 0) {
+			parse_nonnegative_int(value, &request->cell_width);
+		} else if (strcmp(key, "cell_height") == 0) {
+			parse_nonnegative_int(value, &request->cell_height);
 		}
 	}
 	fclose(file);

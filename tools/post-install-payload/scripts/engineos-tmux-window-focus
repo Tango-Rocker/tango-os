@@ -11,10 +11,28 @@ if ! command -v tmux >/dev/null 2>&1 || ! command -v eos-app >/dev/null 2>&1; th
   exit 0
 fi
 
+find_active_proxy_window() {
+  while IFS=$'\t' read -r candidate_pane active window_name; do
+    [[ "$active" == "1" && "$window_name" == gui-* ]] || continue
+    candidate_id="$(tmux show-options -pt "$candidate_pane" -v @engineos-window-id 2>/dev/null || true)"
+    if [[ "$candidate_id" =~ ^[1-9][0-9]*$ ]]; then
+      printf '%s\t%s\n' "$candidate_pane" "$candidate_id"
+      return 0
+    fi
+  done < <(tmux list-panes -s -F '#{pane_id}\t#{window_active}\t#{window_name}' 2>/dev/null || true)
+  return 1
+}
+
 pane_id="${TMUX_PANE:-$(tmux display-message -p '#{pane_id}' 2>/dev/null || true)}"
 window_id=""
 if [[ -n "$pane_id" ]]; then
   window_id="$(tmux show-options -pt "$pane_id" -v @engineos-window-id 2>/dev/null || true)"
+fi
+if [[ ! "$window_id" =~ ^[1-9][0-9]*$ ]]; then
+  active_proxy="$(find_active_proxy_window || true)"
+  if [[ -n "$active_proxy" ]]; then
+    IFS=$'\t' read -r pane_id window_id <<<"$active_proxy"
+  fi
 fi
 if [[ ! "$window_id" =~ ^[1-9][0-9]*$ ]]; then
   window_id="$(tmux show-options -p -v @engineos-window-id 2>/dev/null || true)"

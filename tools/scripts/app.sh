@@ -253,6 +253,24 @@ tmux_pane_geometry() {
     "$pane_left" "$pane_top" "$pane_width" "$pane_height" "$window_width" "$window_height"
 }
 
+tmux_pane_cell_size() {
+  local target="${1:-${TMUX_PANE:-}}"
+  [[ -n "${TMUX:-}" && -n "$target" ]] || return 1
+  have_cmd tmux || return 1
+
+  local values
+  values="$(tmux display-message -p -t "$target" \
+    '#{client_cell_width} #{client_cell_height}' 2>/dev/null)" ||
+    return 1
+
+  local cell_width cell_height
+  read -r cell_width cell_height <<<"$values"
+  is_positive_integer "${cell_width:-}" || return 1
+  is_positive_integer "${cell_height:-}" || return 1
+
+  printf '%s %s\n' "$cell_width" "$cell_height"
+}
+
 write_tmux_bounds() {
   local role="$1"
   local pane_left="$2"
@@ -280,6 +298,12 @@ write_tmux_bounds() {
     printf 'pane_height=%s\n' "$pane_height"
     printf 'window_width=%s\n' "$window_width"
     printf 'window_height=%s\n' "$window_height"
+    if cell_size="$(tmux_pane_cell_size "$pane_id")"; then
+      local cell_width cell_height
+      read -r cell_width cell_height <<<"$cell_size"
+      printf 'cell_width=%s\n' "$cell_width"
+      printf 'cell_height=%s\n' "$cell_height"
+    fi
     printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } >"$tmp"
   mv "$tmp" "$file"
@@ -505,6 +529,12 @@ write_window_tmux_bounds() {
     printf 'pane_height=%s\n' "$pane_height"
     printf 'window_width=%s\n' "$window_width"
     printf 'window_height=%s\n' "$window_height"
+    if cell_size="$(tmux_pane_cell_size "$pane_id")"; then
+      local cell_width cell_height
+      read -r cell_width cell_height <<<"$cell_size"
+      printf 'cell_width=%s\n' "$cell_width"
+      printf 'cell_height=%s\n' "$cell_height"
+    fi
     printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } >"$tmp"
   mv "$tmp" "$file"

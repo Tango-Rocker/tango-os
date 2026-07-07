@@ -65,7 +65,10 @@ These are historical proof artifacts only; they are not the active work path:
   session: mapped shell windows have session-local IDs in shell state,
   `eos-app window list|focus|bind|launch` is the control surface, tmux proxy
   helpers mirror non-terminal GUI windows, and pane-bound generic GUI windows
-  are resized/clipped through per-window bounds. The rebuilt `engineos-shell`
+  are resized/clipped through per-window bounds. GUI proxy tabs now bind
+  windows using tmux client cell dimensions, refresh bounds on tmux tab/layout
+  and client-resize hooks, focus the app when the proxy tab is selected, and
+  suppress no-op pane sync text in hook output. The rebuilt `engineos-shell`
   and `engineos-tools` packages were reinstalled, `engineos-dev-shell.service`
   was restarted, and live Qt/Falkon proxy focus/bind was proven with window
   bounds written under `/run/user/1000/engineos/window-bounds/`.

@@ -61,6 +61,7 @@ refresh_wayland_session() {
       [[ -e "$socket" ]] || continue
       rm -f "$socket"
     done
+    rm -rf "$RUNTIME_DIR/engineos/window-bounds"
     log "refreshed wayland runtime dir=$RUNTIME_DIR"
   fi
 }

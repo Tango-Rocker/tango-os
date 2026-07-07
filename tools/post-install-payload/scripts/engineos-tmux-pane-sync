@@ -11,10 +11,13 @@ if ! command -v eos-app >/dev/null 2>&1; then
   exit 0
 fi
 
-eos-app pane sync "$@"
+output="$(eos-app pane sync "$@" 2>&1)"
 rc=$?
 if [[ "$rc" -ne 0 ]]; then
   log_warning "eos-app pane sync $* failed status=$rc"
+  if [[ -n "$output" ]]; then
+    log_warning "$output"
+  fi
 fi
 
 exit 0
