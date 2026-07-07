@@ -3316,15 +3316,23 @@ static void apply_launchpad_visibility(struct engineos_shell_server *server,
 
 static void relayout_shell_views(struct engineos_shell_server *server,
 		const char *reason) {
+	struct engineos_shell_view *previous_focus = server->focused_view;
 	apply_launchpad_visibility(server, reason);
+	if (is_managed_floating_view(previous_focus) &&
+			previous_focus->mapped && !previous_focus->minimized) {
+		focus_view(previous_focus);
+	}
 
 	struct engineos_shell_view *view;
 	wl_list_for_each(view, &server->views, link) {
 		if (!view->mapped || is_launchpad_role(view->role)) {
 			continue;
 		}
+		struct engineos_view_geometry geometry = {0};
+		compute_view_geometry(view, &geometry);
 		apply_view_layout(view);
-		wlr_scene_node_set_enabled(&view->scene_tree->node, !view->minimized);
+		wlr_scene_node_set_enabled(&view->scene_tree->node,
+			view_geometry_visible(server, view, &geometry));
 	}
 	if (is_managed_floating_view(server->focused_view) &&
 			server->focused_view->mapped && !server->focused_view->minimized) {

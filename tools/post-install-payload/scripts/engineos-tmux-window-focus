@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -u
 
+SESSION="${ENGINEOS_TMUX_APP_SESSION:-engineos}"
+
 log_warning() {
   local state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/engineos"
   mkdir -p "$state_dir" 2>/dev/null || return 0
@@ -19,7 +21,7 @@ find_active_proxy_window() {
       printf '%s\t%s\n' "$candidate_pane" "$candidate_id"
       return 0
     fi
-  done < <(tmux list-panes -s -F '#{pane_id}\t#{window_active}\t#{window_name}' 2>/dev/null || true)
+  done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}\t#{window_active}\t#{window_name}' 2>/dev/null || true)
   return 1
 }
 
@@ -64,7 +66,7 @@ raise SystemExit(1)
 PY
 }
 
-pane_id="${TMUX_PANE:-$(tmux display-message -p '#{pane_id}' 2>/dev/null || true)}"
+pane_id="${TMUX_PANE:-$(tmux display-message -p -t "$SESSION:" '#{pane_id}' 2>/dev/null || true)}"
 window_id=""
 if [[ -n "$pane_id" ]]; then
   window_id="$(tmux show-options -pt "$pane_id" -v @engineos-window-id 2>/dev/null || true)"
@@ -85,6 +87,8 @@ if [[ ! "$window_id" =~ ^[1-9][0-9]*$ ]]; then
   window_id="$(tmux show-options -p -v @engineos-window-id 2>/dev/null || true)"
 fi
 if [[ ! "$window_id" =~ ^[1-9][0-9]*$ ]]; then
+  eos-app recover terminal >/dev/null 2>&1 ||
+    log_warning "eos-app recover terminal failed for unbound active pane"
   exit 0
 fi
 
@@ -95,7 +99,23 @@ if [[ -n "$pane_id" ]]; then
 fi
 
 if ! eos-app window focus "$window_id" >/dev/null 2>&1; then
-  log_warning "eos-app window focus $window_id failed"
+  recovered_id=""
+  if [[ -n "$pane_id" ]]; then
+    recovered_id="$(find_matching_active_window "$pane_id" || true)"
+  fi
+  if [[ "$recovered_id" =~ ^[1-9][0-9]*$ && "$recovered_id" != "$window_id" ]]; then
+    window_id="$recovered_id"
+    tmux set-option -pt "$pane_id" -q @engineos-window-id "$window_id" || true
+    if [[ -n "$pane_id" ]]; then
+      if ! eos-app window bind "$window_id" --pane "$pane_id" >/dev/null 2>&1; then
+        log_warning "eos-app window bind $window_id --pane $pane_id failed"
+      fi
+    fi
+    eos-app window focus "$window_id" >/dev/null 2>&1 ||
+      log_warning "eos-app window focus $window_id failed"
+  else
+    log_warning "eos-app window focus $window_id failed"
+  fi
 fi
 
 exit 0

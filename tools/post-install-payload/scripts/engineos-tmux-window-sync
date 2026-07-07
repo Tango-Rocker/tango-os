@@ -38,7 +38,6 @@ pane_matches_window() {
   local pane_window pane_command
   pane_window="$(tmux display-message -pt "$pane" '#{window_name}' 2>/dev/null || true)"
   pane_command="$(tmux display-message -pt "$pane" '#{pane_current_command}' 2>/dev/null || true)"
-  [[ "$pane_window" != gui-* ]] || return 1
 
   local app_l title_l window_l command_l
   app_l="${app_id,,}"
@@ -54,10 +53,49 @@ pane_matches_window() {
       [[ "$haystack" == *"$command_l"* ]] && return 0
       ;;
   esac
-  if [[ -n "$window_l" ]]; then
+  if [[ -n "$window_l" && "$window_l" != gui-* ]]; then
     [[ "$haystack" == *"$window_l"* ]] && return 0
   fi
   return 1
+}
+
+prune_stale_bindings() {
+  local json="$1"
+  local live_ids
+  live_ids="$(ENGINEOS_WINDOW_JSON="$json" python - <<'PY'
+import json
+import os
+
+data = json.loads(os.environ.get("ENGINEOS_WINDOW_JSON", "{}"))
+for window in data.get("windows", []):
+    window_id = window.get("id")
+    if isinstance(window_id, int) and window_id > 0:
+        print(window_id)
+PY
+)"
+
+  while IFS= read -r pane; do
+    local existing_id
+    existing_id="$(tmux show-options -pt "$pane" -v @engineos-window-id 2>/dev/null || true)"
+    [[ "$existing_id" =~ ^[1-9][0-9]*$ ]] || continue
+    if grep -Fxq "$existing_id" <<<"$live_ids"; then
+      continue
+    fi
+
+    local pane_window pane_command
+    pane_window="$(tmux display-message -pt "$pane" '#{window_name}' 2>/dev/null || true)"
+    pane_command="$(tmux display-message -pt "$pane" '#{pane_current_command}' 2>/dev/null || true)"
+    rm -f "${XDG_RUNTIME_DIR:-/tmp}/engineos/window-bounds/$existing_id.env" 2>/dev/null || true
+    if [[ "$pane_window" == gui-* ]]; then
+      case "$pane_command" in
+        bash|zsh|sh|fish)
+          tmux kill-window -t "$pane" 2>/dev/null || true
+          continue
+          ;;
+      esac
+    fi
+    tmux set-option -upt "$pane" @engineos-window-id 2>/dev/null || true
+  done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}' 2>/dev/null || true)
 }
 
 sync_once() {
@@ -67,7 +105,8 @@ sync_once() {
 
   local json
   json="$(eos-app window list --json 2>/dev/null)" || return 0
-  ENGINEOS_WINDOW_JSON="$json" python - "$SESSION" <<'PY' | while IFS=$'\t' read -r window_id name app_id title; do
+  prune_stale_bindings "$json"
+  ENGINEOS_WINDOW_JSON="$json" python - "$SESSION" <<'PY' | while IFS=$'\t' read -r window_id name app_id title focused; do
 import json
 import os
 import re
@@ -84,7 +123,8 @@ for window in data.get("windows", []):
     app_id = window.get("app_id") or "app"
     title = window.get("title") or app_id
     label = re.sub(r"[^A-Za-z0-9_.-]+", "-", title or app_id).strip("-")[:24] or "app"
-    print(f"{window_id}\tgui-{window_id}-{label}\t{app_id}\t{title}")
+    focused = "true" if bool(window.get("focused", False)) else "false"
+    print(f"{window_id}\tgui-{window_id}-{label}\t{app_id}\t{title}\t{focused}")
 PY
     [[ -n "$window_id" && -n "$name" ]] || continue
     existing_pane=""
@@ -132,8 +172,20 @@ PY
       tmux set-option -pt "$new_pane" -q @engineos-window-id "$window_id" || true
       eos-app window bind "$window_id" --pane "$new_pane" >/dev/null 2>&1 ||
         log_warning "eos-app window bind failed window_id=$window_id pane=$new_pane"
+      if [[ "$focused" == "true" ]]; then
+        new_window_target="$(tmux display-message -pt "$new_pane" '#{session_name}:#{window_index}' 2>/dev/null || true)"
+        if [[ -n "$new_window_target" ]]; then
+          tmux select-window -t "$new_window_target" 2>/dev/null || true
+        fi
+      fi
     fi
   done
+  if command -v engineos-tmux-window-focus >/dev/null 2>&1; then
+    active_pane="$(tmux display-message -p -t "$SESSION:" '#{pane_id}' 2>/dev/null || true)"
+    if [[ -n "$active_pane" ]]; then
+      TMUX_PANE="$active_pane" engineos-tmux-window-focus || true
+    fi
+  fi
 }
 
 if [[ "$MODE" == "once" ]]; then

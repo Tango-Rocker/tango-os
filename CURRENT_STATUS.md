@@ -70,8 +70,10 @@ These are historical proof artifacts only; they are not the active work path:
   and client-resize hooks, bring the app forward when the proxy tab is
   selected, bind matching launcher panes such as a `falkon` tmux window
   directly to the shell window instead of requiring a generated proxy tab, hide
-  pane-bound GUI windows again when a normal tmux tab is selected, and suppress
-  no-op pane sync text in hook output. The rebuilt
+  pane-bound GUI windows again when a normal tmux tab is selected, preserve the
+  focused pane-bound GUI across bounds refreshes, prune stale proxy tabs for
+  dead shell window IDs, select the new proxy tab when a freshly mapped GUI app
+  is already focused, and suppress no-op pane sync text in hook output. The rebuilt
   `engineos-shell` and `engineos-tools` packages were reinstalled,
   `engineos-dev-shell.service` was restarted, and live Qt/Falkon proxy
   focus/bind was proven with window bounds written under
