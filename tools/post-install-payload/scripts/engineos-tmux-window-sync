@@ -58,11 +58,28 @@ for window in data.get("windows", []):
     print(f"{window_id}\tgui-{window_id}-{label}")
 PY
     [[ -n "$window_id" && -n "$name" ]] || continue
-    if tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -Fx -- "$name" >/dev/null; then
+    existing_pane=""
+    while IFS= read -r pane; do
+      pane_window="$(tmux display-message -pt "$pane" '#{window_name}' 2>/dev/null || true)"
+      [[ "$pane_window" == gui-* ]] || continue
+      existing_id="$(tmux show-options -pt "$pane" -v @engineos-window-id 2>/dev/null || true)"
+      if [[ "$existing_id" == "$window_id" ]]; then
+        existing_pane="$pane"
+        break
+      fi
+    done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}' 2>/dev/null || true)
+    if [[ -n "$existing_pane" ]]; then
+      current_name="$(tmux display-message -pt "$existing_pane" '#{window_name}' 2>/dev/null || true)"
+      if [[ -n "$current_name" && "$current_name" != "$name" ]]; then
+        tmux rename-window -t "$existing_pane" "$name" 2>/dev/null || true
+      fi
       continue
     fi
-    tmux new-window -d -t "$SESSION:" -n "$name" "engineos-tmux-window-proxy '$window_id'" ||
+    new_pane="$(tmux new-window -P -F '#{pane_id}' -d -t "$SESSION:" -n "$name" "engineos-tmux-window-proxy '$window_id'")" ||
       log_warning "tmux new-window proxy failed window_id=$window_id"
+    if [[ -n "${new_pane:-}" ]]; then
+      tmux set-option -pt "$new_pane" -q @engineos-window-id "$window_id" || true
+    fi
   done
 }
 

@@ -8,7 +8,7 @@ if [[ ! "$WINDOW_ID" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 if command -v tmux >/dev/null 2>&1 && [[ -n "${TMUX_PANE:-}" ]]; then
-  tmux set-option -p -q @engineos-window-id "$WINDOW_ID" || true
+  tmux set-option -pt "$TMUX_PANE" -q @engineos-window-id "$WINDOW_ID" || true
 fi
 
 while true; do

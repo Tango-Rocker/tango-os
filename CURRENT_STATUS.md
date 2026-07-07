@@ -61,13 +61,14 @@ These are historical proof artifacts only; they are not the active work path:
 - Agent-pack hygiene currently passes. Canonical ownership is
   `.agents/index.toml` plus `docs/agent-roles.md`; reusable workflows belong
   in skills; CLI work stays on direct `eos-*` commands.
-- Source checkout implementation is in place for tmux-mirrored GUI window
-  tracking: mapped shell windows now have session-local IDs in shell state,
+- Tmux-mirrored GUI window tracking is live on the bare-metal EngineDev
+  session: mapped shell windows have session-local IDs in shell state,
   `eos-app window list|focus|bind|launch` is the control surface, tmux proxy
   helpers mirror non-terminal GUI windows, and pane-bound generic GUI windows
-  are resized/clipped through per-window bounds. The source builds and headless
-  shell smoke passes; this still needs live package reinstall/restart and a
-  Falkon/Qt click-through proof on the active desktop.
+  are resized/clipped through per-window bounds. The rebuilt `engineos-shell`
+  and `engineos-tools` packages were reinstalled, `engineos-dev-shell.service`
+  was restarted, and live Qt/Falkon proxy focus/bind was proven with window
+  bounds written under `/run/user/1000/engineos/window-bounds/`.
 
 ## Not Yet Proven
 
@@ -82,9 +83,6 @@ These are historical proof artifacts only; they are not the active work path:
   are proven.
 - Visual live MC Quick View acceptance capture with the real
   `engine-image-preview` and shell preview path.
-- Live Falkon/Qt proof for tmux-mirrored GUI window proxies, including focus
-  from tmux and pane-bound resize/clip containment after reinstalling the
-  rebuilt shell.
 - Persistent Quake asset handling outside generated ISO images.
 - Real Secure Boot and installer work only if explicitly re-enabled.
 
