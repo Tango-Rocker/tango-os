@@ -1342,6 +1342,19 @@ static bool view_geometry_visible(struct engineos_shell_server *server,
 	return is_persistent_panel_geometry(view->role, geometry);
 }
 
+static bool view_geometry_render_enabled(struct engineos_shell_server *server,
+		struct engineos_shell_view *view,
+		const struct engineos_view_geometry *geometry) {
+	if (view == NULL || !view->mapped || view->minimized) {
+		return false;
+	}
+	if (is_managed_floating_view(view) &&
+			is_tmux_window_pane_geometry(geometry)) {
+		return true;
+	}
+	return view_geometry_visible(server, view, geometry);
+}
+
 static struct engineos_shell_view *find_mapped_role(
 		struct engineos_shell_server *server,
 		enum engineos_surface_role role) {
@@ -3261,7 +3274,8 @@ static void apply_launchpad_visibility(struct engineos_shell_server *server,
 		compute_view_geometry(view, &geometry);
 		bool visible = view_geometry_visible(server, view, &geometry);
 		apply_view_layout(view);
-		wlr_scene_node_set_enabled(&view->scene_tree->node, visible);
+		wlr_scene_node_set_enabled(&view->scene_tree->node,
+			view_geometry_render_enabled(server, view, &geometry));
 		if (active) {
 			active_view = view;
 			active_terminal = is_terminal_role(view->role);
@@ -3332,7 +3346,7 @@ static void relayout_shell_views(struct engineos_shell_server *server,
 		compute_view_geometry(view, &geometry);
 		apply_view_layout(view);
 		wlr_scene_node_set_enabled(&view->scene_tree->node,
-			view_geometry_visible(server, view, &geometry));
+			view_geometry_render_enabled(server, view, &geometry));
 	}
 	if (is_managed_floating_view(server->focused_view) &&
 			server->focused_view->mapped && !server->focused_view->minimized) {
@@ -3490,7 +3504,8 @@ static void focus_view(struct engineos_shell_view *view) {
 		struct engineos_view_geometry previous_geometry = {0};
 		compute_view_geometry(previous_view, &previous_geometry);
 		bool previous_visible =
-			view_geometry_visible(server, previous_view, &previous_geometry);
+			view_geometry_render_enabled(server, previous_view,
+				&previous_geometry);
 		apply_view_layout(previous_view);
 		wlr_scene_node_set_enabled(&previous_view->scene_tree->node,
 			previous_visible);

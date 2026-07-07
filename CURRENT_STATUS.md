@@ -81,8 +81,11 @@ These are historical proof artifacts only; they are not the active work path:
   tmux GUI window-sync daemon from recovering the primary terminal from
   unbound panes and skips unchanged pane-bound window relayouts, avoiding
   periodic focus steals from the secondary terminal and slow redraw churn when
-  switching Qt/Falkon-style GUI panes. The live tools package is
-  `engineos-tools 0.1.0-15`.
+  switching Qt/Falkon-style GUI panes. A shell-side follow-up keeps hidden
+  pane-bound GUI scene nodes render-enabled under the terminal so Qt/Falkon
+  clients stay warm between tmux proxy selections instead of being cold-enabled
+  on focus. The live shell package is `engineos-shell 0.1.0-16` and the live
+  tools package is `engineos-tools 0.1.0-15`.
 
 ## Not Yet Proven
 

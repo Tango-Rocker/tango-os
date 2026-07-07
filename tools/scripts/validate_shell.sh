@@ -245,6 +245,7 @@ check_contains "$ROOT/shell/src/engineos-shell.c" 'focus-window' "shell supports
 check_contains "$ROOT/shell/src/engineos-shell.c" 'relayout-windows' "shell supports IPC window relayout"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'wlr_scene_subsurface_tree_set_clip' "shell clips pane-bound GUI windows"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'window raise focused role=%s' "shell raises focused floating windows over panels"
+check_contains "$ROOT/shell/src/engineos-shell.c" 'view_geometry_render_enabled' "shell keeps pane-bound GUI windows warm while hidden"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'is_persistent_panel_geometry' "shell treats tmux pane cube/engine views as persistent panels"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'pane-layout-mapped-inactive' "shell maps pane layout requests without stealing active slot"
 check_contains "$ROOT/shell/src/engineos-shell.c" 'wl_event_loop_add_signal(event_loop, SIGHUP, relayout_from_signal, &server)' "shell relayouts pane bounds on SIGHUP"
