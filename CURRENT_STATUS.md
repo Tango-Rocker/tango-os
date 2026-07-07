@@ -77,7 +77,12 @@ These are historical proof artifacts only; they are not the active work path:
   `engineos-shell` and `engineos-tools` packages were reinstalled,
   `engineos-dev-shell.service` was restarted, and live Qt/Falkon proxy
   focus/bind was proven with window bounds written under
-  `/run/user/1000/engineos/window-bounds/`.
+  `/run/user/1000/engineos/window-bounds/`. A follow-up fix prevents the
+  tmux GUI window-sync daemon from recovering the primary terminal from
+  unbound panes and skips unchanged pane-bound window relayouts, avoiding
+  periodic focus steals from the secondary terminal and slow redraw churn when
+  switching Qt/Falkon-style GUI panes. The live tools package is
+  `engineos-tools 0.1.0-15`.
 
 ## Not Yet Proven
 

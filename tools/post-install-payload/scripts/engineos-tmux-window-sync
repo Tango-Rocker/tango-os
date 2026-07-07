@@ -183,7 +183,8 @@ PY
   if command -v engineos-tmux-window-focus >/dev/null 2>&1; then
     active_pane="$(tmux display-message -p -t "$SESSION:" '#{pane_id}' 2>/dev/null || true)"
     if [[ -n "$active_pane" ]]; then
-      TMUX_PANE="$active_pane" engineos-tmux-window-focus || true
+      ENGINEOS_TMUX_WINDOW_FOCUS_RECOVER=never \
+        TMUX_PANE="$active_pane" engineos-tmux-window-focus || true
     fi
   fi
 }

@@ -502,6 +502,39 @@ window_bounds_file() {
   printf '%s/%s.env\n' "$WINDOW_BOUNDS_DIR" "$window_id"
 }
 
+window_tmux_bounds_current() {
+  local window_id="$1"
+  local pane_left="$2"
+  local pane_top="$3"
+  local pane_width="$4"
+  local pane_height="$5"
+  local window_width="$6"
+  local window_height="$7"
+  local pane_id="$8"
+  local file
+
+  file="$(window_bounds_file "$window_id")"
+  [[ -r "$file" ]] || return 1
+  grep -Fx "window_id=$window_id" "$file" >/dev/null || return 1
+  grep -Fx "mode=pane" "$file" >/dev/null || return 1
+  grep -Fx "source=tmux" "$file" >/dev/null || return 1
+  grep -Fx "pane_id=$pane_id" "$file" >/dev/null || return 1
+  grep -Fx "pane_left=$pane_left" "$file" >/dev/null || return 1
+  grep -Fx "pane_top=$pane_top" "$file" >/dev/null || return 1
+  grep -Fx "pane_width=$pane_width" "$file" >/dev/null || return 1
+  grep -Fx "pane_height=$pane_height" "$file" >/dev/null || return 1
+  grep -Fx "window_width=$window_width" "$file" >/dev/null || return 1
+  grep -Fx "window_height=$window_height" "$file" >/dev/null || return 1
+
+  local cell_size
+  if cell_size="$(tmux_pane_cell_size "$pane_id")"; then
+    local cell_width cell_height
+    read -r cell_width cell_height <<<"$cell_size"
+    grep -Fx "cell_width=$cell_width" "$file" >/dev/null || return 1
+    grep -Fx "cell_height=$cell_height" "$file" >/dev/null || return 1
+  fi
+}
+
 write_window_tmux_bounds() {
   local window_id="$1"
   local pane_left="$2"
@@ -652,6 +685,14 @@ run_window_bind() {
   local geometry
   geometry="$(tmux_pane_geometry "$pane_id")" ||
     die "window bind could not read tmux geometry for pane $pane_id"
+  local pane_left pane_top pane_width pane_height window_width window_height
+  read -r pane_left pane_top pane_width pane_height window_width window_height <<<"$geometry"
+  if window_tmux_bounds_current "$window_id" "$pane_left" "$pane_top" \
+      "$pane_width" "$pane_height" "$window_width" "$window_height" "$pane_id"; then
+    log_line "window bind id=$window_id source=tmux pane=$pane_id unchanged=true bounds=$geometry"
+    printf 'window %s already bound to pane %s bounds %s\n' "$window_id" "$pane_id" "$geometry"
+    return 0
+  fi
   # shellcheck disable=SC2086
   write_window_tmux_bounds "$window_id" $geometry "$pane_id"
   shell_relayout_windows

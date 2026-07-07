@@ -1574,6 +1574,19 @@ JSON
     ENGINEOS_LOG_DIR="$log_dir" \
     ENGINEOS_STATE_DIR="$tmp_dir/run" \
     ENGINEOS_APP_NOTIFY_SHELL=false \
+    ENGINEOS_FAKE_TMUX_GEOMETRY="12 4 90 26 180 52" \
+    TMUX="$tmp_dir/tmux-socket,1,0" \
+    TMUX_PANE="%9" \
+    "$SCRIPT_DIR/app.sh" window bind 7 >"$out"
+  grep -F 'window 7 already bound to pane %9 bounds 12 4 90 26 180 52' "$out" >/dev/null ||
+    die "app window bind did not skip unchanged tmux pane bounds"
+  grep -F 'window bind id=7 source=tmux pane=%9 unchanged=true bounds=12 4 90 26 180 52' "$log_dir/app.log" >/dev/null ||
+    die "app window bind did not log unchanged tmux pane bounds"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    ENGINEOS_APP_NOTIFY_SHELL=false \
     ENGINEOS_FAKE_TMUX_GEOMETRY="0 0 240 66 240 66 240 67" \
     TMUX="$tmp_dir/tmux-socket,1,0" \
     TMUX_PANE="%9" \
@@ -3284,6 +3297,10 @@ run_post_first_deploy() {
   done
   grep -F 'tmux-warning' "$payload_dir/scripts/engineos-tmux-window-focus" >/dev/null ||
     die "post-first-deploy tmux GUI focus helper does not log failures"
+  grep -F 'ENGINEOS_TMUX_WINDOW_FOCUS_RECOVER=never' "$payload_dir/scripts/engineos-tmux-window-sync" >/dev/null ||
+    die "tmux window sync daemon can still recover terminals from unbound panes"
+  grep -F 'terminal_recover_target_for_pane' "$payload_dir/scripts/engineos-tmux-window-focus" >/dev/null ||
+    die "tmux GUI focus helper does not map side-session panes to secondary terminal recovery"
   [[ -f "$payload_dir/assets/zshrc" ]] ||
     die "post-first-deploy payload missing zsh config"
   [[ -f "$payload_dir/assets/zprofile" ]] ||

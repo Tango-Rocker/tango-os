@@ -2,6 +2,7 @@
 set -u
 
 SESSION="${ENGINEOS_TMUX_APP_SESSION:-engineos}"
+RECOVER_MODE="${ENGINEOS_TMUX_WINDOW_FOCUS_RECOVER:-auto}"
 
 log_warning() {
   local state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/engineos"
@@ -66,6 +67,21 @@ raise SystemExit(1)
 PY
 }
 
+terminal_recover_target_for_pane() {
+  local pane="$1"
+  local session_name
+
+  session_name="$(tmux display-message -pt "$pane" '#{session_name}' 2>/dev/null || true)"
+  case "$session_name" in
+    engineos-side)
+      printf 'terminal-secondary\n'
+      ;;
+    *)
+      printf 'terminal\n'
+      ;;
+  esac
+}
+
 pane_id="${TMUX_PANE:-$(tmux display-message -p -t "$SESSION:" '#{pane_id}' 2>/dev/null || true)}"
 window_id=""
 if [[ -n "$pane_id" ]]; then
@@ -87,8 +103,15 @@ if [[ ! "$window_id" =~ ^[1-9][0-9]*$ ]]; then
   window_id="$(tmux show-options -p -v @engineos-window-id 2>/dev/null || true)"
 fi
 if [[ ! "$window_id" =~ ^[1-9][0-9]*$ ]]; then
-  eos-app recover terminal >/dev/null 2>&1 ||
-    log_warning "eos-app recover terminal failed for unbound active pane"
+  if [[ "$RECOVER_MODE" == "never" ]]; then
+    exit 0
+  fi
+  recover_target="terminal"
+  if [[ -n "$pane_id" ]]; then
+    recover_target="$(terminal_recover_target_for_pane "$pane_id")"
+  fi
+  eos-app recover "$recover_target" >/dev/null 2>&1 ||
+    log_warning "eos-app recover $recover_target failed for unbound active pane"
   exit 0
 fi
 
