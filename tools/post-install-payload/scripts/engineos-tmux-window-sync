@@ -31,6 +31,35 @@ log_warning() {
   printf '%s tmux-warning %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$state_dir/tmux.log" 2>/dev/null || true
 }
 
+pane_matches_window() {
+  local pane="$1"
+  local app_id="$2"
+  local title="$3"
+  local pane_window pane_command
+  pane_window="$(tmux display-message -pt "$pane" '#{window_name}' 2>/dev/null || true)"
+  pane_command="$(tmux display-message -pt "$pane" '#{pane_current_command}' 2>/dev/null || true)"
+  [[ "$pane_window" != gui-* ]] || return 1
+
+  local app_l title_l window_l command_l
+  app_l="${app_id,,}"
+  title_l="${title,,}"
+  window_l="${pane_window,,}"
+  command_l="${pane_command,,}"
+  local haystack="$app_l $title_l"
+
+  case "$command_l" in
+    ""|bash|zsh|sh|fish|tmux|node|mc|foot)
+      ;;
+    *)
+      [[ "$haystack" == *"$command_l"* ]] && return 0
+      ;;
+  esac
+  if [[ -n "$window_l" ]]; then
+    [[ "$haystack" == *"$window_l"* ]] && return 0
+  fi
+  return 1
+}
+
 sync_once() {
   command -v tmux >/dev/null 2>&1 || return 0
   command -v eos-app >/dev/null 2>&1 || return 0
@@ -38,7 +67,7 @@ sync_once() {
 
   local json
   json="$(eos-app window list --json 2>/dev/null)" || return 0
-  ENGINEOS_WINDOW_JSON="$json" python - "$SESSION" <<'PY' | while IFS=$'\t' read -r window_id name; do
+  ENGINEOS_WINDOW_JSON="$json" python - "$SESSION" <<'PY' | while IFS=$'\t' read -r window_id name app_id title; do
 import json
 import os
 import re
@@ -55,25 +84,35 @@ for window in data.get("windows", []):
     app_id = window.get("app_id") or "app"
     title = window.get("title") or app_id
     label = re.sub(r"[^A-Za-z0-9_.-]+", "-", title or app_id).strip("-")[:24] or "app"
-    print(f"{window_id}\tgui-{window_id}-{label}")
+    print(f"{window_id}\tgui-{window_id}-{label}\t{app_id}\t{title}")
 PY
     [[ -n "$window_id" && -n "$name" ]] || continue
     existing_pane=""
+    launcher_pane=""
     duplicate_panes=()
     while IFS= read -r pane; do
       pane_window="$(tmux display-message -pt "$pane" '#{window_name}' 2>/dev/null || true)"
-      [[ "$pane_window" == gui-* ]] || continue
       existing_id="$(tmux show-options -pt "$pane" -v @engineos-window-id 2>/dev/null || true)"
       if [[ "$existing_id" == "$window_id" ]]; then
         if [[ -z "$existing_pane" ]]; then
           existing_pane="$pane"
         fi
-        if [[ "$(tmux display-message -pt "$pane" '#{window_active}' 2>/dev/null || true)" == "1" ]]; then
+        if [[ "$pane_window" != gui-* ]]; then
+          existing_pane="$pane"
+        elif [[ "$(tmux display-message -pt "$pane" '#{window_active}' 2>/dev/null || true)" == "1" ]]; then
           existing_pane="$pane"
         fi
-        duplicate_panes+=("$pane")
+        if [[ "$pane_window" == gui-* ]]; then
+          duplicate_panes+=("$pane")
+        fi
+      elif [[ -z "$launcher_pane" ]] && pane_matches_window "$pane" "$app_id" "$title"; then
+        launcher_pane="$pane"
       fi
     done < <(tmux list-panes -s -t "$SESSION" -F '#{pane_id}' 2>/dev/null || true)
+    if [[ -n "$launcher_pane" ]]; then
+      existing_pane="$launcher_pane"
+      tmux set-option -pt "$existing_pane" -q @engineos-window-id "$window_id" || true
+    fi
     if [[ -n "$existing_pane" ]]; then
       for pane in "${duplicate_panes[@]}"; do
         [[ "$pane" != "$existing_pane" ]] || continue

@@ -23,10 +23,57 @@ find_active_proxy_window() {
   return 1
 }
 
+find_matching_active_window() {
+  local candidate_pane="$1"
+  local pane_command pane_window
+  pane_command="$(tmux display-message -pt "$candidate_pane" '#{pane_current_command}' 2>/dev/null || true)"
+  pane_window="$(tmux display-message -pt "$candidate_pane" '#{window_name}' 2>/dev/null || true)"
+  [[ -n "$pane_command$pane_window" ]] || return 1
+
+  local json
+  json="$(eos-app window list --json 2>/dev/null)" || return 1
+  ENGINEOS_WINDOW_JSON="$json" ENGINEOS_PANE_COMMAND="$pane_command" ENGINEOS_PANE_WINDOW="$pane_window" python - <<'PY'
+import json
+import os
+import re
+
+data = json.loads(os.environ.get("ENGINEOS_WINDOW_JSON", "{}"))
+command = os.environ.get("ENGINEOS_PANE_COMMAND", "").lower()
+window_name = os.environ.get("ENGINEOS_PANE_WINDOW", "").lower()
+blocked = {"", "bash", "zsh", "sh", "fish", "tmux", "node", "mc", "foot"}
+
+def clean(value):
+    return re.sub(r"[^a-z0-9_.-]+", "-", (value or "").lower()).strip("-")
+
+for window in data.get("windows", []):
+    if window.get("role") in ("terminal", "terminal-secondary"):
+        continue
+    window_id = window.get("id")
+    if not isinstance(window_id, int) or window_id <= 0:
+        continue
+    app_id = (window.get("app_id") or "").lower()
+    title = (window.get("title") or "").lower()
+    haystack = f"{app_id} {title} {clean(title)}"
+    if command not in blocked and command in haystack:
+        print(window_id)
+        raise SystemExit(0)
+    if window_name and not window_name.startswith("gui-") and clean(window_name) in haystack:
+        print(window_id)
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
 pane_id="${TMUX_PANE:-$(tmux display-message -p '#{pane_id}' 2>/dev/null || true)}"
 window_id=""
 if [[ -n "$pane_id" ]]; then
   window_id="$(tmux show-options -pt "$pane_id" -v @engineos-window-id 2>/dev/null || true)"
+fi
+if [[ ! "$window_id" =~ ^[1-9][0-9]*$ && -n "$pane_id" ]]; then
+  window_id="$(find_matching_active_window "$pane_id" || true)"
+  if [[ "$window_id" =~ ^[1-9][0-9]*$ ]]; then
+    tmux set-option -pt "$pane_id" -q @engineos-window-id "$window_id" || true
+  fi
 fi
 if [[ ! "$window_id" =~ ^[1-9][0-9]*$ ]]; then
   active_proxy="$(find_active_proxy_window || true)"
