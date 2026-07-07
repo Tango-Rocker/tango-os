@@ -67,11 +67,13 @@ These are historical proof artifacts only; they are not the active work path:
   helpers mirror non-terminal GUI windows, and pane-bound generic GUI windows
   are resized/clipped through per-window bounds. GUI proxy tabs now bind
   windows using tmux client cell dimensions, refresh bounds on tmux tab/layout
-  and client-resize hooks, focus the app when the proxy tab is selected, and
-  suppress no-op pane sync text in hook output. The rebuilt `engineos-shell`
-  and `engineos-tools` packages were reinstalled, `engineos-dev-shell.service`
-  was restarted, and live Qt/Falkon proxy focus/bind was proven with window
-  bounds written under `/run/user/1000/engineos/window-bounds/`.
+  and client-resize hooks, bring the app forward when the proxy tab is
+  selected, hide pane-bound GUI windows again when a normal tmux tab is
+  selected, and suppress no-op pane sync text in hook output. The rebuilt
+  `engineos-shell` and `engineos-tools` packages were reinstalled,
+  `engineos-dev-shell.service` was restarted, and live Qt/Falkon proxy
+  focus/bind was proven with window bounds written under
+  `/run/user/1000/engineos/window-bounds/`.
 
 ## Not Yet Proven
 

@@ -1314,6 +1314,13 @@ static bool is_persistent_panel_geometry(enum engineos_surface_role role,
 	return role == ENGINEOS_SURFACE_CUBE || role == ENGINEOS_SURFACE_ENGINE;
 }
 
+static bool is_tmux_window_pane_geometry(
+		const struct engineos_view_geometry *geometry) {
+	return geometry != NULL &&
+		geometry->layout != NULL &&
+		strcmp(geometry->layout, "tmux-window-pane") == 0;
+}
+
 static bool view_geometry_visible(struct engineos_shell_server *server,
 		struct engineos_shell_view *view,
 		const struct engineos_view_geometry *geometry) {
@@ -1324,6 +1331,12 @@ static bool view_geometry_visible(struct engineos_shell_server *server,
 		return false;
 	}
 	if (server->active_slot == view->role || is_terminal_role(view->role)) {
+		return true;
+	}
+	if (is_managed_floating_view(view)) {
+		if (is_tmux_window_pane_geometry(geometry)) {
+			return server->focused_view == view;
+		}
 		return true;
 	}
 	return is_persistent_panel_geometry(view->role, geometry);
@@ -3448,6 +3461,7 @@ static void focus_view(struct engineos_shell_view *view) {
 	}
 
 	struct engineos_shell_server *server = view->server;
+	struct engineos_shell_view *previous_view = server->focused_view;
 	if (view->minimized) {
 		view->minimized = false;
 		wlr_scene_node_set_enabled(&view->scene_tree->node, true);
@@ -3462,6 +3476,21 @@ static void focus_view(struct engineos_shell_view *view) {
 	}
 
 	server->focused_view = view;
+	if (previous_view != NULL && previous_view != view &&
+			is_managed_floating_view(previous_view) &&
+			previous_view->mapped && previous_view->scene_tree != NULL) {
+		struct engineos_view_geometry previous_geometry = {0};
+		compute_view_geometry(previous_view, &previous_geometry);
+		bool previous_visible =
+			view_geometry_visible(server, previous_view, &previous_geometry);
+		apply_view_layout(previous_view);
+		wlr_scene_node_set_enabled(&previous_view->scene_tree->node,
+			previous_visible);
+	}
+	if (is_managed_floating_view(view) && view->scene_tree != NULL) {
+		apply_view_layout(view);
+		wlr_scene_node_set_enabled(&view->scene_tree->node, true);
+	}
 	wlr_scene_node_raise_to_top(&view->scene_tree->node);
 	set_view_activated(view, true);
 
