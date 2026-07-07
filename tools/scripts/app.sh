@@ -231,17 +231,23 @@ tmux_pane_geometry() {
 
   local values
   values="$(tmux display-message -p -t "$target" \
-    '#{pane_left} #{pane_top} #{pane_width} #{pane_height} #{window_width} #{window_height}' 2>/dev/null)" ||
+    '#{pane_left} #{pane_top} #{pane_width} #{pane_height} #{window_width} #{window_height} #{client_width} #{client_height}' 2>/dev/null)" ||
     return 1
 
-  local pane_left pane_top pane_width pane_height window_width window_height
-  read -r pane_left pane_top pane_width pane_height window_width window_height <<<"$values"
+  local pane_left pane_top pane_width pane_height window_width window_height client_width client_height
+  read -r pane_left pane_top pane_width pane_height window_width window_height client_width client_height <<<"$values"
   is_nonnegative_integer "$pane_left" || return 1
   is_nonnegative_integer "$pane_top" || return 1
   is_positive_integer "$pane_width" || return 1
   is_positive_integer "$pane_height" || return 1
   is_positive_integer "$window_width" || return 1
   is_positive_integer "$window_height" || return 1
+  if is_positive_integer "${client_width:-}" && (( 10#$client_width >= 10#$window_width )); then
+    window_width="$client_width"
+  fi
+  if is_positive_integer "${client_height:-}" && (( 10#$client_height >= 10#$window_height )); then
+    window_height="$client_height"
+  fi
 
   printf '%s %s %s %s %s %s\n' \
     "$pane_left" "$pane_top" "$pane_width" "$pane_height" "$window_width" "$window_height"

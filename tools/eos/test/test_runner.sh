@@ -1566,6 +1566,19 @@ JSON
   grep -F 'pane_width=90' "$tmp_dir/run/window-bounds/7.env" >/dev/null ||
     die "app window bind did not record tmux pane geometry"
 
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_LOG_DIR="$log_dir" \
+    ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    ENGINEOS_APP_NOTIFY_SHELL=false \
+    ENGINEOS_FAKE_TMUX_GEOMETRY="0 0 240 66 240 66 240 67" \
+    TMUX="$tmp_dir/tmux-socket,1,0" \
+    TMUX_PANE="%9" \
+    "$SCRIPT_DIR/app.sh" window bind 7 >"$out"
+  grep -F 'pane_height=66' "$tmp_dir/run/window-bounds/7.env" >/dev/null ||
+    die "app window bind did not preserve tmux pane height"
+  grep -F 'window_height=67' "$tmp_dir/run/window-bounds/7.env" >/dev/null ||
+    die "app window bind did not use tmux client height to exclude statusline"
+
   local focus_sock="$tmp_dir/focus.sock"
   python - "$focus_sock" "$tmp_dir/focus-request.txt" <<'PY' &
 import os
