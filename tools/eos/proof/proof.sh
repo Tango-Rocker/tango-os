@@ -73,6 +73,17 @@ run_step() {
   "$@"
 }
 
+write_preview_fixture_png() {
+  local path="$1"
+
+  have_cmd base64 || die "base64 unavailable; cannot create preview proof fixture"
+  printf '%s' \
+    'iVBORw0KGgoAAAANSUhEUgAAAAQAAAADAQMAAACOOjyFAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGUExURSJmzP///8VU6LMAAAABYktHRAH/Ai3eAAAAB3RJTUUH6gcCFi0VNn7nGQAAACV0RVh0ZGF0ZTpjcmVhdGUAMjAyNi0wNy0wMlQyMjo0NToyMSswMDowMIBjV7MAAAAldEVYdGRhdGU6bW9kaWZ5ADIwMjYtMDctMDJUMjI6NDU6MjErMDA6MDDxPu8PAAAAKHRFWHRkYXRlOnRpbWVzdGFtcAAyMDI2LTA3LTAyVDIyOjQ1OjIxKzAwOjAwpivO0AAAAAtJREFUCNdjYAABAAAGAAFm9MlsAAAAAElFTkSuQmCC' |
+    base64 -d >"$path" ||
+    die "failed to create preview proof fixture: $path"
+  [[ -s "$path" ]] || die "preview proof fixture is empty: $path"
+}
+
 eos_command() {
   local name="$1"
   if [[ -x "$ROOT/tools/engineos/$name" ]]; then
@@ -413,7 +424,7 @@ proof_booted_iso() {
     fi
     run_step "crash bundle dry-run" printf '%s\n' "eos-crash-bundle ${crash_bundle_args[*]}"
   else
-    run_step "validate boot" "$MODULE_DIR/validate_boot.sh" "${validate_args[@]}"
+    run_step "validate boot" env ENGINEOS_PROOF_STRICT=1 "$MODULE_DIR/validate_boot.sh" "${validate_args[@]}"
     run_step "doctor" "$SCRIPT_DIR/doctor.sh" "${doctor_args[@]}"
     run_step "smoke test" "$TEST_DIR/test_runner.sh" smoke
     run_step "Quake smoke" "$runtime_cmd" quake --smoke
@@ -649,6 +660,9 @@ proof_mc_preview() {
   local visual=false
   local log_dir="${ENGINEOS_LOG_DIR:-$(default_log_dir)}"
   local log_file
+  local preview_cmd
+  local preview_image
+  local shell_log
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -679,10 +693,16 @@ proof_mc_preview() {
   printf '  visual:  %s\n' "$visual"
   printf '  log:     %s\n' "$log_file"
 
+  preview_cmd="${ENGINEOS_IMAGE_PREVIEW_CMD:-$(eos_command engine-image-preview)}"
+  preview_image="$log_dir/proof-mc-preview.png"
+  shell_log="$log_dir/shell.log"
+
   if [[ "$dry_run" == true ]]; then
     run_step "test image setup dry-run" printf '%s\n' "would require: eos-test image-preview fixture images"
     run_step "preview dry-run checks" printf '%s\n' "would require: engine-image-preview --quick-view <image> --panel right --dry-run"
-    run_step "preview IPC/log checks" printf '%s\n' "would require: eos-test image-preview"
+    run_step "preview IPC check dry-run" printf '%s\n' "would require: engine-image-preview --ping"
+    run_step "preview live request dry-run" printf '%s\n' "would require: engine-image-preview --quick-view $preview_image --panel right"
+    run_step "preview shell log evidence dry-run" printf '%s\n' "would require: grep -F 'image preview shown path=$preview_image' $shell_log | grep -F 'owner=mc-quick-view:' | grep -F 'image=4x3'"
     run_step "preview recovery check" printf '%s\n' "would require: eos-app recover preview"
     if [[ "$visual" == true ]]; then
       run_step "visual capture dry-run" printf '%s\n' "would require: eos-proof visual"
@@ -691,7 +711,15 @@ proof_mc_preview() {
     return
   fi
 
-  run_step "image preview acceptance" "$TEST_DIR/test_runner.sh" image-preview
+  run_step "image preview contract" "$TEST_DIR/test_runner.sh" image-preview
+  write_preview_fixture_png "$preview_image"
+  run_step "preview IPC ping" "$preview_cmd" --ping
+  run_step "MC quick-view preview" "$preview_cmd" --quick-view "$preview_image" --panel right
+  [[ -r "$shell_log" ]] || die "shell log missing: $shell_log"
+  grep -F "image preview shown path=$preview_image" "$shell_log" |
+    grep -F 'owner=mc-quick-view:' |
+    grep -F 'image=4x3' >/dev/null ||
+    die "shell log does not show MC Quick View preview evidence: $shell_log"
   if [[ "$visual" == true ]]; then
     run_step "visual capture" "$MODULE_DIR/proof.sh" visual
   fi

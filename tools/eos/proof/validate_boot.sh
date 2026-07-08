@@ -13,6 +13,7 @@ source "$SCRIPT_DIR/common.sh"
 MODE=""
 FAILURES=0
 WARNINGS=0
+PROOF_STRICT="${ENGINEOS_PROOF_STRICT:-false}"
 RUNTIME_CONF="${ENGINEOS_RUNTIME_CONF:-/etc/engineos/runtime.conf}"
 APPS_MANIFEST="${ENGINEOS_APPS_MANIFEST:-$(engineos_apps_manifest "$(engineos_root)")}"
 LOG_DIR="${ENGINEOS_LOG_DIR:-/var/log/engineos}"
@@ -45,6 +46,17 @@ warn() {
 
 ok() {
   printf 'OK   %s\n' "$*"
+}
+
+proof_strict() {
+  case "$PROOF_STRICT" in
+    1|true|TRUE|yes|YES)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 service_check() {
@@ -250,10 +262,10 @@ shell_renderer_check() {
   local shell_log="${1:-$SHELL_LOG}"
 
   if [[ ! -r "$shell_log" ]]; then
-    if [[ "$MODE" == "bare-metal" ]]; then
+    if [[ "$MODE" == "bare-metal" ]] || proof_strict; then
       fail "shell renderer log missing: $shell_log"
     else
-      warn "shell renderer log missing: $shell_log"
+      warn "shell renderer log unavailable for diagnostic check: $shell_log"
     fi
     return
   fi

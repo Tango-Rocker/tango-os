@@ -822,10 +822,10 @@ run_ci() {
     die "ci dry-run did not print commands"
   grep -F 'eos-test agent' "$out" >/dev/null ||
     die "ci dry-run did not include requested test scope"
-  grep -F 'eos-build repo --package engineos-tools' "$out" >/dev/null ||
-    die "ci dry-run did not include real package rebuild command"
-  grep -F 'eos-build repo --package engineos-shell' "$out" >/dev/null ||
-    die "ci dry-run did not include repeated package rebuild command"
+  grep -F 'preflight.sh repo --package engineos-tools --package engineos-shell' "$out" >/dev/null ||
+    die "ci dry-run did not include selected packages in preflight command"
+  grep -F 'eos-build repo --package engineos-tools --package engineos-shell' "$out" >/dev/null ||
+    die "ci dry-run did not include repeatable package rebuild command"
   [[ "$(grep -c '^    - engineos-tools$' "$out")" -eq 1 ]] ||
     die "ci dry-run did not ignore duplicate package selection"
   grep -F 'sudo -n pacman -U --noconfirm' "$out" >/dev/null ||
@@ -863,10 +863,23 @@ run_source_test() {
     ENGINEOS_EOS_DIR=/usr/lib/engineos/eos \
     ENGINEOS_LOG_DIR=/var/log/engineos \
     ENGINEOS_STATE_DIR=/run/engineos \
+    ENGINEOS_CAPTURE_DIR=/run/engineos/captures \
     ENGINEOS_SHELL_BOOTSTRAP=installed-session \
     ENGINEOS_TERMINAL_SESSION_CMD=installed-tmux \
+    ENGINEOS_TERMINAL_REQUIRE_WAYLAND=1 \
+    ENGINEOS_TERMINAL_SLOT_CMD=installed-terminal \
+    ENGINEOS_CUBE_CMD=installed-cube \
+    ENGINEOS_ENGINE_CMD=installed-engine \
+    ENGINEOS_RUNTIME_CMD=installed-runtime \
+    ENGINEOS_SHELL_BIN=/usr/bin/engineos-shell \
     WAYLAND_DISPLAY=installed-wayland \
-    "$ROOT/tools/engineos/eos-source-test" agent-route >"$out"
+    DISPLAY=:99 \
+    XDG_SESSION_TYPE=wayland \
+    WLR_BACKENDS=wayland \
+    WLR_RENDERER=vulkan \
+    WLR_RENDERER_ALLOW_SOFTWARE=1 \
+    LIBGL_ALWAYS_SOFTWARE=1 \
+    "$ROOT/tools/engineos/eos-source-test" source-env >"$out"
 
   grep -F 'EngineOS source test' "$out" >/dev/null ||
     die "eos-source-test did not print its header"
@@ -877,10 +890,77 @@ run_source_test() {
   if grep -F 'root:       /usr' "$out" >/dev/null; then
     die "eos-source-test used installed ENGINEOS_ROOT"
   fi
-  grep -F 'agent route smoke test passed' "$out" >/dev/null ||
-    die "eos-source-test did not run the requested source test scope"
+  grep -F "source env root: $ROOT" "$out" >/dev/null ||
+    die "repo-local eos-test did not see the checkout root"
+  grep -F "source env script_dir: $ROOT/tools/scripts" "$out" >/dev/null ||
+    die "repo-local eos-test did not see the checkout script dir"
+  grep -F 'source env contamination cleared' "$out" >/dev/null ||
+    die "eos-source-test did not clear installed-session environment"
 
   printf 'source test facade smoke test passed\n'
+}
+
+run_source_env() {
+  local source_root
+  source_root="$(cd "$MODULE_DIR/../../.." && pwd -P)"
+
+  printf 'source env root: %s\n' "$ROOT"
+  printf 'source env script_dir: %s\n' "$SCRIPT_DIR"
+
+  [[ "$ROOT" == "$source_root" ]] ||
+    die "source-env root is not the checkout: $ROOT"
+  [[ "$SCRIPT_DIR" == "$source_root/tools/scripts" ]] ||
+    die "source-env script dir is not the checkout: $SCRIPT_DIR"
+  [[ "${ENGINEOS_ROOT:-}" == "$source_root" ]] ||
+    die "source-env ENGINEOS_ROOT is not the checkout: ${ENGINEOS_ROOT:-unset}"
+  [[ "${ENGINEOS_SCRIPT_DIR:-}" == "$source_root/tools/scripts" ]] ||
+    die "source-env ENGINEOS_SCRIPT_DIR is not the checkout: ${ENGINEOS_SCRIPT_DIR:-unset}"
+  [[ "${ENGINEOS_EOS_DIR:-}" == "$source_root/tools/eos" ]] ||
+    die "source-env ENGINEOS_EOS_DIR is not the checkout: ${ENGINEOS_EOS_DIR:-unset}"
+  [[ "${ENGINEOS_LOG_DIR:-}" == "$source_root/artifacts/logs" ]] ||
+    die "source-env ENGINEOS_LOG_DIR is not the checkout log dir: ${ENGINEOS_LOG_DIR:-unset}"
+  [[ -z "${ENGINEOS_SOURCE_TEST_MODE:-}" ]] ||
+    die "source-env leaked internal source-test marker"
+
+  if [[ "$(printenv SCRIPT_DIR 2>/dev/null || true)" == /usr/lib/engineos/scripts* ]]; then
+    die "source-env inherited installed SCRIPT_DIR: $(printenv SCRIPT_DIR)"
+  fi
+  [[ -z "${ENGINEOS_STATE_DIR:-}" ]] ||
+    die "source-env inherited ENGINEOS_STATE_DIR: $ENGINEOS_STATE_DIR"
+  [[ -z "${ENGINEOS_CAPTURE_DIR:-}" ]] ||
+    die "source-env inherited ENGINEOS_CAPTURE_DIR: $ENGINEOS_CAPTURE_DIR"
+  [[ -z "${ENGINEOS_SHELL_BOOTSTRAP:-}" ]] ||
+    die "source-env inherited ENGINEOS_SHELL_BOOTSTRAP: $ENGINEOS_SHELL_BOOTSTRAP"
+  [[ -z "${ENGINEOS_TERMINAL_SESSION_CMD:-}" ]] ||
+    die "source-env inherited ENGINEOS_TERMINAL_SESSION_CMD: $ENGINEOS_TERMINAL_SESSION_CMD"
+  [[ -z "${ENGINEOS_TERMINAL_REQUIRE_WAYLAND:-}" ]] ||
+    die "source-env inherited ENGINEOS_TERMINAL_REQUIRE_WAYLAND: $ENGINEOS_TERMINAL_REQUIRE_WAYLAND"
+  [[ -z "${ENGINEOS_TERMINAL_SLOT_CMD:-}" ]] ||
+    die "source-env inherited ENGINEOS_TERMINAL_SLOT_CMD: $ENGINEOS_TERMINAL_SLOT_CMD"
+  [[ -z "${ENGINEOS_CUBE_CMD:-}" ]] ||
+    die "source-env inherited ENGINEOS_CUBE_CMD: $ENGINEOS_CUBE_CMD"
+  [[ -z "${ENGINEOS_ENGINE_CMD:-}" ]] ||
+    die "source-env inherited ENGINEOS_ENGINE_CMD: $ENGINEOS_ENGINE_CMD"
+  [[ -z "${ENGINEOS_RUNTIME_CMD:-}" ]] ||
+    die "source-env inherited ENGINEOS_RUNTIME_CMD: $ENGINEOS_RUNTIME_CMD"
+  [[ -z "${ENGINEOS_SHELL_BIN:-}" ]] ||
+    die "source-env inherited ENGINEOS_SHELL_BIN: $ENGINEOS_SHELL_BIN"
+  [[ -z "${WAYLAND_DISPLAY:-}" ]] ||
+    die "source-env inherited WAYLAND_DISPLAY: $WAYLAND_DISPLAY"
+  [[ -z "${DISPLAY:-}" ]] ||
+    die "source-env inherited DISPLAY: $DISPLAY"
+  [[ -z "${XDG_SESSION_TYPE:-}" ]] ||
+    die "source-env inherited XDG_SESSION_TYPE: $XDG_SESSION_TYPE"
+  [[ -z "${WLR_BACKENDS:-}" ]] ||
+    die "source-env inherited WLR_BACKENDS: $WLR_BACKENDS"
+  [[ -z "${WLR_RENDERER:-}" ]] ||
+    die "source-env inherited WLR_RENDERER: $WLR_RENDERER"
+  [[ -z "${WLR_RENDERER_ALLOW_SOFTWARE:-}" ]] ||
+    die "source-env inherited WLR_RENDERER_ALLOW_SOFTWARE: $WLR_RENDERER_ALLOW_SOFTWARE"
+  [[ -z "${LIBGL_ALWAYS_SOFTWARE:-}" ]] ||
+    die "source-env inherited LIBGL_ALWAYS_SOFTWARE: $LIBGL_ALWAYS_SOFTWARE"
+
+  printf 'source env contamination cleared\n'
 }
 
 run_shell_actions() {
@@ -940,38 +1020,68 @@ FAKE
   grep -F 'fake shell stdout marker' "$tmp_dir/logs/shell.log" >/dev/null ||
     die "shell actions did not tee real shell output to shell log"
 
-  local pids_file="$tmp_dir/engineos-shell-pids.txt"
+  local restart_proc_dir="$tmp_dir/restart-proc"
   local restart_out="$tmp_dir/restart-live.txt"
-  cat >"$fake_bin/pgrep" <<'FAKE'
+  local uid
+  uid="$(id -u)"
+  mkdir -p "$restart_proc_dir/100" "$restart_proc_dir/101"
+  printf 'Uid:\t%s\t%s\t%s\t%s\n' "$uid" "$uid" "$uid" "$uid" >"$restart_proc_dir/100/status"
+  printf 'engineos-shell\0--tty\0' >"$restart_proc_dir/100/cmdline"
+  printf 'Uid:\t%s\t%s\t%s\t%s\n' "$uid" "$uid" "$uid" "$uid" >"$restart_proc_dir/101/status"
+  printf 'bash\0-c\0engineos-shell --tty\0' >"$restart_proc_dir/101/cmdline"
+  cat >"$fake_bin/fake-dev-shell-restart" <<'FAKE'
 #!/usr/bin/env bash
-if [[ "$1" == "-u" && "$3" == "-x" && "$4" == "engineos-shell" ]]; then
-  cat "$ENGINEOS_FAKE_SHELL_PIDS"
-  exit 0
-fi
-exit 1
+mkdir -p "$ENGINEOS_FAKE_RESTART_PROC_DIR/200"
+printf 'Uid:\t%s\t%s\t%s\t%s\n' "$(id -u)" "$(id -u)" "$(id -u)" "$(id -u)" >"$ENGINEOS_FAKE_RESTART_PROC_DIR/200/status"
+printf 'engineos-shell\0--tty\0' >"$ENGINEOS_FAKE_RESTART_PROC_DIR/200/cmdline"
 FAKE
-  chmod +x "$fake_bin/pgrep"
-  printf '100\n' >"$pids_file"
+  chmod +x "$fake_bin/fake-dev-shell-restart"
   PATH="$fake_bin:$PATH" \
-    ENGINEOS_FAKE_SHELL_PIDS="$pids_file" \
+    ENGINEOS_PROC_DIR="$restart_proc_dir" \
     ENGINEOS_LOG_DIR="$tmp_dir/logs" \
     ENGINEOS_STATE_DIR="$tmp_dir/run" \
     "$SCRIPT_DIR/shell_runner.sh" restart-live --dry-run >"$restart_out"
   grep -F 'old_pids:   100' "$restart_out" >/dev/null ||
     die "restart-live dry-run did not report old shell pid"
+  if grep -F '101' "$restart_out" >/dev/null; then
+    die "restart-live dry-run matched shell text instead of the engineos-shell process"
+  fi
   grep -F 'would_verify: new same-user engineos-shell pid' "$restart_out" >/dev/null ||
     die "restart-live dry-run did not report pid verification"
+  grep -F 'result:     preview' "$restart_out" >/dev/null ||
+    die "restart-live dry-run did not report preview result"
 
   PATH="$fake_bin:$PATH" \
-    ENGINEOS_FAKE_SHELL_PIDS="$pids_file" \
-    ENGINEOS_RESTART_DEV_SHELL_CMD='printf "200\n" >"$ENGINEOS_FAKE_SHELL_PIDS"' \
+    ENGINEOS_PROC_DIR="$restart_proc_dir" \
+    ENGINEOS_RESTART_DEV_SHELL_CMD="$fake_bin/fake-dev-shell-restart" \
+    ENGINEOS_FAKE_RESTART_PROC_DIR="$restart_proc_dir" \
     ENGINEOS_LOG_DIR="$tmp_dir/logs" \
     ENGINEOS_STATE_DIR="$tmp_dir/run" \
     "$SCRIPT_DIR/shell_runner.sh" restart-live --timeout 1 >"$restart_out"
   grep -F 'new_pids:   200' "$restart_out" >/dev/null ||
     die "restart-live did not verify new shell pid"
-  grep -F 'live shell restart verified' "$restart_out" >/dev/null ||
-    die "restart-live did not report verified restart"
+  grep -F 'result:     restarted' "$restart_out" >/dev/null ||
+    die "restart-live did not report restarted result"
+
+  if PATH="$fake_bin:$PATH" \
+      ENGINEOS_PROC_DIR="$restart_proc_dir" \
+      ENGINEOS_RESTART_DEV_SHELL_CMD=false \
+      ENGINEOS_LOG_DIR="$tmp_dir/logs" \
+      ENGINEOS_STATE_DIR="$tmp_dir/run" \
+      "$SCRIPT_DIR/shell_runner.sh" restart-live --timeout 1 >"$restart_out" 2>&1; then
+    die "restart-live succeeded after restart command failure"
+  fi
+  grep -F 'result:     failed reason=restart-command-failed' "$restart_out" >/dev/null ||
+    die "restart-live did not expose restart command failure"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_PROC_DIR="$tmp_dir/missing-proc" \
+    ENGINEOS_RESTART_DEV_SHELL_CMD=true \
+    ENGINEOS_LOG_DIR="$tmp_dir/logs" \
+    ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    "$SCRIPT_DIR/shell_runner.sh" restart-live --timeout 1 >"$restart_out"
+  grep -F 'result:     partial reason=pid-discovery-unavailable' "$restart_out" >/dev/null ||
+    die "restart-live did not report partial result when pid discovery is unavailable"
 
   local proc_dir="$tmp_dir/proc"
   local kill_log="$tmp_dir/kill.log"
@@ -979,8 +1089,6 @@ FAKE
   local refresh_home="$tmp_dir/home"
   local helper_dir="$tmp_dir/helpers"
   local refresh_out="$tmp_dir/refresh-user.txt"
-  local uid
-  uid="$(id -u)"
   mkdir -p "$proc_dir/111" "$proc_dir/222" "$proc_dir/333" "$proc_dir/444" "$refresh_home" "$helper_dir"
   printf 'Uid:\t%s\t%s\t%s\t%s\n' "$uid" "$uid" "$uid" "$uid" >"$proc_dir/111/status"
   printf 'bash\0%s\0refresh-user\0engineos-tmux-window-sync\0--daemon\0' "$SCRIPT_DIR/shell_runner.sh" >"$proc_dir/111/cmdline"
@@ -1054,6 +1162,15 @@ FAKE
     die "refresh-user missing tmux condition was not clear and non-fatal"
   grep -F 'result:     partial reason=tmux-unavailable' "$refresh_out" >/dev/null ||
     die "refresh-user missing tmux condition did not report a partial result"
+
+  if ENGINEOS_USER_HOME="$refresh_home" \
+      ENGINEOS_TMUX_HELPER_DIR="$helper_dir" \
+      ENGINEOS_POST_INSTALL_PAYLOAD="$tmp_dir/missing-payload" \
+      "$SCRIPT_DIR/shell_runner.sh" refresh-user >"$refresh_out" 2>&1; then
+    die "refresh-user succeeded with missing payload"
+  fi
+  grep -F 'result:     failed reason=post-install-payload-missing' "$refresh_out" >/dev/null ||
+    die "refresh-user missing payload did not report failed result"
 
   printf 'shell actions smoke test passed\n'
 }
@@ -3207,6 +3324,10 @@ run_proof() {
     die "mc-preview proof dry-run did not include image-preview acceptance"
   grep -F 'engine-image-preview --quick-view' "$tmp_dir/mc-preview.txt" >/dev/null ||
     die "mc-preview proof dry-run did not include quick-view dry-run checks"
+  grep -F 'engine-image-preview --ping' "$tmp_dir/mc-preview.txt" >/dev/null ||
+    die "mc-preview proof dry-run did not include live preview IPC check"
+  grep -F 'owner=mc-quick-view:' "$tmp_dir/mc-preview.txt" >/dev/null ||
+    die "mc-preview proof dry-run did not require MC preview shell log ownership evidence"
   if ENGINEOS_LOG_DIR="$tmp_dir/logs" \
       ENGINEOS_CAPTURE_DIR="$tmp_dir/captures" \
       ENGINEOS_CAPTURE_TOOL=metadata \
@@ -3221,9 +3342,45 @@ run_proof() {
     "$PROOF_DIR/proof.sh" visual --allow-metadata >"$tmp_dir/visual-allow-metadata.txt"
   grep -F 'Metadata-only capture accepted by explicit request' "$tmp_dir/visual-allow-metadata.txt" >/dev/null ||
     die "visual proof did not document explicit metadata acceptance"
-  if grep -En 'WARN .*missing' "$PROOF_DIR/proof.sh" >"$tmp_dir/proof-lint.txt"; then
+  if grep -En 'warn ".*missing|WARN .*missing' "$PROOF_DIR/proof.sh" "$PROOF_DIR/validate_boot.sh" >"$tmp_dir/proof-lint.txt"; then
     die "proof code contains a required-evidence missing warning instead of failing"
   fi
+
+  local mc_preview_logs="$tmp_dir/mc-preview-logs"
+  local fake_preview_cmd="$tmp_dir/fake-engine-image-preview"
+  mkdir -p "$mc_preview_logs"
+  cat >"$fake_preview_cmd" <<'FAKE'
+#!/usr/bin/env bash
+exit 0
+FAKE
+  chmod +x "$fake_preview_cmd"
+  if ENGINEOS_LOG_DIR="$mc_preview_logs" \
+      ENGINEOS_IMAGE_PREVIEW_CMD="$fake_preview_cmd" \
+      "$PROOF_DIR/proof.sh" mc-preview >"$tmp_dir/mc-preview-missing-shell-log.txt" 2>&1; then
+    die "mc-preview proof accepted missing shell log evidence"
+  fi
+  grep -F "shell log missing: $mc_preview_logs/shell.log" "$tmp_dir/mc-preview-missing-shell-log.txt" >/dev/null ||
+    die "mc-preview missing shell log failure was not explicit"
+
+  cat >"$fake_preview_cmd" <<'FAKE'
+#!/usr/bin/env bash
+if [[ "$1" == "--ping" ]]; then
+  exit 0
+fi
+if [[ "$1" == "--quick-view" ]]; then
+  image="$2"
+  printf '[2026-01-01T00:00:00Z] image preview shown path=%s owner=mc-quick-view:fixture:no-pane:terminal:right slot=terminal image=4x3 x=0 y=0 size=4x3 bounds=80x24\n' "$image" >>"$ENGINEOS_FAKE_SHELL_LOG"
+  exit 0
+fi
+exit 2
+FAKE
+  chmod +x "$fake_preview_cmd"
+  ENGINEOS_LOG_DIR="$mc_preview_logs" \
+    ENGINEOS_IMAGE_PREVIEW_CMD="$fake_preview_cmd" \
+    ENGINEOS_FAKE_SHELL_LOG="$mc_preview_logs/shell.log" \
+    "$PROOF_DIR/proof.sh" mc-preview >"$tmp_dir/mc-preview-real.txt"
+  grep -F 'MC preview proof runner completed' "$tmp_dir/mc-preview-real.txt" >/dev/null ||
+    die "mc-preview proof did not pass with live preview shell log evidence"
 
   local shell_launch_logs="$tmp_dir/shell-launch-logs"
   local shell_launch_state="$tmp_dir/shell-launch-state"
@@ -3716,11 +3873,23 @@ run_repo() {
   grep -F 'unknown EngineOS package: not-a-package' "$out" >/dev/null ||
     die "repo dry-run unknown package error was not clear"
 
+  if "$SCRIPT_DIR/package_lint.sh" --package not-a-package >"$out" 2>&1; then
+    die "package lint accepted an unknown package"
+  fi
+  grep -F 'unknown EngineOS package: not-a-package' "$out" >/dev/null ||
+    die "package lint unknown package error was not clear"
+
   "$SCRIPT_DIR/package_lint.sh" --package engineos-shell --package engineos-tools >"$out"
   grep -F 'engineos-tools: PKGBUILD metadata' "$out" >/dev/null ||
     die "package lint did not check engineos-tools from repeated package selection"
   grep -F 'engineos-shell: PKGBUILD metadata' "$out" >/dev/null ||
     die "package lint did not check engineos-shell from repeated package selection"
+
+  if "$SCRIPT_DIR/preflight.sh" repo --package not-a-package >"$out" 2>&1; then
+    die "preflight accepted an unknown package"
+  fi
+  grep -F 'unknown EngineOS package: not-a-package' "$out" >/dev/null ||
+    die "preflight unknown package error was not clear"
 
   "$SCRIPT_DIR/preflight.sh" repo --package engineos-shell --package engineos-tools >"$out"
   grep -F 'packages/engineos-tools/PKGBUILD' "$out" >/dev/null ||
@@ -4405,6 +4574,9 @@ case "$SCOPE" in
     ;;
   source-test)
     run_source_test
+    ;;
+  source-env)
+    run_source_env
     ;;
   builder-handoff)
     run_builder_handoff

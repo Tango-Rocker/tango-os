@@ -46,6 +46,7 @@ fi
 LOG_FILE="$LOG_DIR/shell.log"
 export ENGINEOS_STATE_DIR="$STATE_DIR"
 DEV_SHELL_UNIT="${ENGINEOS_DEV_SHELL_UNIT:-engineos-dev-shell.service}"
+DEV_SHELL_START="${ENGINEOS_DEV_SHELL_START:-engineos-dev-shell-start}"
 TMUX_SESSION="${ENGINEOS_TMUX_APP_SESSION:-engineos}"
 PROC_DIR="${ENGINEOS_PROC_DIR:-/proc}"
 KILL_CMD="${ENGINEOS_KILL_CMD:-kill}"
@@ -133,7 +134,27 @@ have_executable() {
 
 same_user_pids_by_name() {
   local name="$1"
-  pgrep -u "$(id -u)" -x "$name" 2>/dev/null || true
+  local argv=()
+  local pid
+  local proc_path
+
+  [[ -d "$PROC_DIR" ]] || return 0
+  for proc_path in "$PROC_DIR"/[0-9]*; do
+    [[ -d "$proc_path" ]] || continue
+    pid="${proc_path##*/}"
+    [[ "$pid" != "$$" ]] || continue
+    proc_uid_matches "$pid" || continue
+    [[ -r "$PROC_DIR/$pid/cmdline" ]] || continue
+    argv=()
+    mapfile -d '' -t argv <"$PROC_DIR/$pid/cmdline" || true
+    [[ "${#argv[@]}" -gt 0 ]] || continue
+    [[ "${argv[0]##*/}" == "$name" ]] || continue
+    printf '%s\n' "$pid"
+  done
+}
+
+pid_discovery_available() {
+  [[ -d "$PROC_DIR" && -r "$PROC_DIR" ]]
 }
 
 contains_pid() {
@@ -178,6 +199,7 @@ run_restart_live() {
   local pid
   local elapsed
   local restart_cmd
+  local restart_rc
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -205,6 +227,7 @@ run_restart_live() {
 
   printf 'EngineOS live shell restart\n'
   printf '  unit:       %s\n' "$DEV_SHELL_UNIT"
+  printf '  entrypoint: %s\n' "$DEV_SHELL_START"
   printf '  root:       %s\n' "$ROOT"
   printf '  state:      %s\n' "$STATE_DIR"
   printf '  shell_log:  %s\n' "$LOG_FILE"
@@ -215,11 +238,24 @@ run_restart_live() {
   if [[ "$dry_run" == true ]]; then
     printf '  would_run:  %s\n' "$restart_cmd"
     printf '  would_verify: new same-user engineos-shell pid within %ss\n' "$timeout"
+    printf '  result:     preview\n'
     return 0
   fi
 
   printf '  run:        %s\n' "$restart_cmd"
+  set +e
   run_restart_command
+  restart_rc="$?"
+  set -e
+  if [[ "$restart_rc" -ne 0 ]]; then
+    printf '  result:     failed reason=restart-command-failed rc=%s\n' "$restart_rc"
+    return "$restart_rc"
+  fi
+
+  if ! pid_discovery_available; then
+    printf '  result:     partial reason=pid-discovery-unavailable\n'
+    return 0
+  fi
 
   for ((elapsed = 0; elapsed < timeout * 5; elapsed++)); do
     new_pids=()
@@ -233,11 +269,13 @@ run_restart_live() {
     sleep 0.2
   done
 
-  [[ "${#new_pids[@]}" -gt 0 ]] ||
-    die "no new engineos-shell pid appeared after restarting $DEV_SHELL_UNIT"
+  if [[ "${#new_pids[@]}" -eq 0 ]]; then
+    printf '  result:     failed reason=no-new-shell-pid timeout=%ss\n' "$timeout"
+    return 1
+  fi
 
   printf '  new_pids:   %s\n' "${new_pids[*]}"
-  printf 'live shell restart verified\n'
+  printf '  result:     restarted\n'
 }
 
 install_user_file() {
@@ -247,7 +285,10 @@ install_user_file() {
   local dry_run="$4"
   local force="$5"
 
-  [[ -r "$src" ]] || die "payload file missing: $src"
+  if [[ ! -r "$src" ]]; then
+    printf '  error:      payload file missing: %s\n' "$src"
+    return 1
+  fi
   if [[ -e "$dest" && "$force" != true ]]; then
     printf '  keep:       %s\n' "$dest"
     return 0
@@ -256,7 +297,10 @@ install_user_file() {
     printf '  would_install: %s -> %s\n' "$src" "$dest"
     return 0
   fi
-  install -Dm"$mode" "$src" "$dest"
+  if ! install -Dm"$mode" "$src" "$dest"; then
+    printf '  error:      install failed: %s\n' "$dest"
+    return 1
+  fi
   printf '  installed:  %s\n' "$dest"
 }
 
@@ -265,19 +309,32 @@ install_helper_file() {
   local dest="$2"
   local dry_run="$3"
 
-  [[ -r "$src" ]] || die "payload helper missing: $src"
+  if [[ ! -r "$src" ]]; then
+    printf '  error:      payload helper missing: %s\n' "$src"
+    return 1
+  fi
   if [[ "$dry_run" == true ]]; then
     printf '  would_install: %s -> %s\n' "$src" "$dest"
     return 0
   fi
   if [[ -w "$(dirname "$dest")" || ! -e "$(dirname "$dest")" ]]; then
-    install -Dm0755 "$src" "$dest"
+    if ! install -Dm0755 "$src" "$dest"; then
+      printf '  error:      install failed: %s\n' "$dest"
+      return 1
+    fi
   elif [[ "$(id -u)" -eq 0 ]]; then
-    install -Dm0755 "$src" "$dest"
+    if ! install -Dm0755 "$src" "$dest"; then
+      printf '  error:      install failed: %s\n' "$dest"
+      return 1
+    fi
   elif have_executable sudo; then
-    sudo -n install -Dm0755 "$src" "$dest"
+    if ! sudo -n install -Dm0755 "$src" "$dest"; then
+      printf '  error:      sudo install failed: %s\n' "$dest"
+      return 1
+    fi
   else
-    die "cannot install helper without writable target or sudo: $dest"
+    printf '  error:      cannot install helper without writable target or sudo: %s\n' "$dest"
+    return 1
   fi
   printf '  installed:  %s\n' "$dest"
 }
@@ -416,11 +473,6 @@ run_refresh_user() {
     shift
   done
 
-  [[ -n "$USER_HOME" ]] || die "cannot resolve user home; set ENGINEOS_USER_HOME"
-  [[ -d "$PAYLOAD_DIR/assets" && -d "$PAYLOAD_DIR/scripts" ]] ||
-    die "post-install payload missing: $PAYLOAD_DIR"
-
-  tmux_conf="$USER_HOME/.tmux.conf"
   printf 'EngineOS user runtime refresh\n'
   printf '  root:       %s\n' "$ROOT"
   printf '  payload:    %s\n' "$PAYLOAD_DIR"
@@ -428,9 +480,25 @@ run_refresh_user() {
   printf '  helper_dir: %s\n' "$TMUX_HELPER_DIR"
   printf '  dry_run:    %s\n' "$dry_run"
 
-  install_user_file "$PAYLOAD_DIR/assets/tmux.conf" "$tmux_conf" 0644 "$dry_run" "$force_config"
+  if [[ -z "$USER_HOME" ]]; then
+    printf '  result:     failed reason=user-home-unresolved\n'
+    return 1
+  fi
+  if [[ ! -d "$PAYLOAD_DIR/assets" || ! -d "$PAYLOAD_DIR/scripts" ]]; then
+    printf '  result:     failed reason=post-install-payload-missing\n'
+    return 1
+  fi
+
+  tmux_conf="$USER_HOME/.tmux.conf"
+  if ! install_user_file "$PAYLOAD_DIR/assets/tmux.conf" "$tmux_conf" 0644 "$dry_run" "$force_config"; then
+    printf '  result:     failed reason=install-tmux-config-failed\n'
+    return 1
+  fi
   for helper in engineos-tmux-pane-sync engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
-    install_helper_file "$PAYLOAD_DIR/scripts/$helper" "$TMUX_HELPER_DIR/$helper" "$dry_run"
+    if ! install_helper_file "$PAYLOAD_DIR/scripts/$helper" "$TMUX_HELPER_DIR/$helper" "$dry_run"; then
+      printf '  result:     failed reason=install-helper-failed helper=%s\n' "$helper"
+      return 1
+    fi
   done
 
   if ! have_executable "$TMUX_CMD"; then

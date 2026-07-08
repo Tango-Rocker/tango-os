@@ -6,15 +6,50 @@ if [[ "$DEFAULT_ENGINEOS_ROOT" == "/" && -d /usr/lib/engineos/scripts ]]; then
   DEFAULT_ENGINEOS_ROOT="/usr"
 fi
 
+ENGINEOS_INVOKED_TOOL="$(basename "$0")"
+ENGINEOS_REQUESTED_TOOL="$ENGINEOS_INVOKED_TOOL"
+if [[ "$ENGINEOS_REQUESTED_TOOL" == "eos" ]]; then
+  ENGINEOS_REQUESTED_TOOL="${1:-help}"
+fi
+ENGINEOS_SOURCE_TEST_MODE="${ENGINEOS_SOURCE_TEST_MODE:-}"
+if [[ "$ENGINEOS_REQUESTED_TOOL" == "eos-source-test" ]]; then
+  ENGINEOS_SOURCE_TEST_MODE=1
+fi
+if [[ "$ENGINEOS_SOURCE_TEST_MODE" == "1" ]]; then
+  unset ENGINEOS_ROOT
+  unset ENGINEOS_SCRIPT_DIR
+  unset ENGINEOS_EOS_DIR
+  unset SCRIPT_DIR
+  unset ENGINEOS_LOG_DIR
+  unset ENGINEOS_STATE_DIR
+  unset ENGINEOS_CAPTURE_DIR
+  unset ENGINEOS_SHELL_BOOTSTRAP
+  unset ENGINEOS_TERMINAL_SESSION_CMD
+  unset ENGINEOS_TERMINAL_REQUIRE_WAYLAND
+  unset ENGINEOS_TERMINAL_SLOT_CMD
+  unset ENGINEOS_CUBE_CMD
+  unset ENGINEOS_ENGINE_CMD
+  unset ENGINEOS_RUNTIME_CMD
+  unset ENGINEOS_SHELL_BIN
+  unset WAYLAND_DISPLAY
+  unset DISPLAY
+  unset XDG_SESSION_TYPE
+  unset WLR_BACKENDS
+  unset WLR_RENDERER
+  unset WLR_RENDERER_ALLOW_SOFTWARE
+  unset LIBGL_ALWAYS_SOFTWARE
+fi
+
 ENGINEOS_ROOT="${ENGINEOS_ROOT:-$DEFAULT_ENGINEOS_ROOT}"
 ENGINEOS_LOG_DIR_OVERRIDE="${ENGINEOS_LOG_DIR-}"
 ENGINEOS_SCRIPT_DIR_OVERRIDE="${ENGINEOS_SCRIPT_DIR-}"
 ENGINEOS_EOS_DIR_OVERRIDE="${ENGINEOS_EOS_DIR-}"
 
-if [[ -r /etc/engineos/profile.conf ]]; then
+if [[ "$ENGINEOS_SOURCE_TEST_MODE" != "1" && -r /etc/engineos/profile.conf ]]; then
   # shellcheck disable=SC1091
   source /etc/engineos/profile.conf
 fi
+unset ENGINEOS_SOURCE_TEST_MODE
 if [[ -n "$ENGINEOS_LOG_DIR_OVERRIDE" ]]; then
   ENGINEOS_LOG_DIR="$ENGINEOS_LOG_DIR_OVERRIDE"
 fi
@@ -258,6 +293,7 @@ cmd_source_test() {
     -u WLR_RENDERER \
     -u WLR_RENDERER_ALLOW_SOFTWARE \
     -u LIBGL_ALWAYS_SOFTWARE \
+    ENGINEOS_SOURCE_TEST_MODE=1 \
     "$source_root/tools/engineos/eos-test" "$@"
 }
 
@@ -538,7 +574,6 @@ main() {
       exec_script preflight.sh "$@"
       ;;
     eos-source-test)
-      record_eos_command "$tool" "$@"
       cmd_source_test "$@"
       ;;
     eos-ci)

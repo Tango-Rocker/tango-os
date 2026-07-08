@@ -181,8 +181,15 @@ clean_generated_package_dirs() {
   done
 }
 
+selected_package_args() {
+  engineos_package_cli_args PACKAGES
+}
+
 run_pipeline() {
-  local pkg test_scope
+  local package_arg
+  local pkg
+  local test_scope
+  local package_args=()
 
   [[ "$MODE" == "local" ]] || die "unknown ci mode: $MODE"
   [[ ${#TEST_SCOPES[@]} -gt 0 ]] || TEST_SCOPES=(smoke)
@@ -207,9 +214,13 @@ run_pipeline() {
     printf '    - %s\n' "$test_scope"
   done
 
+  while IFS= read -r package_arg; do
+    package_args+=("$package_arg")
+  done < <(selected_package_args)
+
   if [[ "$RUN_PREFLIGHT" == true ]]; then
     log_step "preflight"
-    run_or_print "$SCRIPT_DIR/preflight.sh" repo
+    run_or_print "$SCRIPT_DIR/preflight.sh" repo "${package_args[@]}"
   fi
 
   for test_scope in "${TEST_SCOPES[@]}"; do
@@ -218,9 +229,7 @@ run_pipeline() {
   done
 
   log_step "package rebuild"
-  for pkg in "${PACKAGES[@]}"; do
-    run_or_print "$ROOT/tools/engineos/eos-build" repo --package "$pkg"
-  done
+  run_or_print "$ROOT/tools/engineos/eos-build" repo "${package_args[@]}"
 
   if [[ "$INSTALL" == true ]]; then
     log_step "reinstall"

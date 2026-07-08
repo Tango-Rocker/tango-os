@@ -22,6 +22,17 @@ proof, pane/window management proofs, and cleaner git/package disposition.
 Likely phase: current PoC/MVP hardening; use the generated local evidence under
 `.agent-insights/out/full-20260708/` while it remains available on this machine.
 
+### Command Surface Follow-Ups
+
+Why: the command-surface and false-signal audit found remaining active-doc and
+cross-repo drift: legacy image-lab commands still appear near routine workflows,
+some validators still mix static/dry-run previews with proof language, and
+`opencode-autonomy/scripts/codex-session-insight-gate.py` can report skipped,
+failed, or timed-out extraction as a successful launcher step.
+
+Likely phase: next hardening pass after the six-subagent EngineOS command
+surface batch lands; keep global skill availability as the separate after-pass.
+
 ### Package Signing
 
 Why: useful once the local package repo is stable.
