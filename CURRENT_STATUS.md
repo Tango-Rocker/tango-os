@@ -37,7 +37,7 @@ These are historical proof artifacts only; they are not the active work path:
   rebuild, including pane-bounds app launch, game cursor capture, MC image
   preview, Quick View preview integration, the Falkon startup crash fix, and
   Wayland drag-and-drop support for Qt/editor clients. The live shell package
-  is `engineos-shell 0.1.0-15`.
+  has since advanced through the tmux-mirrored GUI window tracking work below.
 - Bare-metal EngineDev has a systemd-boot fallback entry,
   `enginedev-restore-engineos-20260704.conf`, pointing at copied
   `/boot/vmlinuz-linux-restore-engineos-20260704` and
@@ -61,6 +61,35 @@ These are historical proof artifacts only; they are not the active work path:
 - Agent-pack hygiene currently passes. Canonical ownership is
   `.agents/index.toml` plus `docs/agent-roles.md`; reusable workflows belong
   in skills; CLI work stays on direct `eos-*` commands.
+- Tmux-mirrored GUI window tracking is live on the bare-metal EngineDev
+  session: mapped shell windows have session-local IDs in shell state,
+  `eos-app window list|focus|bind|launch` is the control surface, tmux proxy
+  helpers mirror non-terminal GUI windows, and pane-bound generic GUI windows
+  are resized/clipped through per-window bounds. GUI proxy tabs now bind
+  windows using tmux client cell dimensions, refresh bounds on tmux tab/layout
+  and client-resize hooks, bring the app forward when the proxy tab is
+  selected, bind matching launcher panes such as a `falkon` tmux window
+  directly to the shell window instead of requiring a generated proxy tab, hide
+  pane-bound GUI windows again when a normal tmux tab is selected, preserve the
+  focused pane-bound GUI across bounds refreshes, prune stale proxy tabs for
+  dead shell window IDs, select the new proxy tab when a freshly mapped GUI app
+  is already focused, and suppress no-op pane sync text in hook output. The rebuilt
+  `engineos-shell` and `engineos-tools` packages were reinstalled,
+  `engineos-dev-shell.service` was restarted, and live Qt/Falkon proxy
+  focus/bind was proven with window bounds written under
+  `/run/user/1000/engineos/window-bounds/`. A follow-up fix prevents the
+  tmux GUI window-sync daemon from recovering the primary terminal from
+  unbound panes and skips unchanged pane-bound window relayouts, avoiding
+  periodic focus steals from the secondary terminal and slow redraw churn when
+  switching Qt/Falkon-style GUI panes. A shell-side follow-up keeps hidden
+  pane-bound GUI scene nodes render-enabled under the terminal so Qt/Falkon
+  clients stay warm between tmux proxy selections instead of being cold-enabled
+  on focus. The runtime command-surface cleanup is deployed through
+  `engineos-tools 0.1.0-17`; `eos-runtime shell refresh-user` refreshed
+  user-space tmux/window helper payloads, and `eos-runtime shell restart-live`
+  verified a new `engineos-shell` PID after restarting
+  `engineos-dev-shell.service`. The live shell package is
+  `engineos-shell 0.1.0-16`.
 
 ## Not Yet Proven
 
@@ -83,7 +112,10 @@ These are historical proof artifacts only; they are not the active work path:
 Bare-metal/source-checkout loop:
 
 ```bash
+./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-ci local --test agent --install --clean-generated --no-validate-repo
+eos-runtime shell refresh-user
+eos-runtime shell restart-live
 eos-app manifest validate
 eos-proof shell-launch --bare-metal
 ```
@@ -100,5 +132,5 @@ Agent and harness hygiene:
 ```bash
 ./tools/engineos/eos-agent hygiene check
 ./tools/engineos/eos-test agent-hygiene
-./tools/engineos/eos-test agent
+./tools/engineos/eos-source-test agent
 ```

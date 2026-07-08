@@ -11,6 +11,17 @@ This is the place for useful tangents. Add ideas here instead of expanding the c
 
 ## Later Ideas
 
+### Session Mining Action Queue
+
+Why: the 2026-07-08 full Codex session review found recurring proof,
+environment, and ergonomics issues across 46 local sessions. Highest-value
+EngineOS candidates are fail-closed proof gates, a source-tree validation
+wrapper, multi-package `eos-*` handling, live visual proof helpers, MC preview
+proof, pane/window management proofs, and cleaner git/package disposition.
+
+Likely phase: current PoC/MVP hardening; use the generated local evidence under
+`.agent-insights/out/full-20260708/` while it remains available on this machine.
+
 ### Package Signing
 
 Why: useful once the local package repo is stable.

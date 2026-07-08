@@ -7,7 +7,7 @@ source "$SCRIPT_DIR/common.sh"
 
 ROOT="$(engineos_root)"
 DRY_RUN=false
-ONLY_PACKAGE=""
+REQUESTED_PACKAGES=()
 REPO_ARCH="${ENGINEOS_REPO_ARCH:-x86_64}"
 REPO_DIR="${ENGINEOS_REPO_DIR:-$ROOT/repo/$REPO_ARCH}"
 REPO_NAME="${ENGINEOS_REPO_NAME:-engineos}"
@@ -15,13 +15,13 @@ PACKAGE_LOG_DIR="${ENGINEOS_PACKAGE_LOG_DIR:-$ROOT/artifacts/logs}"
 PACKAGE_SOURCE_DIR="${ENGINEOS_PACKAGE_SOURCE_DIR:-$ROOT/artifacts/sources}"
 PACKAGE_BUILD_DIR="${ENGINEOS_PACKAGE_BUILD_DIR:-$ROOT/artifacts/build}"
 
-mapfile -t PACKAGES < <(engineos_packages)
-
 usage() {
   cat <<'HELP'
-Usage: build_repo.sh [--dry-run] [--package <name>]
+Usage: build_repo.sh [--dry-run] [--package <name>]...
 
 Build local EngineOS Arch packages and update the local pacman repository.
+--package is repeatable. Unknown package names fail before work starts, and
+duplicate package names are ignored after the first occurrence.
 Real builds must run on the Arch builder VM.
 HELP
 }
@@ -33,8 +33,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --package)
       shift
-      ONLY_PACKAGE="${1:-}"
-      [[ -n "$ONLY_PACKAGE" ]] || die "--package requires a package name"
+      engineos_add_package_request REQUESTED_PACKAGES "${1:-}"
       ;;
     --help|-h|help)
       usage
@@ -48,13 +47,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 selected_packages=()
-for pkg in "${PACKAGES[@]}"; do
-  if [[ -z "$ONLY_PACKAGE" || "$pkg" == "$ONLY_PACKAGE" ]]; then
-    selected_packages+=("$pkg")
-  fi
-done
-
-[[ ${#selected_packages[@]} -gt 0 ]] || die "no package matched: $ONLY_PACKAGE"
+engineos_select_packages REQUESTED_PACKAGES selected_packages
 
 package_artifacts() {
   local pkg="$1"
@@ -189,9 +182,9 @@ WRAPPER_TAIL
 }
 
 preflight_args=(repo)
-if [[ -n "$ONLY_PACKAGE" ]]; then
-  preflight_args+=(--package "$ONLY_PACKAGE")
-fi
+while IFS= read -r arg; do
+  preflight_args+=("$arg")
+done < <(engineos_package_cli_args REQUESTED_PACKAGES)
 "$SCRIPT_DIR/preflight.sh" "${preflight_args[@]}"
 
 if [[ "$DRY_RUN" == true ]]; then

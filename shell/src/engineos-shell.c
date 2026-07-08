@@ -106,6 +106,8 @@ struct engineos_layout_request {
 	int pane_height;
 	int window_width;
 	int window_height;
+	int cell_width;
+	int cell_height;
 	char source[32];
 };
 
@@ -207,6 +209,7 @@ struct engineos_shell_server {
 	unsigned int keyboard_count;
 	unsigned int pointer_count;
 	unsigned int view_count;
+	unsigned int next_view_id;
 };
 
 struct engineos_shell_launch {
@@ -267,6 +270,7 @@ struct engineos_shell_view {
 	struct wl_listener request_resize;
 	struct wl_listener request_show_window_menu;
 	enum engineos_surface_role role;
+	unsigned int view_id;
 	int x;
 	int y;
 	int width;
@@ -319,9 +323,12 @@ static void sync_pointer_constraint(struct engineos_shell_server *server,
 	const char *reason);
 static void set_view_activated(struct engineos_shell_view *view, bool activated);
 static void focus_view(struct engineos_shell_view *view);
+static void activate_view(struct engineos_shell_view *view, const char *reason);
 static void set_active_slot(struct engineos_shell_server *server,
 	enum engineos_surface_role role, const char *reason);
 static void apply_launchpad_visibility(struct engineos_shell_server *server,
+	const char *reason);
+static void relayout_shell_views(struct engineos_shell_server *server,
 	const char *reason);
 static void hide_image_preview(struct engineos_shell_server *server,
 	const char *reason);
@@ -462,7 +469,7 @@ static int relayout_from_signal(int signal_number, void *data) {
 		wlr_log(WLR_ERROR,
 			"preview ipc refresh failed reason=layout-sync-signal");
 	}
-	apply_launchpad_visibility(server, "layout-sync-signal");
+	relayout_shell_views(server, "layout-sync-signal");
 	write_shell_state(server, "layout-sync-signal");
 	return 0;
 }
@@ -1071,6 +1078,10 @@ static bool read_layout_request(struct engineos_shell_server *server,
 			parse_nonnegative_int(value, &request->window_width);
 		} else if (strcmp(key, "window_height") == 0) {
 			parse_nonnegative_int(value, &request->window_height);
+		} else if (strcmp(key, "cell_width") == 0) {
+			parse_nonnegative_int(value, &request->cell_width);
+		} else if (strcmp(key, "cell_height") == 0) {
+			parse_nonnegative_int(value, &request->cell_height);
 		}
 	}
 	fclose(file);
@@ -1095,14 +1106,26 @@ static bool apply_pane_geometry(
 		const struct engineos_layout_request *request,
 		const struct engineos_view_geometry *output_geometry,
 		struct engineos_view_geometry *geometry) {
-	long x_offset = ((long)output_geometry->width * request->pane_left) /
-		request->window_width;
-	long y_offset = ((long)output_geometry->height * request->pane_top) /
-		request->window_height;
-	long width = ((long)output_geometry->width * request->pane_width +
-		request->window_width - 1) / request->window_width;
-	long height = ((long)output_geometry->height * request->pane_height +
-		request->window_height - 1) / request->window_height;
+	long x_offset = 0;
+	long y_offset = 0;
+	long width = 0;
+	long height = 0;
+
+	if (request->cell_width > 0 && request->cell_height > 0) {
+		x_offset = (long)request->pane_left * request->cell_width;
+		y_offset = (long)request->pane_top * request->cell_height;
+		width = (long)request->pane_width * request->cell_width;
+		height = (long)request->pane_height * request->cell_height;
+	} else {
+		x_offset = ((long)output_geometry->width * request->pane_left) /
+			request->window_width;
+		y_offset = ((long)output_geometry->height * request->pane_top) /
+			request->window_height;
+		width = ((long)output_geometry->width * request->pane_width) /
+			request->window_width;
+		height = ((long)output_geometry->height * request->pane_height) /
+			request->window_height;
+	}
 
 	if (width <= 0 || height <= 0 ||
 			x_offset < 0 || y_offset < 0 ||
@@ -1139,6 +1162,76 @@ static bool apply_pane_geometry(
 	return true;
 }
 
+static bool read_window_layout_request(struct engineos_shell_view *view,
+		struct engineos_layout_request *request) {
+	if (view == NULL || view->server == NULL || view->server->state_dir == NULL ||
+			view->view_id == 0) {
+		return false;
+	}
+
+	memset(request, 0, sizeof(*request));
+	snprintf(request->source, sizeof(request->source), "%s", "unknown");
+
+	char request_name[96];
+	snprintf(request_name, sizeof(request_name), "window-bounds/%u.env",
+		view->view_id);
+	char *path = join_state_path(view->server->state_dir, request_name);
+	if (path == NULL) {
+		return false;
+	}
+
+	FILE *file = fopen(path, "r");
+	free(path);
+	if (file == NULL) {
+		return false;
+	}
+
+	bool window_matches = true;
+	char line[256];
+	while (fgets(line, sizeof(line), file) != NULL) {
+		char key[64] = {0};
+		char value[128] = {0};
+		if (sscanf(line, " %63[^=]=%127[^\n]", key, value) != 2) {
+			continue;
+		}
+
+		if (strcmp(key, "window_id") == 0) {
+			int parsed = 0;
+			window_matches =
+				parse_nonnegative_int(value, &parsed) &&
+				(unsigned int)parsed == view->view_id;
+		} else if (strcmp(key, "mode") == 0) {
+			request->pane = strcmp(value, "pane") == 0;
+		} else if (strcmp(key, "source") == 0) {
+			snprintf(request->source, sizeof(request->source), "%.31s", value);
+		} else if (strcmp(key, "pane_left") == 0) {
+			parse_nonnegative_int(value, &request->pane_left);
+		} else if (strcmp(key, "pane_top") == 0) {
+			parse_nonnegative_int(value, &request->pane_top);
+		} else if (strcmp(key, "pane_width") == 0) {
+			parse_nonnegative_int(value, &request->pane_width);
+		} else if (strcmp(key, "pane_height") == 0) {
+			parse_nonnegative_int(value, &request->pane_height);
+		} else if (strcmp(key, "window_width") == 0) {
+			parse_nonnegative_int(value, &request->window_width);
+		} else if (strcmp(key, "window_height") == 0) {
+			parse_nonnegative_int(value, &request->window_height);
+		} else if (strcmp(key, "cell_width") == 0) {
+			parse_nonnegative_int(value, &request->cell_width);
+		} else if (strcmp(key, "cell_height") == 0) {
+			parse_nonnegative_int(value, &request->cell_height);
+		}
+	}
+	fclose(file);
+
+	return window_matches &&
+		request->pane &&
+		request->pane_width > 0 &&
+		request->pane_height > 0 &&
+		request->window_width > 0 &&
+		request->window_height > 0;
+}
+
 static bool compute_view_geometry(struct engineos_shell_view *view,
 		struct engineos_view_geometry *geometry) {
 	geometry->x = 40;
@@ -1150,6 +1243,17 @@ static bool compute_view_geometry(struct engineos_shell_view *view,
 
 	if (!is_launchpad_role(view->role)) {
 		ensure_floating_geometry(view);
+		struct engineos_layout_request request;
+		if (!view->fullscreen && read_window_layout_request(view, &request)) {
+			struct engineos_view_geometry output_geometry = {0};
+			output_geometry_for_role(view->server, ENGINEOS_SURFACE_TERMINAL,
+				&output_geometry.x, &output_geometry.y,
+				&output_geometry.width, &output_geometry.height);
+			if (apply_pane_geometry(&request, &output_geometry, geometry)) {
+				geometry->layout = "tmux-window-pane";
+				return true;
+			}
+		}
 		if (view->fullscreen) {
 			floating_output_geometry(view, &geometry->x, &geometry->y,
 				&geometry->width, &geometry->height);
@@ -1210,6 +1314,13 @@ static bool is_persistent_panel_geometry(enum engineos_surface_role role,
 	return role == ENGINEOS_SURFACE_CUBE || role == ENGINEOS_SURFACE_ENGINE;
 }
 
+static bool is_tmux_window_pane_geometry(
+		const struct engineos_view_geometry *geometry) {
+	return geometry != NULL &&
+		geometry->layout != NULL &&
+		strcmp(geometry->layout, "tmux-window-pane") == 0;
+}
+
 static bool view_geometry_visible(struct engineos_shell_server *server,
 		struct engineos_shell_view *view,
 		const struct engineos_view_geometry *geometry) {
@@ -1222,7 +1333,26 @@ static bool view_geometry_visible(struct engineos_shell_server *server,
 	if (server->active_slot == view->role || is_terminal_role(view->role)) {
 		return true;
 	}
+	if (is_managed_floating_view(view)) {
+		if (is_tmux_window_pane_geometry(geometry)) {
+			return server->focused_view == view;
+		}
+		return true;
+	}
 	return is_persistent_panel_geometry(view->role, geometry);
+}
+
+static bool view_geometry_render_enabled(struct engineos_shell_server *server,
+		struct engineos_shell_view *view,
+		const struct engineos_view_geometry *geometry) {
+	if (view == NULL || !view->mapped || view->minimized) {
+		return false;
+	}
+	if (is_managed_floating_view(view) &&
+			is_tmux_window_pane_geometry(geometry)) {
+		return true;
+	}
+	return view_geometry_visible(server, view, geometry);
 }
 
 static struct engineos_shell_view *find_mapped_role(
@@ -1231,6 +1361,21 @@ static struct engineos_shell_view *find_mapped_role(
 	struct engineos_shell_view *view;
 	wl_list_for_each(view, &server->views, link) {
 		if (view->mapped && view->role == role) {
+			return view;
+		}
+	}
+	return NULL;
+}
+
+static struct engineos_shell_view *find_mapped_view_id(
+		struct engineos_shell_server *server,
+		unsigned int view_id) {
+	if (view_id == 0) {
+		return NULL;
+	}
+	struct engineos_shell_view *view;
+	wl_list_for_each(view, &server->views, link) {
+		if (view->mapped && view->view_id == view_id) {
 			return view;
 		}
 	}
@@ -2079,7 +2224,7 @@ static void preview_write_response(int client_fd, const char *status,
 	char response[1024];
 	if (strcmp(status, "ok") == 0) {
 		snprintf(response, sizeof(response),
-			"{\"version\":1,\"status\":\"ok\",\"capabilities\":[\"ping\",\"show\",\"hide\",\"wallpaper\",\"hide-wallpaper\",\"launch\",\"png\",\"jpeg\",\"contain\",\"cover\",\"opacity\"]}\n");
+			"{\"version\":1,\"status\":\"ok\",\"capabilities\":[\"ping\",\"show\",\"hide\",\"wallpaper\",\"hide-wallpaper\",\"launch\",\"windows\",\"focus-window\",\"relayout-windows\",\"png\",\"jpeg\",\"contain\",\"cover\",\"opacity\"]}\n");
 	} else {
 		char escaped[768];
 		size_t used = 0;
@@ -2149,6 +2294,33 @@ static void handle_preview_request(struct engineos_shell_server *server,
 			return;
 		}
 		launch_or_activate_slot(server, role, "ipc-launch");
+		preview_write_response(client_fd, "ok", NULL);
+		return;
+	}
+	if (strcmp(op, "focus-window") == 0) {
+		int window_id = 0;
+		if (!json_extract_int(request, "window_id", &window_id) ||
+				window_id <= 0) {
+			preview_write_response(client_fd, "error", "missing window_id");
+			return;
+		}
+		struct engineos_shell_view *view =
+			find_mapped_view_id(server, (unsigned int)window_id);
+		if (view == NULL) {
+			preview_write_response(client_fd, "error", "unknown window_id");
+			return;
+		}
+		activate_view(view, "ipc-focus-window");
+		wlr_log(WLR_INFO,
+			"window focus requested source=ipc window_id=%u role=%s title=%s app_id=%s",
+			view->view_id, surface_role_name(view->role),
+			view_title(view), view_app_id(view));
+		preview_write_response(client_fd, "ok", NULL);
+		return;
+	}
+	if (strcmp(op, "relayout-windows") == 0) {
+		relayout_shell_views(server, "ipc-relayout-windows");
+		write_shell_state(server, "ipc-relayout-windows");
 		preview_write_response(client_fd, "ok", NULL);
 		return;
 	}
@@ -2404,7 +2576,7 @@ static void write_shell_state(struct engineos_shell_server *server,
 			fprintf(file, ",");
 		}
 		first_window = false;
-		fprintf(file, "\n    {\"role\": ");
+		fprintf(file, "\n    {\"id\": %u, \"role\": ", view->view_id);
 		json_write_string(file, surface_role_name(view->role));
 		fprintf(file, ", \"focused\": %s, \"visible\": %s, \"minimized\": %s, \"maximized\": %s, \"layout\": ",
 			server->focused_view == view ? "true" : "false",
@@ -3034,15 +3206,36 @@ static void apply_view_layout(struct engineos_shell_view *view) {
 	default:
 		if (view->xdg_surface != NULL &&
 				xdg_toplevel_can_configure(view->xdg_surface->toplevel)) {
-			wlr_xdg_toplevel_set_fullscreen(view->xdg_surface->toplevel,
-				geometry.fullscreen);
-			wlr_xdg_toplevel_set_maximized(view->xdg_surface->toplevel,
-				view->maximized);
+			if (geometry.layout != NULL &&
+					strcmp(geometry.layout, "tmux-window-pane") == 0) {
+				set_toplevel_geometry(view->xdg_surface->toplevel, &geometry);
+				wlr_xdg_toplevel_set_maximized(view->xdg_surface->toplevel,
+					false);
+			} else {
+				wlr_xdg_toplevel_set_fullscreen(view->xdg_surface->toplevel,
+					geometry.fullscreen);
+				wlr_xdg_toplevel_set_maximized(view->xdg_surface->toplevel,
+					view->maximized);
+				wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel,
+					geometry.width, geometry.height);
+			}
 			set_toplevel_suspended(view->xdg_surface->toplevel, view->minimized);
-			wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel,
-				geometry.width, geometry.height);
 		}
 		break;
+	}
+	if (view->scene_tree != NULL) {
+		if (geometry.layout != NULL &&
+				strcmp(geometry.layout, "tmux-window-pane") == 0) {
+			struct wlr_box clip = {
+				.x = 0,
+				.y = 0,
+				.width = geometry.width,
+				.height = geometry.height,
+			};
+			wlr_scene_subsurface_tree_set_clip(&view->scene_tree->node, &clip);
+		} else {
+			wlr_scene_subsurface_tree_set_clip(&view->scene_tree->node, NULL);
+		}
 	}
 	wlr_scene_node_set_position(&view->scene_tree->node, geometry.x,
 		geometry.y);
@@ -3081,7 +3274,8 @@ static void apply_launchpad_visibility(struct engineos_shell_server *server,
 		compute_view_geometry(view, &geometry);
 		bool visible = view_geometry_visible(server, view, &geometry);
 		apply_view_layout(view);
-		wlr_scene_node_set_enabled(&view->scene_tree->node, visible);
+		wlr_scene_node_set_enabled(&view->scene_tree->node,
+			view_geometry_render_enabled(server, view, &geometry));
 		if (active) {
 			active_view = view;
 			active_terminal = is_terminal_role(view->role);
@@ -3120,6 +3314,43 @@ static void apply_launchpad_visibility(struct engineos_shell_server *server,
 			surface_role_name(server->active_slot),
 			reason != NULL ? reason : "unspecified");
 		clear_keyboard_focus(server);
+	}
+	if (is_managed_floating_view(server->focused_view) &&
+			server->focused_view->mapped && !server->focused_view->minimized) {
+		wlr_scene_node_raise_to_top(&server->focused_view->scene_tree->node);
+		wlr_log(WLR_INFO,
+			"window raise focused role=%s reason=%s title=%s app_id=%s",
+			surface_role_name(server->focused_view->role),
+			reason != NULL ? reason : "unspecified",
+			view_title(server->focused_view),
+			view_app_id(server->focused_view));
+	}
+	schedule_outputs(server);
+}
+
+static void relayout_shell_views(struct engineos_shell_server *server,
+		const char *reason) {
+	struct engineos_shell_view *previous_focus = server->focused_view;
+	apply_launchpad_visibility(server, reason);
+	if (is_managed_floating_view(previous_focus) &&
+			previous_focus->mapped && !previous_focus->minimized) {
+		focus_view(previous_focus);
+	}
+
+	struct engineos_shell_view *view;
+	wl_list_for_each(view, &server->views, link) {
+		if (!view->mapped || is_launchpad_role(view->role)) {
+			continue;
+		}
+		struct engineos_view_geometry geometry = {0};
+		compute_view_geometry(view, &geometry);
+		apply_view_layout(view);
+		wlr_scene_node_set_enabled(&view->scene_tree->node,
+			view_geometry_render_enabled(server, view, &geometry));
+	}
+	if (is_managed_floating_view(server->focused_view) &&
+			server->focused_view->mapped && !server->focused_view->minimized) {
+		wlr_scene_node_raise_to_top(&server->focused_view->scene_tree->node);
 	}
 	schedule_outputs(server);
 }
@@ -3252,6 +3483,7 @@ static void focus_view(struct engineos_shell_view *view) {
 	}
 
 	struct engineos_shell_server *server = view->server;
+	struct engineos_shell_view *previous_view = server->focused_view;
 	if (view->minimized) {
 		view->minimized = false;
 		wlr_scene_node_set_enabled(&view->scene_tree->node, true);
@@ -3266,6 +3498,22 @@ static void focus_view(struct engineos_shell_view *view) {
 	}
 
 	server->focused_view = view;
+	if (previous_view != NULL && previous_view != view &&
+			is_managed_floating_view(previous_view) &&
+			previous_view->mapped && previous_view->scene_tree != NULL) {
+		struct engineos_view_geometry previous_geometry = {0};
+		compute_view_geometry(previous_view, &previous_geometry);
+		bool previous_visible =
+			view_geometry_render_enabled(server, previous_view,
+				&previous_geometry);
+		apply_view_layout(previous_view);
+		wlr_scene_node_set_enabled(&previous_view->scene_tree->node,
+			previous_visible);
+	}
+	if (is_managed_floating_view(view) && view->scene_tree != NULL) {
+		apply_view_layout(view);
+		wlr_scene_node_set_enabled(&view->scene_tree->node, true);
+	}
 	wlr_scene_node_raise_to_top(&view->scene_tree->node);
 	set_view_activated(view, true);
 
@@ -4210,16 +4458,16 @@ static void xdg_surface_map(struct wl_listener *listener, void *data) {
 					"slot-mapped-inactive");
 		}
 	} else {
-		wlr_log(WLR_INFO, "launchpad unknown view excluded title=%s app_id=%s",
-			view_title(view), view_app_id(view));
+		wlr_log(WLR_INFO, "launchpad unknown view excluded id=%u title=%s app_id=%s",
+			view->view_id, view_title(view), view_app_id(view));
 		wlr_scene_node_set_enabled(&view->scene_tree->node, true);
 		if (view->server->input_mode != ENGINEOS_INPUT_SHELL) {
 			activate_view(view, "floating-view-mapped");
 		}
 	}
-	wlr_log(WLR_INFO, "view mapped role=%s title=%s app_id=%s mapped_total=%u",
-		surface_role_name(view->role), view_title(view), view_app_id(view),
-		view->server->view_count);
+	wlr_log(WLR_INFO, "view mapped role=%s id=%u title=%s app_id=%s mapped_total=%u",
+		surface_role_name(view->role), view->view_id, view_title(view),
+		view_app_id(view), view->server->view_count);
 	write_shell_state(view->server, "view-mapped");
 }
 
@@ -4256,8 +4504,9 @@ static void xdg_surface_unmap(struct wl_listener *listener, void *data) {
 		apply_launchpad_visibility(view->server, "slot-unmapped");
 	}
 	schedule_outputs(view->server);
-	wlr_log(WLR_INFO, "view unmapped role=%s title=%s app_id=%s",
-		surface_role_name(view->role), view_title(view), view_app_id(view));
+	wlr_log(WLR_INFO, "view unmapped role=%s id=%u title=%s app_id=%s",
+		surface_role_name(view->role), view->view_id, view_title(view),
+		view_app_id(view));
 	write_shell_state(view->server, "view-unmapped");
 }
 
@@ -4286,8 +4535,9 @@ static void xdg_surface_commit(struct wl_listener *listener, void *data) {
 					geometry.width, geometry.height);
 			}
 		}
-		wlr_log(WLR_INFO, "view initial configure role=%s title=%s app_id=%s",
-			surface_role_name(view->role), view_title(view), view_app_id(view));
+		wlr_log(WLR_INFO, "view initial configure id=%u role=%s title=%s app_id=%s",
+			view->view_id, surface_role_name(view->role), view_title(view),
+			view_app_id(view));
 	}
 }
 
@@ -4436,8 +4686,9 @@ static void xdg_surface_destroy(struct wl_listener *listener, void *data) {
 	struct engineos_shell_view *view = wl_container_of(listener, view, destroy);
 	struct engineos_shell_server *server = view->server;
 
-	wlr_log(WLR_INFO, "view destroyed role=%s title=%s app_id=%s",
-		surface_role_name(view->role), view_title(view), view_app_id(view));
+	wlr_log(WLR_INFO, "view destroyed role=%s id=%u title=%s app_id=%s",
+		surface_role_name(view->role), view->view_id,
+		view_title(view), view_app_id(view));
 	if (server->focused_view == view) {
 		server->focused_view = NULL;
 		wlr_seat_keyboard_notify_clear_focus(server->seat);
@@ -4589,6 +4840,10 @@ static void server_new_xdg_surface(struct wl_listener *listener, void *data) {
 	view->server = server;
 	view->xdg_surface = xdg_surface;
 	view->role = ENGINEOS_SURFACE_UNKNOWN;
+	if (server->next_view_id == 0) {
+		server->next_view_id = 1;
+	}
+	view->view_id = server->next_view_id++;
 	view->scene_tree = wlr_scene_xdg_surface_create(&server->scene->tree, xdg_surface);
 	if (view->scene_tree == NULL) {
 		wlr_log(WLR_ERROR, "failed to allocate scene tree for view");
@@ -4628,8 +4883,8 @@ static void server_new_xdg_surface(struct wl_listener *listener, void *data) {
 	wl_list_insert(&server->views, &view->link);
 	server->view_count++;
 
-	wlr_log(WLR_INFO, "view created count=%u role=toplevel surface_role=%s",
-		server->view_count, surface_role_name(view->role));
+	wlr_log(WLR_INFO, "view created id=%u count=%u role=toplevel surface_role=%s",
+		view->view_id, server->view_count, surface_role_name(view->role));
 }
 
 static bool setup_server(struct engineos_shell_server *server) {

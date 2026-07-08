@@ -9,7 +9,7 @@ Future EngineOS MCP work is reserved for read-only live runtime state.
 
 ```bash
 ./tools/engineos/eos-doctor --vm
-./tools/engineos/eos-test agent
+./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-agent hygiene check
 ./tools/engineos/eos-agent dispatch status
 ./tools/engineos/eos-builder bootstrap --dry-run
@@ -17,7 +17,7 @@ Future EngineOS MCP work is reserved for read-only live runtime state.
 ./tools/engineos/eos-ci local --package engineos-tools --test agent-route --no-validate-repo --clean-generated
 ./tools/engineos/eos-proof build-lab --dry-run
 ./tools/engineos/eos-build iso --dry-run
-./tools/engineos/eos-test
+./tools/engineos/eos-source-test smoke
 ```
 
 Dry-runs are previews for destructive or builder-only actions. On the Arch
@@ -51,14 +51,15 @@ docs/agent-profiles.md
 Validate it with:
 
 ```bash
-./tools/engineos/eos-test agent
+./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-test agent-hygiene
 ./tools/engineos/eos-test agent-dispatcher
 ```
 
-Run local work through direct CLI commands such as `eos-test agent`,
-`eos-test shell`, or `eos-ci local --no-validate-repo`; do not add MCP tools
-just to mirror local commands.
+Run source-checkout tests through `eos-source-test <scope>` and package loops
+through `eos-ci local --no-validate-repo`; do not add MCP tools just to mirror
+local commands. Direct `eos-build`, `eos-lint`, and `eos-preflight` are
+lower-level checks.
 
 Queued agent work is local and manual-drain in v0:
 

@@ -21,6 +21,8 @@ skill when the task touches compositor state or input behavior.
 ```bash
 eos-app status --json
 eos-app manifest validate
+eos-runtime shell refresh-user
+eos-runtime shell restart-live
 eos-test shell
 eos-test shell-actions
 ```

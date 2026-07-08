@@ -80,7 +80,7 @@ repo-owned Docker orchestration for Prometheus or OpenTelemetry.
 ## Checks
 
 ```bash
-./tools/engineos/eos-test agent
+./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-agent profile list
 ./tools/engineos/eos-agent hygiene check
 ./tools/engineos/eos-test agent-hygiene

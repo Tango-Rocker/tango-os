@@ -39,7 +39,7 @@ Tango-OS/Engine-OS work:
 
 ```bash
 ./tools/engineos/eos-doctor
-./tools/engineos/eos-test agent
+./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-agent hygiene check
 ./tools/engineos/eos-agent dispatch status
 ./tools/engineos/eos-ci local --package engineos-tools --test agent-route --no-validate-repo --clean-generated
@@ -55,7 +55,7 @@ direction.
 For agent harness changes, run:
 
 ```bash
-./tools/engineos/eos-test agent
+./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-test agent-hygiene
 ./tools/engineos/eos-test agent-dispatcher
 ./tools/engineos/eos-preflight repo --package engineos-tools
@@ -71,6 +71,15 @@ It runs real preflight, tests, package rebuilds, and repo validation by default;
 
 When working from any live checkout, use `--no-validate-repo` for package-only
 local loops if repo validation is tied to the old image repository layout.
+Use `eos-source-test <scope>` when the goal is source-checkout validation and
+an installed EngineOS session may have exported `/usr` command paths. Direct
+`eos-build`, `eos-lint`, and `eos-preflight` remain lower-level package checks;
+prefer `eos-ci local` for the normal build/test/install loop. Proof commands
+must verify acceptance markers and required evidence files, not diagnostic
+substitutes.
+Use `eos-runtime shell refresh-user` after reinstalling user-space tmux/window
+helpers, then `eos-runtime shell restart-live` for the live EngineDev shell
+service restart path.
 
 ## Finish And Publish
 
