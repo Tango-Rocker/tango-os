@@ -110,6 +110,8 @@ Bare-metal/source-checkout loop:
 ```bash
 ./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-ci local --test agent --install --clean-generated --no-validate-repo
+eos-runtime shell refresh-user
+eos-runtime shell restart-live
 eos-app manifest validate
 eos-proof shell-launch --bare-metal
 ```

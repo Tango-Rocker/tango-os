@@ -885,6 +885,7 @@ run_source_test() {
 
 run_shell_actions() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-shell-actions-$$"
+  local fake_bin="$tmp_dir/bin"
   local fake_shell="$tmp_dir/engineos-shell"
   local args_file="$tmp_dir/args.txt"
 
@@ -893,7 +894,7 @@ run_shell_actions() {
   }
   trap cleanup_shell_actions RETURN
 
-  mkdir -p "$tmp_dir/logs"
+  mkdir -p "$fake_bin" "$tmp_dir/logs"
   cat >"$fake_shell" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >"$ENGINEOS_FAKE_SHELL_ARGS"
@@ -938,6 +939,117 @@ FAKE
   grep -Fx -- "launchpad" "$args_file" >/dev/null || die "shell actions tty missing bootstrap launchpad"
   grep -F 'fake shell stdout marker' "$tmp_dir/logs/shell.log" >/dev/null ||
     die "shell actions did not tee real shell output to shell log"
+
+  local pids_file="$tmp_dir/engineos-shell-pids.txt"
+  local restart_out="$tmp_dir/restart-live.txt"
+  cat >"$fake_bin/pgrep" <<'FAKE'
+#!/usr/bin/env bash
+if [[ "$1" == "-u" && "$3" == "-x" && "$4" == "engineos-shell" ]]; then
+  cat "$ENGINEOS_FAKE_SHELL_PIDS"
+  exit 0
+fi
+exit 1
+FAKE
+  chmod +x "$fake_bin/pgrep"
+  printf '100\n' >"$pids_file"
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_FAKE_SHELL_PIDS="$pids_file" \
+    ENGINEOS_LOG_DIR="$tmp_dir/logs" \
+    ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    "$SCRIPT_DIR/shell_runner.sh" restart-live --dry-run >"$restart_out"
+  grep -F 'old_pids:   100' "$restart_out" >/dev/null ||
+    die "restart-live dry-run did not report old shell pid"
+  grep -F 'would_verify: new same-user engineos-shell pid' "$restart_out" >/dev/null ||
+    die "restart-live dry-run did not report pid verification"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_FAKE_SHELL_PIDS="$pids_file" \
+    ENGINEOS_RESTART_DEV_SHELL_CMD='printf "200\n" >"$ENGINEOS_FAKE_SHELL_PIDS"' \
+    ENGINEOS_LOG_DIR="$tmp_dir/logs" \
+    ENGINEOS_STATE_DIR="$tmp_dir/run" \
+    "$SCRIPT_DIR/shell_runner.sh" restart-live --timeout 1 >"$restart_out"
+  grep -F 'new_pids:   200' "$restart_out" >/dev/null ||
+    die "restart-live did not verify new shell pid"
+  grep -F 'live shell restart verified' "$restart_out" >/dev/null ||
+    die "restart-live did not report verified restart"
+
+  local proc_dir="$tmp_dir/proc"
+  local kill_log="$tmp_dir/kill.log"
+  local tmux_log="$tmp_dir/tmux.log"
+  local refresh_home="$tmp_dir/home"
+  local helper_dir="$tmp_dir/helpers"
+  local refresh_out="$tmp_dir/refresh-user.txt"
+  local uid
+  uid="$(id -u)"
+  mkdir -p "$proc_dir/111" "$proc_dir/222" "$proc_dir/333" "$proc_dir/444" "$refresh_home" "$helper_dir"
+  printf 'Uid:\t%s\t%s\t%s\t%s\n' "$uid" "$uid" "$uid" "$uid" >"$proc_dir/111/status"
+  printf 'bash\0%s\0refresh-user\0engineos-tmux-window-sync\0--daemon\0' "$SCRIPT_DIR/shell_runner.sh" >"$proc_dir/111/cmdline"
+  printf 'Uid:\t%s\t%s\t%s\t%s\n' "$uid" "$uid" "$uid" "$uid" >"$proc_dir/222/status"
+  printf 'engineos-tmux-window-sync\0--daemon\0' >"$proc_dir/222/cmdline"
+  printf 'Uid:\t99999\t99999\t99999\t99999\n' >"$proc_dir/333/status"
+  printf 'engineos-tmux-window-sync\0--daemon\0' >"$proc_dir/333/cmdline"
+  printf 'Uid:\t%s\t%s\t%s\t%s\n' "$uid" "$uid" "$uid" "$uid" >"$proc_dir/444/status"
+  printf 'engineos-tmux-window-sync\0--daemonized\0' >"$proc_dir/444/cmdline"
+  cat >"$fake_bin/fake-kill" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$ENGINEOS_FAKE_KILL_LOG"
+for arg in "$@"; do
+  case "$arg" in
+    ''|-*) ;;
+    *) rm -rf "$ENGINEOS_FAKE_PROC_DIR/$arg" ;;
+  esac
+done
+FAKE
+  cat >"$fake_bin/tmux" <<'FAKE'
+#!/usr/bin/env bash
+case "$1" in
+  source-file)
+    printf 'source-file %s\n' "$2" >>"$ENGINEOS_FAKE_TMUX_LOG"
+    exit 0
+    ;;
+  has-session)
+    exit 0
+    ;;
+  run-shell)
+    printf 'run-shell %s\n' "${*: -1}" >>"$ENGINEOS_FAKE_TMUX_LOG"
+    exit 0
+    ;;
+esac
+exit 1
+FAKE
+  chmod +x "$fake_bin/fake-kill" "$fake_bin/tmux"
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_USER_HOME="$refresh_home" \
+    ENGINEOS_TMUX_HELPER_DIR="$helper_dir" \
+    ENGINEOS_PROC_DIR="$proc_dir" \
+    ENGINEOS_KILL_CMD="$fake_bin/fake-kill" \
+    ENGINEOS_FAKE_KILL_LOG="$kill_log" \
+    ENGINEOS_FAKE_PROC_DIR="$proc_dir" \
+    ENGINEOS_TMUX_CMD="$fake_bin/tmux" \
+    ENGINEOS_FAKE_TMUX_LOG="$tmux_log" \
+    "$SCRIPT_DIR/shell_runner.sh" refresh-user --force-config >"$refresh_out"
+  [[ -f "$refresh_home/.tmux.conf" ]] ||
+    die "refresh-user did not install tmux config"
+  for helper in engineos-tmux-pane-sync engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
+    [[ -x "$helper_dir/$helper" ]] ||
+      die "refresh-user did not install helper: $helper"
+  done
+  grep -F -- '-TERM 222' "$kill_log" >/dev/null ||
+    die "refresh-user did not terminate the existing tmux sync daemon"
+  if grep -F '111' "$kill_log" >/dev/null || grep -F '333' "$kill_log" >/dev/null || grep -F '444' "$kill_log" >/dev/null; then
+    die "refresh-user killed a non-target tmux sync process"
+  fi
+  grep -F 'source-file '"$refresh_home/.tmux.conf" "$tmux_log" >/dev/null ||
+    die "refresh-user did not source tmux config"
+  grep -F 'run-shell engineos-tmux-window-sync --daemon' "$tmux_log" >/dev/null ||
+    die "refresh-user did not restart tmux sync daemon through tmux"
+
+  ENGINEOS_USER_HOME="$refresh_home" \
+    ENGINEOS_TMUX_HELPER_DIR="$helper_dir" \
+    ENGINEOS_TMUX_CMD="$tmp_dir/missing-tmux" \
+    "$SCRIPT_DIR/shell_runner.sh" refresh-user >"$refresh_out"
+  grep -F 'tmux:       unavailable; tmux config source and daemon restart skipped' "$refresh_out" >/dev/null ||
+    die "refresh-user missing tmux condition was not clear and non-fatal"
 
   printf 'shell actions smoke test passed\n'
 }

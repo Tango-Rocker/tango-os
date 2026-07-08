@@ -376,7 +376,7 @@ cmd_runtime() {
       cat <<'HELP'
 Usage:
   eos-runtime quake [--smoke]
-  eos-runtime shell --headless|--nested|--tty
+  eos-runtime shell --headless|--nested|--tty|restart-live|refresh-user
   eos-runtime engine status|launch|quit|restart
 HELP
       ;;
