@@ -17,6 +17,9 @@
 /artifacts/
 /*engineos-release-*/
 /*.log
+/.agent-insights/out/
+/.agent-insights/backfill/
+/.agent-insights/runs/
 
 # Local secrets
 /pat_token*
