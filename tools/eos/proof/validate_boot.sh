@@ -10,7 +10,7 @@ fi
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
-MODE="vm"
+MODE=""
 FAILURES=0
 WARNINGS=0
 RUNTIME_CONF="${ENGINEOS_RUNTIME_CONF:-/etc/engineos/runtime.conf}"
@@ -349,6 +349,8 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+[[ -n "$MODE" ]] || die "validate_boot requires an explicit mode: --vm, --runtime, or --bare-metal"
 
 printf 'EngineOS boot validation\n'
 printf '  mode: %s\n' "$MODE"

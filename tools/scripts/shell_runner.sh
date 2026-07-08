@@ -385,6 +385,7 @@ restart_tmux_window_sync_daemon() {
     printf '  tmux_sync_daemon: restarted session=%s\n' "$TMUX_SESSION"
   else
     printf '  tmux_sync_daemon: skipped reason=no-session session=%s\n' "$TMUX_SESSION"
+    return 3
   fi
 }
 
@@ -392,6 +393,8 @@ run_refresh_user() {
   local dry_run=false
   local force_config=false
   local helper
+  local refresh_result="refreshed"
+  local refresh_reason="none"
   local tmux_conf
 
   while [[ $# -gt 0 ]]; do
@@ -432,18 +435,30 @@ run_refresh_user() {
 
   if ! have_executable "$TMUX_CMD"; then
     printf '  tmux:       unavailable; tmux config source and daemon restart skipped\n'
+    printf '  result:     partial reason=tmux-unavailable\n'
     return 0
   fi
 
   if [[ "$dry_run" == true ]]; then
     printf '  would_run:  %s source-file %q\n' "$TMUX_CMD" "$tmux_conf"
+    refresh_result="preview"
   elif "$TMUX_CMD" source-file "$tmux_conf" >/dev/null 2>&1; then
     printf '  tmux:       sourced %s\n' "$tmux_conf"
   else
     printf '  tmux:       source skipped reason=no-server-or-source-failed\n'
+    refresh_result="partial"
+    refresh_reason="tmux-source-failed"
   fi
 
-  restart_tmux_window_sync_daemon "$dry_run"
+  if ! restart_tmux_window_sync_daemon "$dry_run"; then
+    refresh_result="partial"
+    refresh_reason="tmux-session-missing"
+  fi
+  if [[ "$refresh_result" == "partial" ]]; then
+    printf '  result:     partial reason=%s\n' "$refresh_reason"
+  else
+    printf '  result:     %s\n' "$refresh_result"
+  fi
 }
 
 run_real_shell_if_available() {

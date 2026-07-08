@@ -71,9 +71,9 @@ validate_quake() {
   require_executable "$ROOT/engines/quakespasm/engineos/smoke-test.sh"
 
   if "$ROOT/engines/quakespasm/engineos/fetch.sh" --dry-run >/dev/null; then
-    ok "fetch dry-run"
+    ok "fetch command preview"
   else
-    fail "fetch dry-run failed"
+    fail "fetch command preview failed"
   fi
 
   if "$ROOT/engines/quakespasm/engineos/fetch.sh" --status >/dev/null 2>&1; then
@@ -83,9 +83,9 @@ validate_quake() {
   fi
 
   if "$ROOT/engines/quakespasm/engineos/build.sh" --dry-run >/dev/null; then
-    ok "build dry-run"
+    ok "build command preview"
   else
-    fail "build dry-run failed"
+    fail "build command preview failed"
   fi
 
   mkdir -p "$log_dir"

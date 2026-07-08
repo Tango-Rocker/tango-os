@@ -1043,6 +1043,8 @@ FAKE
     die "refresh-user did not source tmux config"
   grep -F 'run-shell engineos-tmux-window-sync --daemon' "$tmux_log" >/dev/null ||
     die "refresh-user did not restart tmux sync daemon through tmux"
+  grep -F 'result:     refreshed' "$refresh_out" >/dev/null ||
+    die "refresh-user did not report full refresh result"
 
   ENGINEOS_USER_HOME="$refresh_home" \
     ENGINEOS_TMUX_HELPER_DIR="$helper_dir" \
@@ -1050,6 +1052,8 @@ FAKE
     "$SCRIPT_DIR/shell_runner.sh" refresh-user >"$refresh_out"
   grep -F 'tmux:       unavailable; tmux config source and daemon restart skipped' "$refresh_out" >/dev/null ||
     die "refresh-user missing tmux condition was not clear and non-fatal"
+  grep -F 'result:     partial reason=tmux-unavailable' "$refresh_out" >/dev/null ||
+    die "refresh-user missing tmux condition did not report a partial result"
 
   printf 'shell actions smoke test passed\n'
 }
@@ -3895,6 +3899,12 @@ printf 'EngineOS doctor fixture\n'
 printf 'OpenGL core profile renderer: AMD RADV\n'
 FAKE
   chmod +x "$fake_bin/doctor-ok"
+  if PATH="$fake_bin:$PATH" "$PROOF_DIR/validate_boot.sh" >"$out" 2>&1; then
+    die "boot validation accepted an implicit default mode"
+  fi
+  grep -F 'validate_boot requires an explicit mode' "$out" >/dev/null ||
+    die "boot validation did not explain explicit mode requirement"
+
   cat >"$fake_bin/doctor-fail" <<'FAKE'
 #!/usr/bin/env bash
 printf 'doctor fixture failed\n' >&2

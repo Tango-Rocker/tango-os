@@ -212,9 +212,9 @@ else
 fi
 
 if "$ROOT/tools/scripts/build_shell.sh" --dry-run >/dev/null; then
-  ok "shell build dry-run"
+  ok "shell build command preview"
 else
-  fail "shell build dry-run failed"
+  fail "shell build command preview failed"
 fi
 
 check_contains "$ROOT/shell/src/engineos-shell.c" '{"headless", no_argument' "shell binary supports --headless"
