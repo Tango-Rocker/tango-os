@@ -37,7 +37,7 @@ These are historical proof artifacts only; they are not the active work path:
   rebuild, including pane-bounds app launch, game cursor capture, MC image
   preview, Quick View preview integration, the Falkon startup crash fix, and
   Wayland drag-and-drop support for Qt/editor clients. The live shell package
-  is `engineos-shell 0.1.0-15`.
+  has since advanced through the tmux-mirrored GUI window tracking work below.
 - Bare-metal EngineDev has a systemd-boot fallback entry,
   `enginedev-restore-engineos-20260704.conf`, pointing at copied
   `/boot/vmlinuz-linux-restore-engineos-20260704` and
@@ -84,8 +84,12 @@ These are historical proof artifacts only; they are not the active work path:
   switching Qt/Falkon-style GUI panes. A shell-side follow-up keeps hidden
   pane-bound GUI scene nodes render-enabled under the terminal so Qt/Falkon
   clients stay warm between tmux proxy selections instead of being cold-enabled
-  on focus. The live shell package is `engineos-shell 0.1.0-16` and the live
-  tools package is `engineos-tools 0.1.0-15`.
+  on focus. The runtime command-surface cleanup is deployed through
+  `engineos-tools 0.1.0-17`; `eos-runtime shell refresh-user` refreshed
+  user-space tmux/window helper payloads, and `eos-runtime shell restart-live`
+  verified a new `engineos-shell` PID after restarting
+  `engineos-dev-shell.service`. The live shell package is
+  `engineos-shell 0.1.0-16`.
 
 ## Not Yet Proven
 
