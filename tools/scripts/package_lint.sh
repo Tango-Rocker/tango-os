@@ -6,14 +6,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$SCRIPT_DIR/common.sh"
 
 ROOT="$(engineos_root)"
-ONLY_PACKAGE=""
+REQUESTED_PACKAGES=()
 FAILURES=0
 
 usage() {
   cat <<'HELP'
-Usage: package_lint.sh [--package <name>]
+Usage: package_lint.sh [--package <name>]...
 
 Validate local EngineOS PKGBUILD metadata without running makepkg.
+--package is repeatable. Unknown package names fail before work starts, and
+duplicate package names are ignored after the first occurrence.
 HELP
 }
 
@@ -24,15 +26,6 @@ fail() {
 
 ok() {
   printf 'OK   %s\n' "$*"
-}
-
-package_exists_in_list() {
-  local needle="$1"
-  local item
-  while IFS= read -r item; do
-    [[ "$item" == "$needle" ]] && return 0
-  done < <(engineos_packages)
-  return 1
 }
 
 pkgbuild_install_targets() {
@@ -85,7 +78,7 @@ check_local_dependencies() {
       [[ -n "$dep" ]] || continue
       dep_name="${dep%%[<>=]*}"
       [[ "$dep_name" == engineos-* ]] || continue
-      if ! package_exists_in_list "$dep_name"; then
+      if ! engineos_package_known "$dep_name"; then
         fail "$pkg: local dependency has no package definition: $dep_name"
       fi
       if [[ "$dep_kind" != "depends" ]]; then
@@ -374,8 +367,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --package)
       shift
-      ONLY_PACKAGE="${1:-}"
-      [[ -n "$ONLY_PACKAGE" ]] || die "--package requires a package"
+      engineos_add_package_request REQUESTED_PACKAGES "${1:-}"
       ;;
     help|--help|-h)
       usage
@@ -389,15 +381,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 packages=()
-if [[ -n "$ONLY_PACKAGE" ]]; then
-  package_exists_in_list "$ONLY_PACKAGE" || die "unknown package: $ONLY_PACKAGE"
-  packages=("$ONLY_PACKAGE")
-else
-  mapfile -t packages < <(engineos_packages)
-fi
+engineos_select_packages REQUESTED_PACKAGES packages
 
 printf 'EngineOS package lint\n'
 printf '  root: %s\n' "$ROOT"
+if [[ "${#REQUESTED_PACKAGES[@]}" -gt 0 ]]; then
+  printf '  packages:\n'
+  for pkg in "${packages[@]}"; do
+    printf '    - %s\n' "$pkg"
+  done
+fi
 
 for pkg in "${packages[@]}"; do
   lint_pkgbuild "$pkg"

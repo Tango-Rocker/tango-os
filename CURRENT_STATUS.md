@@ -108,6 +108,7 @@ These are historical proof artifacts only; they are not the active work path:
 Bare-metal/source-checkout loop:
 
 ```bash
+./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-ci local --test agent --install --clean-generated --no-validate-repo
 eos-app manifest validate
 eos-proof shell-launch --bare-metal
@@ -125,5 +126,5 @@ Agent and harness hygiene:
 ```bash
 ./tools/engineos/eos-agent hygiene check
 ./tools/engineos/eos-test agent-hygiene
-./tools/engineos/eos-test agent
+./tools/engineos/eos-source-test agent
 ```

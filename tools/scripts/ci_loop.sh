@@ -63,23 +63,8 @@ run_or_print() {
   "$@"
 }
 
-package_known() {
-  local needle="$1"
-  local pkg
-  while IFS= read -r pkg; do
-    [[ "$pkg" == "$needle" ]] && return 0
-  done < <(engineos_packages)
-  return 1
-}
-
 add_package() {
-  local pkg="$1"
-  local existing
-  package_known "$pkg" || die "unknown EngineOS package: $pkg"
-  for existing in "${PACKAGES[@]}"; do
-    [[ "$existing" == "$pkg" ]] && return 0
-  done
-  PACKAGES+=("$pkg")
+  engineos_add_package_request PACKAGES "$1"
 }
 
 infer_changed_packages() {
@@ -130,7 +115,7 @@ infer_changed_packages() {
       packages/*/*)
         pkg="${file#packages/}"
         pkg="${pkg%%/*}"
-        package_known "$pkg" && add_package "$pkg"
+        engineos_package_known "$pkg" && add_package "$pkg"
         ;;
     esac
   done < <(git -C "$ROOT" diff --name-only HEAD -- . && git -C "$ROOT" ls-files --others --exclude-standard)

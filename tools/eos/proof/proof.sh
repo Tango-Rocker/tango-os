@@ -24,6 +24,8 @@ Usage: proof.sh build-lab [--dry-run] [--profile enginedev]
        proof.sh booted-iso [--vm|--runtime|--bare-metal] [--dry-run]
        proof.sh shell-launch [--vm|--runtime|--bare-metal] [--dry-run]
        proof.sh launchpad [--vm|--runtime|--bare-metal] [--dry-run]
+       proof.sh visual [--dry-run] [--allow-metadata]
+       proof.sh mc-preview [--dry-run] [--visual]
 
 Run focused proof sequences for EngineOS milestones.
 
@@ -42,6 +44,10 @@ The booted-iso proof runs inside a generated ISO after it boots.
 The shell-launch proof verifies that engineos-shell is the graphical launch
 point for terminal/tmux and OpenGL app clients.
 The launchpad proof verifies the terminal, cube, and engine slot contract.
+The visual proof requires a real frame image by default; metadata-only capture
+is diagnostic unless --allow-metadata is explicitly passed.
+The mc-preview proof runs the Quick View/image-preview acceptance path and can
+optionally include a visual frame capture.
 HELP
 }
 
@@ -494,15 +500,15 @@ proof_shell_launch() {
   app_log="$log_dir/app.log"
 
   if [[ "$dry_run" == true ]]; then
-    run_step "shell binary dry-run" printf '%s\n' "command -v engineos-shell"
-    run_step "shell process dry-run" printf '%s\n' "pgrep -a engineos-shell"
-    run_step "shell log ownership dry-run" printf '%s\n' "grep -E 'engineos-shell mode=|client launch environment|renderer diagnostics' $shell_log"
-    run_step "terminal/tmux ownership dry-run" printf '%s\n' "grep -E 'owner=engineos-shell|session command=tmux new -A -s engineos' $terminal_log"
-    run_step "app launch ownership dry-run" printf '%s\n' "grep -F 'app launch app=terminal owner=engineos-shell' $app_log"
-    run_step "renderer doctor dry-run" printf '%s\n' "eos-doctor --vm"
+    run_step "shell binary dry-run" printf '%s\n' "would require: command -v engineos-shell"
+    run_step "shell process dry-run" printf '%s\n' "would require: pgrep -a engineos-shell"
+    run_step "shell log ownership dry-run" printf '%s\n' "would require: grep -E 'engineos-shell mode=|client launch environment|renderer diagnostics' $shell_log"
+    run_step "terminal/tmux ownership dry-run" printf '%s\n' "would require: grep -E 'owner=engineos-shell|session command=tmux new -A -s engineos' $terminal_log"
+    run_step "app launch ownership dry-run" printf '%s\n' "would require: grep -F 'app launch app=terminal owner=engineos-shell' $app_log"
+    run_step "renderer doctor dry-run" printf '%s\n' "would require: eos-doctor --vm"
     if [[ "$mode" == "bare-metal" ]]; then
-      run_step "bare-metal shell renderer dry-run" printf '%s\n' "grep -E 'renderer diagnostics|GLES2|EGL|wlr_renderer=(gles2|vulkan)' $shell_log && ! grep -Ei 'pixman|llvmpipe|softpipe|software renderer' $shell_log"
-      run_step "bare-metal renderer rejection dry-run" printf '%s\n' "eos-validate boot --bare-metal"
+      run_step "bare-metal shell renderer dry-run" printf '%s\n' "would require: grep -E 'renderer diagnostics|GLES2|EGL|wlr_renderer=(gles2|vulkan)' $shell_log && ! grep -Ei 'pixman|llvmpipe|softpipe|software renderer' $shell_log"
+      run_step "bare-metal renderer rejection dry-run" printf '%s\n' "would require: eos-validate boot --bare-metal"
     fi
     printf '\nShell-launch proof preview completed; no shell-launch proof was executed.\n'
     return
@@ -535,14 +541,11 @@ proof_shell_launch() {
   grep -F 'session command=tmux new -A -s engineos' "$terminal_log" >/dev/null ||
     die "terminal log does not show tmux session startup"
 
-  if [[ -r "$app_log" ]]; then
-    grep -F 'owner=engineos-shell' "$app_log" >/dev/null ||
-      die "app log exists but does not show shell ownership"
-    grep -F 'app launch app=terminal owner=engineos-shell' "$app_log" >/dev/null ||
-      die "app log does not show terminal launch ownership"
-  else
-    printf 'WARN app log missing: %s\n' "$app_log"
-  fi
+  [[ -r "$app_log" ]] || die "app log missing: $app_log"
+  grep -F 'owner=engineos-shell' "$app_log" >/dev/null ||
+    die "app log does not show shell ownership"
+  grep -F 'app launch app=terminal owner=engineos-shell' "$app_log" >/dev/null ||
+    die "app log does not show terminal launch ownership"
 
   run_step "doctor renderer evidence" "$doctor_cmd" --vm
   if [[ "$mode" == "bare-metal" ]]; then
@@ -550,6 +553,150 @@ proof_shell_launch() {
   fi
 
   printf '\nShell-launch proof runner completed.\n'
+  printf 'Proof log: %s\n' "$log_file"
+}
+
+proof_visual() {
+  local dry_run=false
+  local allow_metadata=false
+  local log_dir="${ENGINEOS_LOG_DIR:-$(default_log_dir)}"
+  local log_file
+  local capture_cmd
+  local artifact
+  local metadata
+  local result
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run)
+        dry_run=true
+        ;;
+      --allow-metadata)
+        allow_metadata=true
+        ;;
+      help|--help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        die "unknown visual proof option: $1"
+        ;;
+    esac
+    shift
+  done
+
+  mkdir -p "$log_dir"
+  log_file="$log_dir/proof-visual-$(timestamp_utc).log"
+  exec > >(tee -a "$log_file") 2>&1
+
+  printf 'EngineOS visual proof\n'
+  printf '  root:           %s\n' "$ROOT"
+  printf '  dry_run:        %s\n' "$dry_run"
+  printf '  allow_metadata: %s\n' "$allow_metadata"
+  printf '  log:            %s\n' "$log_file"
+
+  capture_cmd="$(eos_command eos-capture)"
+
+  if [[ "$dry_run" == true ]]; then
+    run_step "frame capture dry-run" printf '%s\n' "would require: eos-capture frame --target shell"
+    run_step "visual artifact dry-run" printf '%s\n' "would require: capture metadata result=image and a readable PNG artifact"
+    printf '\nVisual proof preview completed; no visual proof was executed.\n'
+    return
+  fi
+
+  printf '\n==> frame capture\n'
+  printf '    '
+  quote_cmd "$capture_cmd" frame --target shell
+  artifact="$("$capture_cmd" frame --target shell)"
+  printf '%s\n' "$artifact"
+  artifact="$(printf '%s\n' "$artifact" | tail -n 1)"
+  [[ -n "$artifact" && -f "$artifact" ]] || die "frame capture did not produce an artifact"
+
+  if [[ "$artifact" == *.png ]]; then
+    metadata="${artifact%.png}.txt"
+  else
+    metadata="$artifact"
+  fi
+  [[ -r "$metadata" ]] || die "frame capture metadata missing: $metadata"
+  result="$(awk -F= '$1 == "result" { print $2; exit }' "$metadata")"
+
+  case "$result" in
+    image)
+      [[ "$artifact" == *.png && -s "$artifact" ]] || die "visual capture did not produce a non-empty PNG image"
+      printf 'Visual frame captured: %s\n' "$artifact"
+      ;;
+    metadata)
+      if [[ "$allow_metadata" == true ]]; then
+        printf 'Metadata-only capture accepted by explicit request: %s\n' "$metadata"
+      else
+        die "metadata-only capture is not visual proof: $metadata"
+      fi
+      ;;
+    failed|"")
+      die "frame capture failed; metadata: $metadata"
+      ;;
+    *)
+      die "unknown frame capture result '$result' in $metadata"
+      ;;
+  esac
+
+  printf '\nVisual proof runner completed.\n'
+  printf 'Proof log: %s\n' "$log_file"
+}
+
+proof_mc_preview() {
+  local dry_run=false
+  local visual=false
+  local log_dir="${ENGINEOS_LOG_DIR:-$(default_log_dir)}"
+  local log_file
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run)
+        dry_run=true
+        ;;
+      --visual)
+        visual=true
+        ;;
+      help|--help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        die "unknown mc-preview proof option: $1"
+        ;;
+    esac
+    shift
+  done
+
+  mkdir -p "$log_dir"
+  log_file="$log_dir/proof-mc-preview-$(timestamp_utc).log"
+  exec > >(tee -a "$log_file") 2>&1
+
+  printf 'EngineOS MC preview proof\n'
+  printf '  root:    %s\n' "$ROOT"
+  printf '  dry_run: %s\n' "$dry_run"
+  printf '  visual:  %s\n' "$visual"
+  printf '  log:     %s\n' "$log_file"
+
+  if [[ "$dry_run" == true ]]; then
+    run_step "test image setup dry-run" printf '%s\n' "would require: eos-test image-preview fixture images"
+    run_step "preview dry-run checks" printf '%s\n' "would require: engine-image-preview --quick-view <image> --panel right --dry-run"
+    run_step "preview IPC/log checks" printf '%s\n' "would require: eos-test image-preview"
+    run_step "preview recovery check" printf '%s\n' "would require: eos-app recover preview"
+    if [[ "$visual" == true ]]; then
+      run_step "visual capture dry-run" printf '%s\n' "would require: eos-proof visual"
+    fi
+    printf '\nMC preview proof preview completed; no MC preview proof was executed.\n'
+    return
+  fi
+
+  run_step "image preview acceptance" "$TEST_DIR/test_runner.sh" image-preview
+  if [[ "$visual" == true ]]; then
+    run_step "visual capture" "$MODULE_DIR/proof.sh" visual
+  fi
+
+  printf '\nMC preview proof runner completed.\n'
   printf 'Proof log: %s\n' "$log_file"
 }
 
@@ -705,6 +852,12 @@ case "$ACTION" in
     ;;
   launchpad)
     proof_launchpad "$@"
+    ;;
+  visual)
+    proof_visual "$@"
+    ;;
+  mc-preview)
+    proof_mc_preview "$@"
     ;;
   help|--help|-h)
     usage

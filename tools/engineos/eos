@@ -56,7 +56,7 @@ Commands:
   eos-builder, eos-deploy, eos-install, eos-update
   eos-app, eos-terminal, eos-outputs, eos-runtime, eos-assets, eos-capture, eos-input
   eos-proof, eos-validate, eos-vm, eos-usb, eos-secureboot
-  eos-agent, eos-observe, eos-test
+  eos-agent, eos-observe, eos-test, eos-source-test
 
 Run an individual command with --help for details.
 HELP
@@ -156,7 +156,7 @@ cmd_build() {
     help|--help|-h)
       cat <<'HELP'
 Usage:
-  eos-build repo [--dry-run]
+  eos-build repo [--dry-run] [--package <name>]...
   eos-build iso [enginedev|engineruntime] [--dry-run] [--fast]
   eos-build engine quake [--dry-run] [--fetch]
   eos-build shell [--dry-run]
@@ -191,12 +191,74 @@ cmd_lint() {
       exec_script package_lint.sh "$@"
       ;;
     help|--help|-h)
-      printf 'Usage: eos-lint packages [--package <name>]\n'
+      printf 'Usage: eos-lint packages [--package <name>]...\n'
       ;;
     *)
       die "unknown lint target: $target"
       ;;
   esac
+}
+
+resolve_source_test_root() {
+  local candidate
+  local git_root
+  local candidates=()
+
+  candidates+=("$DEFAULT_ENGINEOS_ROOT")
+  if command -v git >/dev/null 2>&1 &&
+      git_root="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)"; then
+    candidates+=("$git_root")
+  fi
+  candidates+=("$PWD")
+
+  for candidate in "${candidates[@]}"; do
+    [[ -n "$candidate" ]] || continue
+    if [[ -x "$candidate/tools/engineos/eos-test" && -d "$candidate/tools/scripts" ]]; then
+      cd "$candidate"
+      pwd -P
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+cmd_source_test() {
+  local source_root
+  local source_script_dir
+
+  source_root="$(resolve_source_test_root)" ||
+    die "could not resolve an EngineOS source checkout for eos-source-test"
+  source_script_dir="$source_root/tools/scripts"
+
+  printf 'EngineOS source test\n'
+  printf '  root:       %s\n' "$source_root"
+  printf '  script_dir: %s\n' "$source_script_dir"
+
+  env \
+    -u ENGINEOS_ROOT \
+    -u ENGINEOS_SCRIPT_DIR \
+    -u ENGINEOS_EOS_DIR \
+    -u SCRIPT_DIR \
+    -u ENGINEOS_LOG_DIR \
+    -u ENGINEOS_STATE_DIR \
+    -u ENGINEOS_CAPTURE_DIR \
+    -u ENGINEOS_SHELL_BOOTSTRAP \
+    -u ENGINEOS_TERMINAL_SESSION_CMD \
+    -u ENGINEOS_TERMINAL_REQUIRE_WAYLAND \
+    -u ENGINEOS_TERMINAL_SLOT_CMD \
+    -u ENGINEOS_CUBE_CMD \
+    -u ENGINEOS_ENGINE_CMD \
+    -u ENGINEOS_RUNTIME_CMD \
+    -u ENGINEOS_SHELL_BIN \
+    -u WAYLAND_DISPLAY \
+    -u DISPLAY \
+    -u XDG_SESSION_TYPE \
+    -u WLR_BACKENDS \
+    -u WLR_RENDERER \
+    -u WLR_RENDERER_ALLOW_SOFTWARE \
+    -u LIBGL_ALWAYS_SOFTWARE \
+    "$source_root/tools/engineos/eos-test" "$@"
 }
 
 cmd_builder() {
@@ -474,6 +536,10 @@ main() {
     eos-preflight)
       record_eos_command "$tool" "$@"
       exec_script preflight.sh "$@"
+      ;;
+    eos-source-test)
+      record_eos_command "$tool" "$@"
+      cmd_source_test "$@"
       ;;
     eos-ci)
       record_eos_command "$tool" "$@"

@@ -145,6 +145,71 @@ engineos_packages() {
     engineos-quake-template
 }
 
+engineos_package_known() {
+  local needle="$1"
+  local pkg
+  while IFS= read -r pkg; do
+    [[ "$pkg" == "$needle" ]] && return 0
+  done < <(engineos_packages)
+  return 1
+}
+
+engineos_add_package_request() {
+  local array_name="$1"
+  local pkg="$2"
+  local existing
+  local -n _engineos_package_requests="$array_name"
+
+  [[ -n "$pkg" ]] || die "package name required"
+  engineos_package_known "$pkg" || die "unknown EngineOS package: $pkg"
+  for existing in "${_engineos_package_requests[@]}"; do
+    [[ "$existing" == "$pkg" ]] && return 0
+  done
+  _engineos_package_requests+=("$pkg")
+}
+
+engineos_package_requested() {
+  local pkg="$1"
+  local array_name="$2"
+  local request
+  local -n _engineos_package_requests="$array_name"
+
+  for request in "${_engineos_package_requests[@]}"; do
+    [[ "$request" == "$pkg" ]] && return 0
+  done
+  return 1
+}
+
+engineos_select_packages() {
+  local request_array_name="$1"
+  local output_array_name="$2"
+  local pkg
+  local -n _engineos_package_requests="$request_array_name"
+  local -n _engineos_selected_packages="$output_array_name"
+
+  _engineos_selected_packages=()
+  if [[ "${#_engineos_package_requests[@]}" -eq 0 ]]; then
+    mapfile -t _engineos_selected_packages < <(engineos_packages)
+    return 0
+  fi
+
+  while IFS= read -r pkg; do
+    if engineos_package_requested "$pkg" "$request_array_name"; then
+      _engineos_selected_packages+=("$pkg")
+    fi
+  done < <(engineos_packages)
+}
+
+engineos_package_cli_args() {
+  local request_array_name="$1"
+  local pkg
+  local -n _engineos_package_requests="$request_array_name"
+
+  for pkg in "${_engineos_package_requests[@]}"; do
+    printf '%s\n' --package "$pkg"
+  done
+}
+
 engineos_eos_commands() {
   printf '%s\n' \
     eos-agent \
@@ -170,6 +235,7 @@ engineos_eos_commands() {
     eos-release \
     eos-runtime \
     eos-secureboot \
+    eos-source-test \
     eos-terminal \
     eos-test \
     eos-update \

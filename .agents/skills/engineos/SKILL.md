@@ -35,17 +35,21 @@ Prefer these on the live checkout. Dry-runs are previews only, not proof.
 
 ```bash
 ./tools/engineos/eos-doctor
-./tools/engineos/eos-test agent
+./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-agent hygiene check
 ./tools/engineos/eos-agent dispatch status
 ./tools/engineos/eos-observe metrics
 ./tools/engineos/eos-observe tui --once
 ./tools/engineos/eos-preflight all
 ./tools/engineos/eos-ci local --no-validate-repo --clean-generated
-./tools/engineos/eos-test shell
+./tools/engineos/eos-source-test shell
 ```
 
 Do not use ISO, VM, or builder-handoff paths for routine work.
+Use `eos-source-test <scope>` for checkout-local tests from live sessions that
+may have installed `/usr` EngineOS variables. Use `eos-ci local` for the normal
+post-change package/test/install loop; direct build, lint, and preflight
+commands are lower-level checks.
 
 ## Agent Harness
 

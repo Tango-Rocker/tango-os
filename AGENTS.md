@@ -84,8 +84,10 @@ builder, and generated-image paths are legacy/reference-only:
 ```bash
 ./tools/engineos/eos --help
 ./tools/engineos/eos-doctor
+./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-agent hygiene check
 ./tools/engineos/eos-agent dispatch status
+./tools/engineos/eos-ci local --package engineos-tools --test agent --install --clean-generated --no-validate-repo
 ./tools/engineos/eos-preflight all
 ./tools/engineos/eos-lint packages
 ./tools/engineos/eos-build fetch engine quake --status
@@ -94,6 +96,11 @@ builder, and generated-image paths are legacy/reference-only:
 ./tools/engineos/eos-test
 ./tools/engineos/eos-test all
 ```
+
+Use `eos-source-test <scope>` for source-checkout-safe validation when an
+installed EngineOS session may have exported `/usr` paths. Direct
+`eos-build`, `eos-lint`, and `eos-preflight` commands are lower-level package
+checks; prefer `eos-ci local` for routine post-change package loops.
 
 On the live bare-metal EngineDev install, verify:
 
@@ -158,6 +165,7 @@ Run the narrowest relevant check before handing off. For broad scaffold changes:
 bash -n tools/engineos/engineos tools/scripts/*.sh tools/eos/*/*.sh engines/quakespasm/engineos/*.sh tests/smoke.sh archiso/enginedev/profiledef.sh archiso/engineruntime/profiledef.sh
 ./tools/engineos/eos-test agent-hygiene
 ./tools/engineos/eos-test agent-dispatcher
+./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-preflight all
 ./tools/engineos/eos-test
 ```

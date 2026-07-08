@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/common.sh"
 ROOT="$(engineos_root)"
 SCOPE="all"
 PROFILE="enginedev"
-ONLY_PACKAGE=""
+REQUESTED_PACKAGES=()
 FAILURES=0
 WARNINGS=0
 INSTALLED_BIN_DIR="${ENGINEOS_INSTALLED_BIN_DIR:-/usr/bin}"
@@ -18,9 +18,11 @@ INSTALLED_EOS_DIR="${ENGINEOS_INSTALLED_EOS_DIR:-/usr/lib/engineos/eos}"
 
 usage() {
   cat <<'HELP'
-Usage: preflight.sh [all|repo|iso|scripts] [--profile <name>] [--package <name>]
+Usage: preflight.sh [all|repo|iso|scripts] [--profile <name>] [--package <name>]...
 
 Validate EngineOS scaffold structure before package or ISO builds.
+--package is repeatable for repo checks. Unknown package names fail before work
+starts, and duplicate package names are ignored after the first occurrence.
 This is safe to run outside Arch; Arch-only tools are reported as warnings.
 HELP
 }
@@ -154,7 +156,7 @@ check_profile_package_list() {
     fi
 
     if [[ "$pkg" == engineos-* ]]; then
-      package_exists_in_list "$pkg" || fail "$profile_dir package has no local package definition: $pkg"
+      engineos_package_known "$pkg" || fail "$profile_dir package has no local package definition: $pkg"
     fi
   done <"$packages_file"
   rm -f "$seen_file"
@@ -176,15 +178,6 @@ check_bash_syntax() {
   else
     fail "bash syntax failed: $path"
   fi
-}
-
-package_exists_in_list() {
-  local needle="$1"
-  local item
-  while IFS= read -r item; do
-    [[ "$item" == "$needle" ]] && return 0
-  done < <(engineos_packages)
-  return 1
 }
 
 check_package_inputs() {
@@ -376,6 +369,7 @@ check_installed_scripts() {
   require_abs_file "$INSTALLED_BIN_DIR/eos-build"
   require_abs_file "$INSTALLED_BIN_DIR/eos-agent"
   require_abs_file "$INSTALLED_BIN_DIR/eos-observe"
+  require_abs_file "$INSTALLED_BIN_DIR/eos-source-test"
   require_abs_file "$INSTALLED_BIN_DIR/eos-test"
   require_abs_file "$INSTALLED_BIN_DIR/engineos"
   require_abs_file "$INSTALLED_SCRIPT_DIR/common.sh"
@@ -411,6 +405,7 @@ check_installed_scripts() {
   check_abs_bash_syntax "$INSTALLED_BIN_DIR/eos-build"
   check_abs_bash_syntax "$INSTALLED_BIN_DIR/eos-agent"
   check_abs_bash_syntax "$INSTALLED_BIN_DIR/eos-observe"
+  check_abs_bash_syntax "$INSTALLED_BIN_DIR/eos-source-test"
   check_abs_bash_syntax "$INSTALLED_BIN_DIR/eos-test"
   check_abs_bash_syntax "$INSTALLED_BIN_DIR/engineos"
   for script in "$INSTALLED_SCRIPT_DIR"/*.sh; do
@@ -443,6 +438,7 @@ check_scripts() {
 
   require_file "tools/engineos/engineos"
   require_file "tools/engineos/eos"
+  require_file "tools/engineos/eos-source-test"
   require_file "tools/engineos/eos-wrapper"
   require_file "tools/engineos/generate-wrappers.sh"
   require_file "tools/go/go.mod"
@@ -567,17 +563,17 @@ check_scripts() {
 check_repo() {
   local pkg
   local packages=()
+  local package_lint_args=()
 
-  if [[ -n "$ONLY_PACKAGE" ]]; then
-    package_exists_in_list "$ONLY_PACKAGE" || fail "package is not in eos-package list: $ONLY_PACKAGE"
-    packages=("$ONLY_PACKAGE")
-  else
-    mapfile -t packages < <(engineos_packages)
-  fi
+  engineos_select_packages REQUESTED_PACKAGES packages
+  while IFS= read -r arg; do
+    package_lint_args+=("$arg")
+  done < <(engineos_package_cli_args REQUESTED_PACKAGES)
 
   require_dir "packages"
-  if [[ -n "$ONLY_PACKAGE" ]]; then
-    "$SCRIPT_DIR/package_lint.sh" --package "$ONLY_PACKAGE" || fail "package lint failed: $ONLY_PACKAGE"
+  if [[ "${#package_lint_args[@]}" -gt 0 ]]; then
+    "$SCRIPT_DIR/package_lint.sh" "${package_lint_args[@]}" ||
+      fail "package lint failed: ${REQUESTED_PACKAGES[*]}"
   else
     "$SCRIPT_DIR/package_lint.sh" || fail "package lint failed"
   fi
@@ -903,8 +899,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --package)
       shift
-      ONLY_PACKAGE="${1:-}"
-      [[ -n "$ONLY_PACKAGE" ]] || die "--package requires a package"
+      engineos_add_package_request REQUESTED_PACKAGES "${1:-}"
       ;;
     *)
       die "unknown preflight option: $1"
@@ -917,7 +912,14 @@ printf 'EngineOS preflight\n'
 printf '  root:    %s\n' "$ROOT"
 printf '  scope:   %s\n' "$SCOPE"
 printf '  profile: %s\n' "$PROFILE"
-[[ -n "$ONLY_PACKAGE" ]] && printf '  package: %s\n' "$ONLY_PACKAGE"
+if [[ "${#REQUESTED_PACKAGES[@]}" -gt 0 ]]; then
+  selected_for_print=()
+  engineos_select_packages REQUESTED_PACKAGES selected_for_print
+  printf '  packages:\n'
+  for pkg in "${selected_for_print[@]}"; do
+    printf '    - %s\n' "$pkg"
+  done
+fi
 
 case "$SCOPE" in
   all)
