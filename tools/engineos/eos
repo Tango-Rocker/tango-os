@@ -6,6 +6,38 @@ if [[ "$DEFAULT_ENGINEOS_ROOT" == "/" && -d /usr/lib/engineos/scripts ]]; then
   DEFAULT_ENGINEOS_ROOT="/usr"
 fi
 
+SOURCE_TEST_ENV_VARS=(
+  ENGINEOS_ROOT
+  ENGINEOS_SCRIPT_DIR
+  ENGINEOS_EOS_DIR
+  SCRIPT_DIR
+  ENGINEOS_LOG_DIR
+  ENGINEOS_STATE_DIR
+  ENGINEOS_CAPTURE_DIR
+  ENGINEOS_SHELL_BOOTSTRAP
+  ENGINEOS_TERMINAL_SESSION_CMD
+  ENGINEOS_TERMINAL_REQUIRE_WAYLAND
+  ENGINEOS_TERMINAL_SLOT_CMD
+  ENGINEOS_CUBE_CMD
+  ENGINEOS_ENGINE_CMD
+  ENGINEOS_RUNTIME_CMD
+  ENGINEOS_SHELL_BIN
+  WAYLAND_DISPLAY
+  DISPLAY
+  XDG_SESSION_TYPE
+  WLR_BACKENDS
+  WLR_RENDERER
+  WLR_RENDERER_ALLOW_SOFTWARE
+  LIBGL_ALWAYS_SOFTWARE
+)
+
+clear_source_test_env() {
+  local name
+  for name in "${SOURCE_TEST_ENV_VARS[@]}"; do
+    unset "$name"
+  done
+}
+
 ENGINEOS_INVOKED_TOOL="$(basename "$0")"
 ENGINEOS_REQUESTED_TOOL="$ENGINEOS_INVOKED_TOOL"
 if [[ "$ENGINEOS_REQUESTED_TOOL" == "eos" ]]; then
@@ -16,28 +48,7 @@ if [[ "$ENGINEOS_REQUESTED_TOOL" == "eos-source-test" ]]; then
   ENGINEOS_SOURCE_TEST_MODE=1
 fi
 if [[ "$ENGINEOS_SOURCE_TEST_MODE" == "1" ]]; then
-  unset ENGINEOS_ROOT
-  unset ENGINEOS_SCRIPT_DIR
-  unset ENGINEOS_EOS_DIR
-  unset SCRIPT_DIR
-  unset ENGINEOS_LOG_DIR
-  unset ENGINEOS_STATE_DIR
-  unset ENGINEOS_CAPTURE_DIR
-  unset ENGINEOS_SHELL_BOOTSTRAP
-  unset ENGINEOS_TERMINAL_SESSION_CMD
-  unset ENGINEOS_TERMINAL_REQUIRE_WAYLAND
-  unset ENGINEOS_TERMINAL_SLOT_CMD
-  unset ENGINEOS_CUBE_CMD
-  unset ENGINEOS_ENGINE_CMD
-  unset ENGINEOS_RUNTIME_CMD
-  unset ENGINEOS_SHELL_BIN
-  unset WAYLAND_DISPLAY
-  unset DISPLAY
-  unset XDG_SESSION_TYPE
-  unset WLR_BACKENDS
-  unset WLR_RENDERER
-  unset WLR_RENDERER_ALLOW_SOFTWARE
-  unset LIBGL_ALWAYS_SOFTWARE
+  clear_source_test_env
 fi
 
 ENGINEOS_ROOT="${ENGINEOS_ROOT:-$DEFAULT_ENGINEOS_ROOT}"
@@ -259,6 +270,8 @@ resolve_source_test_root() {
 }
 
 cmd_source_test() {
+  local env_args=()
+  local name
   local source_root
   local source_script_dir
 
@@ -270,29 +283,11 @@ cmd_source_test() {
   printf '  root:       %s\n' "$source_root"
   printf '  script_dir: %s\n' "$source_script_dir"
 
+  for name in "${SOURCE_TEST_ENV_VARS[@]}"; do
+    env_args+=(-u "$name")
+  done
   env \
-    -u ENGINEOS_ROOT \
-    -u ENGINEOS_SCRIPT_DIR \
-    -u ENGINEOS_EOS_DIR \
-    -u SCRIPT_DIR \
-    -u ENGINEOS_LOG_DIR \
-    -u ENGINEOS_STATE_DIR \
-    -u ENGINEOS_CAPTURE_DIR \
-    -u ENGINEOS_SHELL_BOOTSTRAP \
-    -u ENGINEOS_TERMINAL_SESSION_CMD \
-    -u ENGINEOS_TERMINAL_REQUIRE_WAYLAND \
-    -u ENGINEOS_TERMINAL_SLOT_CMD \
-    -u ENGINEOS_CUBE_CMD \
-    -u ENGINEOS_ENGINE_CMD \
-    -u ENGINEOS_RUNTIME_CMD \
-    -u ENGINEOS_SHELL_BIN \
-    -u WAYLAND_DISPLAY \
-    -u DISPLAY \
-    -u XDG_SESSION_TYPE \
-    -u WLR_BACKENDS \
-    -u WLR_RENDERER \
-    -u WLR_RENDERER_ALLOW_SOFTWARE \
-    -u LIBGL_ALWAYS_SOFTWARE \
+    "${env_args[@]}" \
     ENGINEOS_SOURCE_TEST_MODE=1 \
     "$source_root/tools/engineos/eos-test" "$@"
 }

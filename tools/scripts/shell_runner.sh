@@ -100,7 +100,7 @@ usage() {
 Usage: shell_runner.sh --headless
        shell_runner.sh --nested
        shell_runner.sh --tty
-       shell_runner.sh restart-live [--dry-run] [--timeout SECONDS]
+       shell_runner.sh restart-live [--dry-run] [--timeout SECONDS] [--allow-partial]
        shell_runner.sh refresh-user [--dry-run] [--force-config]
 
 Run the EngineOS shell path. Headless and nested can smoke locally. TTY is
@@ -193,6 +193,7 @@ run_restart_command() {
 
 run_restart_live() {
   local dry_run=false
+  local allow_partial=false
   local timeout=10
   local old_pids=()
   local new_pids=()
@@ -205,6 +206,9 @@ run_restart_live() {
     case "$1" in
       --dry-run)
         dry_run=true
+        ;;
+      --allow-partial)
+        allow_partial=true
         ;;
       --timeout)
         shift
@@ -233,6 +237,7 @@ run_restart_live() {
   printf '  shell_log:  %s\n' "$LOG_FILE"
   printf '  start_log:  %s\n' "$LOG_DIR/dev-shell-start.log"
   printf '  dry_run:    %s\n' "$dry_run"
+  printf '  allow_partial: %s\n' "$allow_partial"
   printf '  old_pids:   %s\n' "${old_pids[*]:-none}"
 
   if [[ "$dry_run" == true ]]; then
@@ -254,7 +259,8 @@ run_restart_live() {
 
   if ! pid_discovery_available; then
     printf '  result:     partial reason=pid-discovery-unavailable\n'
-    return 0
+    [[ "$allow_partial" == true ]] && return 0
+    return 1
   fi
 
   for ((elapsed = 0; elapsed < timeout * 5; elapsed++)); do

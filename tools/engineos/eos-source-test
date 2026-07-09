@@ -8,31 +8,7 @@ if [[ "$root" == "/" && -d /usr/lib/engineos/scripts ]]; then
 fi
 cmd="$(basename "$0")"
 if [[ "$cmd" == "eos-source-test" ]]; then
-  exec env \
-    -u ENGINEOS_ROOT \
-    -u ENGINEOS_SCRIPT_DIR \
-    -u ENGINEOS_EOS_DIR \
-    -u SCRIPT_DIR \
-    -u ENGINEOS_LOG_DIR \
-    -u ENGINEOS_STATE_DIR \
-    -u ENGINEOS_CAPTURE_DIR \
-    -u ENGINEOS_SHELL_BOOTSTRAP \
-    -u ENGINEOS_TERMINAL_SESSION_CMD \
-    -u ENGINEOS_TERMINAL_REQUIRE_WAYLAND \
-    -u ENGINEOS_TERMINAL_SLOT_CMD \
-    -u ENGINEOS_CUBE_CMD \
-    -u ENGINEOS_ENGINE_CMD \
-    -u ENGINEOS_RUNTIME_CMD \
-    -u ENGINEOS_SHELL_BIN \
-    -u WAYLAND_DISPLAY \
-    -u DISPLAY \
-    -u XDG_SESSION_TYPE \
-    -u WLR_BACKENDS \
-    -u WLR_RENDERER \
-    -u WLR_RENDERER_ALLOW_SOFTWARE \
-    -u LIBGL_ALWAYS_SOFTWARE \
-    ENGINEOS_SOURCE_TEST_MODE=1 \
-    "$script_dir/eos" "$cmd" "$@"
+  exec env ENGINEOS_SOURCE_TEST_MODE=1 "$script_dir/eos" "$cmd" "$@"
 fi
 if [[ "$root" != /usr && "$root" != /usr/* && -d "$root/tools/scripts" ]]; then
   unset ENGINEOS_SCRIPT_DIR ENGINEOS_EOS_DIR

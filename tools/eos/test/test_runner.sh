@@ -1074,14 +1074,24 @@ FAKE
   grep -F 'result:     failed reason=restart-command-failed' "$restart_out" >/dev/null ||
     die "restart-live did not expose restart command failure"
 
+  if PATH="$fake_bin:$PATH" \
+      ENGINEOS_PROC_DIR="$tmp_dir/missing-proc" \
+      ENGINEOS_RESTART_DEV_SHELL_CMD=true \
+      ENGINEOS_LOG_DIR="$tmp_dir/logs" \
+      ENGINEOS_STATE_DIR="$tmp_dir/run" \
+      "$SCRIPT_DIR/shell_runner.sh" restart-live --timeout 1 >"$restart_out" 2>&1; then
+    die "restart-live succeeded without pid discovery"
+  fi
+  grep -F 'result:     partial reason=pid-discovery-unavailable' "$restart_out" >/dev/null ||
+    die "restart-live did not report partial result when pid discovery is unavailable"
   PATH="$fake_bin:$PATH" \
     ENGINEOS_PROC_DIR="$tmp_dir/missing-proc" \
     ENGINEOS_RESTART_DEV_SHELL_CMD=true \
     ENGINEOS_LOG_DIR="$tmp_dir/logs" \
     ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    "$SCRIPT_DIR/shell_runner.sh" restart-live --timeout 1 >"$restart_out"
+    "$SCRIPT_DIR/shell_runner.sh" restart-live --timeout 1 --allow-partial >"$restart_out"
   grep -F 'result:     partial reason=pid-discovery-unavailable' "$restart_out" >/dev/null ||
-    die "restart-live did not report partial result when pid discovery is unavailable"
+    die "restart-live allow-partial did not report partial result"
 
   local proc_dir="$tmp_dir/proc"
   local kill_log="$tmp_dir/kill.log"

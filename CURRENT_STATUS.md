@@ -84,12 +84,12 @@ These are historical proof artifacts only; they are not the active work path:
   switching Qt/Falkon-style GUI panes. A shell-side follow-up keeps hidden
   pane-bound GUI scene nodes render-enabled under the terminal so Qt/Falkon
   clients stay warm between tmux proxy selections instead of being cold-enabled
-  on focus. The runtime command-surface cleanup and validation-signal
-  hardening are deployed through `engineos-tools 0.1.0-18`;
-  `eos-runtime shell refresh-user` refreshed user-space tmux/window helper
-  payloads with `result: refreshed`, and `eos-runtime shell restart-live`
-  verified a new `engineos-shell` PID after restarting
-  `engineos-dev-shell.service`. The live shell package is
+  on focus. The EngineOS command-surface hardening is deployed through
+  `engineos-tools 0.1.0-20`: `eos-source-test` clears installed-session
+  contamination, `eos-proof` fails closed on required evidence, repeatable
+  package selection is normalized through `eos-ci local`, and
+  `eos-runtime shell restart-live` only reports success when a new
+  `engineos-shell` PID is verified. The live shell package is
   `engineos-shell 0.1.0-16`.
 
 ## Not Yet Proven
