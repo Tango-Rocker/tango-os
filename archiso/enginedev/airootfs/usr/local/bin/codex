@@ -4,6 +4,7 @@ set -euo pipefail
 TARGET_USER="${ENGINEOS_CODEX_USER:-dev}"
 TARGET_HOME="${ENGINEOS_CODEX_HOME:-/home/$TARGET_USER}"
 CODEX_BIN="$TARGET_HOME/.local/bin/codex"
+SYSTEM_CODEX_BIN="${ENGINEOS_SYSTEM_CODEX_BIN:-/usr/bin/codex}"
 SETUP="/usr/local/bin/engineos-live-codex-setup"
 LOG="/var/log/engineos/live-codex-setup.log"
 
@@ -26,6 +27,10 @@ if [[ -x "$CODEX_BIN" ]]; then
     fi
   fi
   exec "$CODEX_BIN" "$@"
+fi
+
+if [[ -x "$SYSTEM_CODEX_BIN" ]]; then
+  exec "$SYSTEM_CODEX_BIN" "$@"
 fi
 
 if [[ ! -x "$SETUP" ]]; then

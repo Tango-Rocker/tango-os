@@ -3948,6 +3948,8 @@ run_post_first_deploy() {
     die "post-first-deploy setup does not request engineos-tools"
   grep -F 'engineos-cube' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not request engineos-cube"
+  grep -F 'npm install -g @openai/codex@latest' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not upgrade npm-managed Codex"
   if grep -F 'best_effort()' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
       grep -F 'WARN best-effort failed' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null; then
     die "post-first-deploy setup still contains best-effort service handling"

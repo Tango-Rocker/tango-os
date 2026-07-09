@@ -711,7 +711,8 @@ check_iso() {
         grep -F 'https://chatgpt.com/codex/install.sh' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-codex-setup" >/dev/null &&
         grep -F 'chmod 0755 "$EMBEDDED_CODEX"' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-codex-setup" >/dev/null &&
         grep -F '/home/dev/.codex/packages/standalone/releases/0.140.0-x86_64-unknown-linux-musl/bin/codex"]="1000:1000:755' "$ROOT/$profile_dir/profiledef.sh" >/dev/null &&
-        grep -F 'CODEX_BIN="$TARGET_HOME/.local/bin/codex"' "$ROOT/$profile_dir/airootfs/usr/local/bin/codex" >/dev/null; then
+        grep -F 'CODEX_BIN="$TARGET_HOME/.local/bin/codex"' "$ROOT/$profile_dir/airootfs/usr/local/bin/codex" >/dev/null &&
+        grep -F 'SYSTEM_CODEX_BIN="${ENGINEOS_SYSTEM_CODEX_BIN:-/usr/bin/codex}"' "$ROOT/$profile_dir/airootfs/usr/local/bin/codex" >/dev/null; then
       ok "$profile_dir live ISO has Codex on-demand setup"
     else
       fail "$profile_dir live ISO does not provide Codex on-demand setup"

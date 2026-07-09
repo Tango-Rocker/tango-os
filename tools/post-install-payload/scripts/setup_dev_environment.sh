@@ -344,23 +344,31 @@ configure_dev_shell_autostart() {
 
 install_codex() {
   "$RUN_CODEX" || {
-    log "skip Codex CLI install"
+    log "skip Codex CLI install/upgrade"
     return
   }
-
-  if have_cmd codex; then
-    log "codex already available: $(command -v codex)"
-    return
-  fi
-
-  have_cmd curl || die "curl is required to install Codex CLI"
 
   local home
   home="$(user_home "$TARGET_USER")"
   [[ -n "$home" ]] || die "cannot find home for user: $TARGET_USER"
 
-  log "install Codex CLI with official standalone installer"
-  run_as_user "$TARGET_USER" env HOME="$home" CODEX_NON_INTERACTIVE=1 sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | sh'
+  if have_cmd codex; then
+    log "codex before update: $(codex --version 2>&1 | tail -n 1)"
+  else
+    log "codex not installed"
+  fi
+
+  if have_cmd npm && npm list -g @openai/codex --depth=0 >/dev/null 2>&1; then
+    log "update Codex CLI with npm"
+    as_root npm install -g @openai/codex@latest
+  else
+    have_cmd curl || die "curl is required to install Codex CLI"
+    log "install/update Codex CLI with official standalone installer"
+    run_as_user "$TARGET_USER" env HOME="$home" CODEX_NON_INTERACTIVE=1 sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | sh'
+  fi
+
+  have_cmd codex || die "codex command unavailable after install/update"
+  log "codex after update: $(codex --version 2>&1 | tail -n 1)"
 }
 
 install_dev_repos() {
