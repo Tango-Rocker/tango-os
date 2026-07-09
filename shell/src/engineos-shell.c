@@ -59,6 +59,9 @@
 #define XDG_TOPLEVEL_STATE_SUSPENDED_SINCE_VERSION 6
 #endif
 
+#define ENGINEOS_PANE_LAUNCH_TIMEOUT_MS 15000
+#define ENGINEOS_PANE_RENDER_GRACE_MS 750
+
 enum engineos_shell_mode {
 	ENGINEOS_SHELL_AUTO,
 	ENGINEOS_SHELL_HEADLESS,
@@ -111,6 +114,25 @@ struct engineos_layout_request {
 	char source[32];
 };
 
+struct engineos_pane_binding {
+	struct wl_list link;
+	char *key;
+	char *socket;
+	char *session;
+	char *window_id;
+	char *window_index;
+	char *pane_id;
+	char *token;
+	char *command_label;
+	struct engineos_layout_request geometry;
+	struct engineos_shell_view *view;
+	bool focused;
+	int64_t last_update_msec;
+	int64_t launch_deadline_msec;
+	int64_t render_until_msec;
+	bool timeout_logged;
+};
+
 struct engineos_preview_bounds {
 	bool set;
 	int x;
@@ -153,11 +175,13 @@ struct engineos_shell_server {
 	struct wlr_pointer_constraints_v1 *pointer_constraints;
 	struct wlr_pointer_constraint_v1 *active_pointer_constraint;
 	struct wlr_scene *scene;
+	struct wl_event_source *pane_binding_timer;
 	struct wl_list outputs;
 	struct wl_list views;
 	struct wl_list keyboards;
 	struct wl_list pointers;
 	struct wl_list launches;
+	struct wl_list pane_bindings;
 	struct wl_listener new_output;
 	struct wl_listener new_input;
 	struct wl_listener new_xdg_surface;
@@ -305,6 +329,8 @@ static bool compute_view_geometry(struct engineos_shell_view *view,
 static bool is_persistent_panel_geometry(enum engineos_surface_role role,
 	const struct engineos_view_geometry *geometry);
 static bool is_managed_floating_view(struct engineos_shell_view *view);
+static struct engineos_pane_binding *pane_binding_for_view(
+	struct engineos_shell_view *view);
 static void apply_view_layout(struct engineos_shell_view *view);
 static void schedule_outputs(struct engineos_shell_server *server);
 static void set_toplevel_suspended(struct wlr_xdg_toplevel *toplevel,
@@ -334,6 +360,8 @@ static void hide_image_preview(struct engineos_shell_server *server,
 	const char *reason);
 static void launch_or_activate_slot(struct engineos_shell_server *server,
 	enum engineos_surface_role role, const char *reason);
+static enum engineos_surface_role terminal_role_for_pane_session(
+	const char *session);
 static void write_shell_state(struct engineos_shell_server *server,
 	const char *reason);
 static bool init_preview_ipc(struct engineos_shell_server *server);
@@ -1162,74 +1190,306 @@ static bool apply_pane_geometry(
 	return true;
 }
 
-static bool read_window_layout_request(struct engineos_shell_view *view,
-		struct engineos_layout_request *request) {
-	if (view == NULL || view->server == NULL || view->server->state_dir == NULL ||
-			view->view_id == 0) {
-		return false;
-	}
-
-	memset(request, 0, sizeof(*request));
-	snprintf(request->source, sizeof(request->source), "%s", "unknown");
-
-	char request_name[96];
-	snprintf(request_name, sizeof(request_name), "window-bounds/%u.env",
-		view->view_id);
-	char *path = join_state_path(view->server->state_dir, request_name);
-	if (path == NULL) {
-		return false;
-	}
-
-	FILE *file = fopen(path, "r");
-	free(path);
-	if (file == NULL) {
-		return false;
-	}
-
-	bool window_matches = true;
-	char line[256];
-	while (fgets(line, sizeof(line), file) != NULL) {
-		char key[64] = {0};
-		char value[128] = {0};
-		if (sscanf(line, " %63[^=]=%127[^\n]", key, value) != 2) {
-			continue;
-		}
-
-		if (strcmp(key, "window_id") == 0) {
-			int parsed = 0;
-			window_matches =
-				parse_nonnegative_int(value, &parsed) &&
-				(unsigned int)parsed == view->view_id;
-		} else if (strcmp(key, "mode") == 0) {
-			request->pane = strcmp(value, "pane") == 0;
-		} else if (strcmp(key, "source") == 0) {
-			snprintf(request->source, sizeof(request->source), "%.31s", value);
-		} else if (strcmp(key, "pane_left") == 0) {
-			parse_nonnegative_int(value, &request->pane_left);
-		} else if (strcmp(key, "pane_top") == 0) {
-			parse_nonnegative_int(value, &request->pane_top);
-		} else if (strcmp(key, "pane_width") == 0) {
-			parse_nonnegative_int(value, &request->pane_width);
-		} else if (strcmp(key, "pane_height") == 0) {
-			parse_nonnegative_int(value, &request->pane_height);
-		} else if (strcmp(key, "window_width") == 0) {
-			parse_nonnegative_int(value, &request->window_width);
-		} else if (strcmp(key, "window_height") == 0) {
-			parse_nonnegative_int(value, &request->window_height);
-		} else if (strcmp(key, "cell_width") == 0) {
-			parse_nonnegative_int(value, &request->cell_width);
-		} else if (strcmp(key, "cell_height") == 0) {
-			parse_nonnegative_int(value, &request->cell_height);
-		}
-	}
-	fclose(file);
-
-	return window_matches &&
+static bool pane_geometry_request_valid(
+		const struct engineos_layout_request *request) {
+	return request != NULL &&
 		request->pane &&
 		request->pane_width > 0 &&
 		request->pane_height > 0 &&
 		request->window_width > 0 &&
 		request->window_height > 0;
+}
+
+static char *copy_string(const char *value) {
+	return strdup(value != NULL ? value : "");
+}
+
+static bool replace_string(char **target, const char *value) {
+	char *copy = copy_string(value);
+	if (copy == NULL) {
+		return false;
+	}
+	free(*target);
+	*target = copy;
+	return true;
+}
+
+static char *build_pane_binding_key(const char *socket,
+		const char *session, const char *pane_id) {
+	if (socket == NULL || socket[0] == '\0' ||
+			session == NULL || session[0] == '\0' ||
+			pane_id == NULL || pane_id[0] == '\0') {
+		return NULL;
+	}
+	size_t len = strlen("tmux:::") + strlen(socket) +
+		strlen(session) + strlen(pane_id) + 1;
+	char *key = malloc(len);
+	if (key == NULL) {
+		return NULL;
+	}
+	snprintf(key, len, "tmux:%s:%s:%s", socket, session, pane_id);
+	return key;
+}
+
+static struct engineos_pane_binding *find_pane_binding_by_key(
+		struct engineos_shell_server *server, const char *key) {
+	if (server == NULL || key == NULL || key[0] == '\0') {
+		return NULL;
+	}
+	struct engineos_pane_binding *binding;
+	wl_list_for_each(binding, &server->pane_bindings, link) {
+		if (binding->key != NULL && strcmp(binding->key, key) == 0) {
+			return binding;
+		}
+	}
+	return NULL;
+}
+
+static struct engineos_pane_binding *pane_binding_for_view(
+		struct engineos_shell_view *view) {
+	if (view == NULL || view->server == NULL) {
+		return NULL;
+	}
+	struct engineos_pane_binding *binding;
+	wl_list_for_each(binding, &view->server->pane_bindings, link) {
+		if (binding->view == view) {
+			return binding;
+		}
+	}
+	return NULL;
+}
+
+static void pane_binding_schedule_timer(struct engineos_shell_server *server) {
+	if (server == NULL || server->pane_binding_timer == NULL) {
+		return;
+	}
+
+	int64_t now = monotonic_msec();
+	int64_t next = 0;
+	struct engineos_pane_binding *binding;
+	wl_list_for_each(binding, &server->pane_bindings, link) {
+		if (binding->view == NULL && binding->launch_deadline_msec > 0 &&
+				(next == 0 || binding->launch_deadline_msec < next)) {
+			next = binding->launch_deadline_msec;
+		}
+		if (binding->view != NULL && !binding->focused &&
+				binding->render_until_msec > 0 &&
+				(next == 0 || binding->render_until_msec < next)) {
+			next = binding->render_until_msec;
+		}
+	}
+	if (next == 0) {
+		return;
+	}
+
+	int64_t delta = next - now;
+	int delay = delta <= 0 ? 1 : delta > INT_MAX ? INT_MAX : (int)delta;
+	wl_event_source_timer_update(server->pane_binding_timer, delay);
+}
+
+static void free_pane_binding(struct engineos_pane_binding *binding) {
+	if (binding == NULL) {
+		return;
+	}
+	wl_list_remove(&binding->link);
+	free(binding->key);
+	free(binding->socket);
+	free(binding->session);
+	free(binding->window_id);
+	free(binding->window_index);
+	free(binding->pane_id);
+	free(binding->token);
+	free(binding->command_label);
+	free(binding);
+}
+
+static bool update_pane_binding_identity(
+		struct engineos_pane_binding *binding,
+		const char *socket, const char *session, const char *window_id,
+		const char *window_index, const char *pane_id) {
+	return replace_string(&binding->socket, socket) &&
+		replace_string(&binding->session, session) &&
+		replace_string(&binding->window_id, window_id) &&
+		replace_string(&binding->window_index, window_index) &&
+		replace_string(&binding->pane_id, pane_id);
+}
+
+static struct engineos_pane_binding *ensure_pane_binding(
+		struct engineos_shell_server *server,
+		const char *socket, const char *session, const char *window_id,
+		const char *window_index, const char *pane_id) {
+	char *key = build_pane_binding_key(socket, session, pane_id);
+	if (key == NULL) {
+		return NULL;
+	}
+
+	struct engineos_pane_binding *binding =
+		find_pane_binding_by_key(server, key);
+	if (binding != NULL) {
+		free(key);
+		if (!update_pane_binding_identity(binding, socket, session,
+					window_id, window_index, pane_id)) {
+			return NULL;
+		}
+		return binding;
+	}
+
+	binding = calloc(1, sizeof(*binding));
+	if (binding == NULL) {
+		free(key);
+		return NULL;
+	}
+	wl_list_init(&binding->link);
+	binding->key = key;
+	if (!update_pane_binding_identity(binding, socket, session,
+				window_id, window_index, pane_id)) {
+		free_pane_binding(binding);
+		return NULL;
+	}
+	wl_list_insert(&server->pane_bindings, &binding->link);
+	return binding;
+}
+
+static void update_pane_binding_geometry(
+		struct engineos_pane_binding *binding,
+		const struct engineos_layout_request *geometry) {
+	binding->geometry = *geometry;
+	binding->geometry.pane = true;
+	binding->geometry.output = false;
+	binding->geometry.fullscreen = false;
+	snprintf(binding->geometry.source, sizeof(binding->geometry.source),
+		"%s", "tmux-ipc");
+	binding->last_update_msec = monotonic_msec();
+}
+
+static bool prune_expired_pane_bindings(struct engineos_shell_server *server,
+		const char *reason) {
+	bool changed = false;
+	int64_t now = monotonic_msec();
+	struct engineos_pane_binding *binding;
+	struct engineos_pane_binding *tmp;
+	wl_list_for_each_safe(binding, tmp, &server->pane_bindings, link) {
+		if (binding->view != NULL || binding->launch_deadline_msec <= 0 ||
+				binding->launch_deadline_msec > now) {
+			continue;
+		}
+		wlr_log(WLR_ERROR,
+			"pane launch timeout key=%s token=%s command=%s reason=%s",
+			binding->key != NULL ? binding->key : "(missing)",
+			binding->token != NULL ? binding->token : "(missing)",
+			binding->command_label != NULL ? binding->command_label : "(unknown)",
+			reason != NULL ? reason : "unspecified");
+		free_pane_binding(binding);
+		changed = true;
+	}
+	return changed;
+}
+
+static void pane_binding_clear_focus(struct engineos_shell_server *server) {
+	int64_t now = monotonic_msec();
+	struct engineos_pane_binding *binding;
+	wl_list_for_each(binding, &server->pane_bindings, link) {
+		if (binding->focused) {
+			binding->focused = false;
+			if (binding->view != NULL) {
+				binding->render_until_msec =
+					now + ENGINEOS_PANE_RENDER_GRACE_MS;
+			}
+		}
+	}
+	pane_binding_schedule_timer(server);
+}
+
+static void pane_binding_set_focused(struct engineos_shell_server *server,
+		struct engineos_pane_binding *focused) {
+	int64_t now = monotonic_msec();
+	struct engineos_pane_binding *binding;
+	wl_list_for_each(binding, &server->pane_bindings, link) {
+		if (binding == focused) {
+			binding->focused = true;
+			binding->render_until_msec = 0;
+			binding->last_update_msec = now;
+			continue;
+		}
+		if (binding->focused) {
+			binding->focused = false;
+			if (binding->view != NULL) {
+				binding->render_until_msec =
+					now + ENGINEOS_PANE_RENDER_GRACE_MS;
+			}
+		}
+	}
+	pane_binding_schedule_timer(server);
+}
+
+static struct engineos_pane_binding *oldest_pending_pane_binding(
+		struct engineos_shell_server *server) {
+	struct engineos_pane_binding *selected = NULL;
+	int64_t now = monotonic_msec();
+	struct engineos_pane_binding *binding;
+	wl_list_for_each(binding, &server->pane_bindings, link) {
+		if (binding->view != NULL || binding->token == NULL ||
+				binding->launch_deadline_msec <= 0 ||
+				binding->launch_deadline_msec <= now) {
+			continue;
+		}
+		if (selected == NULL ||
+				binding->last_update_msec < selected->last_update_msec) {
+			selected = binding;
+		}
+	}
+	return selected;
+}
+
+static bool bind_view_to_pending_pane(struct engineos_shell_view *view) {
+	if (view == NULL || view->server == NULL || is_launchpad_role(view->role)) {
+		return false;
+	}
+	prune_expired_pane_bindings(view->server, "view-map");
+	struct engineos_pane_binding *binding =
+		oldest_pending_pane_binding(view->server);
+	if (binding == NULL) {
+		return false;
+	}
+
+	binding->view = view;
+	binding->launch_deadline_msec = 0;
+	binding->render_until_msec = 0;
+	binding->last_update_msec = monotonic_msec();
+	wlr_log(WLR_INFO,
+		"pane binding mapped key=%s token=%s view_id=%u title=%s app_id=%s command=%s focused=%s",
+		binding->key != NULL ? binding->key : "(missing)",
+		binding->token != NULL ? binding->token : "(missing)",
+		view->view_id, view_title(view), view_app_id(view),
+		binding->command_label != NULL ? binding->command_label : "(unknown)",
+		binding->focused ? "true" : "false");
+	return true;
+}
+
+static bool remove_pane_binding_for_view(struct engineos_shell_view *view,
+		const char *reason) {
+	struct engineos_pane_binding *binding = pane_binding_for_view(view);
+	if (binding == NULL) {
+		return false;
+	}
+	wlr_log(WLR_INFO,
+		"pane binding removed key=%s view_id=%u reason=%s title=%s app_id=%s",
+		binding->key != NULL ? binding->key : "(missing)",
+		view != NULL ? view->view_id : 0,
+		reason != NULL ? reason : "unspecified",
+		view != NULL ? view_title(view) : "(none)",
+		view != NULL ? view_app_id(view) : "(none)");
+	bool was_focused = binding->focused;
+	char session[128] = {0};
+	if (binding->session != NULL) {
+		snprintf(session, sizeof(session), "%s", binding->session);
+	}
+	free_pane_binding(binding);
+	if (was_focused && view != NULL && view->server != NULL) {
+		set_active_slot(view->server, terminal_role_for_pane_session(session),
+			reason != NULL ? reason : "pane-view-unmapped");
+	}
+	return true;
 }
 
 static bool compute_view_geometry(struct engineos_shell_view *view,
@@ -1244,13 +1504,16 @@ static bool compute_view_geometry(struct engineos_shell_view *view,
 	if (!is_launchpad_role(view->role)) {
 		ensure_floating_geometry(view);
 		struct engineos_layout_request request;
-		if (!view->fullscreen && read_window_layout_request(view, &request)) {
+		struct engineos_pane_binding *binding = pane_binding_for_view(view);
+		if (binding != NULL && !view->fullscreen &&
+				pane_geometry_request_valid(&binding->geometry)) {
+			request = binding->geometry;
 			struct engineos_view_geometry output_geometry = {0};
 			output_geometry_for_role(view->server, ENGINEOS_SURFACE_TERMINAL,
 				&output_geometry.x, &output_geometry.y,
 				&output_geometry.width, &output_geometry.height);
 			if (apply_pane_geometry(&request, &output_geometry, geometry)) {
-				geometry->layout = "tmux-window-pane";
+				geometry->layout = "tmux-pane-gui";
 				return true;
 			}
 		}
@@ -1314,11 +1577,11 @@ static bool is_persistent_panel_geometry(enum engineos_surface_role role,
 	return role == ENGINEOS_SURFACE_CUBE || role == ENGINEOS_SURFACE_ENGINE;
 }
 
-static bool is_tmux_window_pane_geometry(
+static bool is_tmux_pane_gui_geometry(
 		const struct engineos_view_geometry *geometry) {
 	return geometry != NULL &&
 		geometry->layout != NULL &&
-		strcmp(geometry->layout, "tmux-window-pane") == 0;
+		strcmp(geometry->layout, "tmux-pane-gui") == 0;
 }
 
 static bool view_geometry_visible(struct engineos_shell_server *server,
@@ -1334,7 +1597,7 @@ static bool view_geometry_visible(struct engineos_shell_server *server,
 		return true;
 	}
 	if (is_managed_floating_view(view)) {
-		if (is_tmux_window_pane_geometry(geometry)) {
+		if (is_tmux_pane_gui_geometry(geometry)) {
 			return server->focused_view == view;
 		}
 		return true;
@@ -1349,8 +1612,15 @@ static bool view_geometry_render_enabled(struct engineos_shell_server *server,
 		return false;
 	}
 	if (is_managed_floating_view(view) &&
-			is_tmux_window_pane_geometry(geometry)) {
-		return true;
+			is_tmux_pane_gui_geometry(geometry)) {
+		struct engineos_pane_binding *binding = pane_binding_for_view(view);
+		if (binding == NULL) {
+			return false;
+		}
+		if (binding->focused || server->focused_view == view) {
+			return true;
+		}
+		return binding->render_until_msec > monotonic_msec();
 	}
 	return view_geometry_visible(server, view, geometry);
 }
@@ -1473,6 +1743,61 @@ static void write_slot_state(FILE *file, struct engineos_shell_server *server,
 	fprintf(file, ", \"app_id\": ");
 	json_write_string(file, mapped ? view_app_id(view) : "");
 	fprintf(file, "}");
+}
+
+static void write_pane_binding_json(FILE *file,
+		struct engineos_pane_binding *binding) {
+	fprintf(file, "{\"key\": ");
+	json_write_string(file, binding->key);
+	fprintf(file, ", \"socket\": ");
+	json_write_string(file, binding->socket);
+	fprintf(file, ", \"session\": ");
+	json_write_string(file, binding->session);
+	fprintf(file, ", \"window_id\": ");
+	json_write_string(file, binding->window_id);
+	fprintf(file, ", \"window_index\": ");
+	json_write_string(file, binding->window_index);
+	fprintf(file, ", \"pane_id\": ");
+	json_write_string(file, binding->pane_id);
+	fprintf(file, ", \"token\": ");
+	json_write_string(file, binding->token);
+	fprintf(file, ", \"command_label\": ");
+	json_write_string(file, binding->command_label);
+	fprintf(file, ", \"pending\": %s",
+		binding->view == NULL && binding->token != NULL ? "true" : "false");
+	fprintf(file, ", \"focused\": %s", binding->focused ? "true" : "false");
+	fprintf(file, ", \"view_id\": ");
+	if (binding->view != NULL && binding->view->mapped) {
+		fprintf(file, "%u", binding->view->view_id);
+	} else {
+		fprintf(file, "null");
+	}
+	fprintf(file, ", \"last_update_msec\": %ld",
+		(long)binding->last_update_msec);
+	fprintf(file, ", \"geometry\": {\"pane_left\": %d, \"pane_top\": %d, \"pane_width\": %d, \"pane_height\": %d, \"window_width\": %d, \"window_height\": %d, \"cell_width\": %d, \"cell_height\": %d}}",
+		binding->geometry.pane_left, binding->geometry.pane_top,
+		binding->geometry.pane_width, binding->geometry.pane_height,
+		binding->geometry.window_width, binding->geometry.window_height,
+		binding->geometry.cell_width, binding->geometry.cell_height);
+}
+
+static void write_pane_bindings_json(FILE *file,
+		struct engineos_shell_server *server) {
+	fprintf(file, "[");
+	bool first = true;
+	struct engineos_pane_binding *binding;
+	wl_list_for_each(binding, &server->pane_bindings, link) {
+		if (!first) {
+			fprintf(file, ",");
+		}
+		first = false;
+		fprintf(file, "\n    ");
+		write_pane_binding_json(file, binding);
+	}
+	if (!first) {
+		fprintf(file, "\n  ");
+	}
+	fprintf(file, "]");
 }
 
 static bool mkdir_p(const char *path, mode_t mode) {
@@ -1862,6 +2187,37 @@ static bool json_extract_int(const char *json, const char *key, int *out) {
 	return true;
 }
 
+static bool request_pane_identity(const char *json, char *socket,
+		size_t socket_size, char *session, size_t session_size,
+		char *window_id, size_t window_id_size,
+		char *window_index, size_t window_index_size,
+		char *pane_id, size_t pane_id_size) {
+	return json_extract_string(json, "socket", socket, socket_size) &&
+		json_extract_string(json, "session", session, session_size) &&
+		json_extract_string(json, "window_id", window_id, window_id_size) &&
+		json_extract_string(json, "window_index", window_index,
+			window_index_size) &&
+		json_extract_string(json, "pane_id", pane_id, pane_id_size);
+}
+
+static bool request_pane_geometry(const char *json,
+		struct engineos_layout_request *geometry) {
+	memset(geometry, 0, sizeof(*geometry));
+	geometry->pane = true;
+	snprintf(geometry->source, sizeof(geometry->source), "%s", "tmux-ipc");
+	if (!json_extract_int(json, "pane_left", &geometry->pane_left) ||
+			!json_extract_int(json, "pane_top", &geometry->pane_top) ||
+			!json_extract_int(json, "pane_width", &geometry->pane_width) ||
+			!json_extract_int(json, "pane_height", &geometry->pane_height) ||
+			!json_extract_int(json, "window_width", &geometry->window_width) ||
+			!json_extract_int(json, "window_height", &geometry->window_height)) {
+		return false;
+	}
+	json_extract_int(json, "cell_width", &geometry->cell_width);
+	json_extract_int(json, "cell_height", &geometry->cell_height);
+	return pane_geometry_request_valid(geometry);
+}
+
 static bool request_preview_bounds(const char *json,
 		struct engineos_preview_bounds *bounds) {
 	memset(bounds, 0, sizeof(*bounds));
@@ -2224,7 +2580,7 @@ static void preview_write_response(int client_fd, const char *status,
 	char response[1024];
 	if (strcmp(status, "ok") == 0) {
 		snprintf(response, sizeof(response),
-			"{\"version\":1,\"status\":\"ok\",\"capabilities\":[\"ping\",\"show\",\"hide\",\"wallpaper\",\"hide-wallpaper\",\"launch\",\"windows\",\"focus-window\",\"relayout-windows\",\"png\",\"jpeg\",\"contain\",\"cover\",\"opacity\"]}\n");
+			"{\"version\":1,\"status\":\"ok\",\"capabilities\":[\"ping\",\"show\",\"hide\",\"wallpaper\",\"hide-wallpaper\",\"launch\",\"windows\",\"focus-window\",\"relayout-windows\",\"pane-launch\",\"pane-focus\",\"pane-geometry\",\"pane-unbind\",\"pane-list\",\"png\",\"jpeg\",\"contain\",\"cover\",\"opacity\"]}\n");
 	} else {
 		char escaped[768];
 		size_t used = 0;
@@ -2248,6 +2604,38 @@ static void preview_write_response(int client_fd, const char *status,
 		wlr_log(WLR_ERROR, "preview ipc response write failed: %s",
 			strerror(errno));
 	}
+}
+
+static void preview_write_pane_list_response(
+		struct engineos_shell_server *server, int client_fd) {
+	int out_fd = dup(client_fd);
+	if (out_fd < 0) {
+		wlr_log(WLR_ERROR, "preview ipc response dup failed: %s",
+			strerror(errno));
+		return;
+	}
+	FILE *file = fdopen(out_fd, "w");
+	if (file == NULL) {
+		wlr_log(WLR_ERROR, "preview ipc response fdopen failed: %s",
+			strerror(errno));
+		close(out_fd);
+		return;
+	}
+	fprintf(file, "{\"version\":1,\"status\":\"ok\",\"pane_bindings\":");
+	write_pane_bindings_json(file, server);
+	fprintf(file, "}\n");
+	if (fclose(file) != 0) {
+		wlr_log(WLR_ERROR, "preview ipc pane-list response failed: %s",
+			strerror(errno));
+	}
+}
+
+static enum engineos_surface_role terminal_role_for_pane_session(
+		const char *session) {
+	if (session != NULL && strcmp(session, "engineos-side") == 0) {
+		return ENGINEOS_SURFACE_TERMINAL_SECONDARY;
+	}
+	return ENGINEOS_SURFACE_TERMINAL;
 }
 
 static void handle_preview_request(struct engineos_shell_server *server,
@@ -2294,11 +2682,226 @@ static void handle_preview_request(struct engineos_shell_server *server,
 			return;
 		}
 		launch_or_activate_slot(server, role, "ipc-launch");
-		preview_write_response(client_fd, "ok", NULL);
-		return;
-	}
-	if (strcmp(op, "focus-window") == 0) {
-		int window_id = 0;
+			preview_write_response(client_fd, "ok", NULL);
+			return;
+		}
+		if (strcmp(op, "pane-list") == 0) {
+			if (prune_expired_pane_bindings(server, "ipc-pane-list")) {
+				write_shell_state(server, "ipc-pane-list-prune");
+			}
+			preview_write_pane_list_response(server, client_fd);
+			return;
+		}
+		if (strcmp(op, "pane-launch") == 0) {
+			char socket[PATH_MAX] = {0};
+			char session[128] = {0};
+			char window_id[64] = {0};
+			char window_index[32] = {0};
+			char pane_id[64] = {0};
+			char token[128] = {0};
+			char command_label[256] = {0};
+			struct engineos_layout_request geometry;
+			if (!request_pane_identity(request, socket, sizeof(socket),
+						session, sizeof(session),
+						window_id, sizeof(window_id),
+						window_index, sizeof(window_index),
+						pane_id, sizeof(pane_id))) {
+				preview_write_response(client_fd, "error", "missing pane identity");
+				return;
+			}
+			if (!json_extract_string(request, "token", token, sizeof(token)) ||
+					token[0] == '\0') {
+				preview_write_response(client_fd, "error", "missing token");
+				return;
+			}
+			json_extract_string(request, "command_label", command_label,
+				sizeof(command_label));
+			if (!request_pane_geometry(request, &geometry)) {
+				preview_write_response(client_fd, "error", "invalid pane geometry");
+				return;
+			}
+			struct engineos_pane_binding *binding =
+				ensure_pane_binding(server, socket, session, window_id,
+					window_index, pane_id);
+			if (binding == NULL) {
+				preview_write_response(client_fd, "error", "could not allocate pane binding");
+				return;
+			}
+			struct engineos_shell_view *old_view = binding->view;
+			binding->view = NULL;
+			update_pane_binding_geometry(binding, &geometry);
+			if (!replace_string(&binding->token, token) ||
+					!replace_string(&binding->command_label,
+						command_label[0] != '\0' ? command_label : "(unknown)")) {
+				preview_write_response(client_fd, "error", "could not store pane launch");
+				return;
+			}
+			binding->launch_deadline_msec =
+				monotonic_msec() + ENGINEOS_PANE_LAUNCH_TIMEOUT_MS;
+			binding->timeout_logged = false;
+			pane_binding_set_focused(server, binding);
+			if (old_view != NULL && old_view->mapped) {
+				apply_view_layout(old_view);
+			}
+			set_active_slot(server, terminal_role_for_pane_session(session),
+				"ipc-pane-launch");
+			relayout_shell_views(server, "ipc-pane-launch");
+			write_shell_state(server, "ipc-pane-launch");
+			pane_binding_schedule_timer(server);
+			wlr_log(WLR_INFO,
+				"pane launch registered key=%s token=%s command=%s bounds=%d,%d %dx%d window=%dx%d",
+				binding->key != NULL ? binding->key : "(missing)",
+				token,
+				binding->command_label != NULL ? binding->command_label : "(unknown)",
+				geometry.pane_left, geometry.pane_top,
+				geometry.pane_width, geometry.pane_height,
+				geometry.window_width, geometry.window_height);
+			preview_write_response(client_fd, "ok", NULL);
+			return;
+		}
+		if (strcmp(op, "pane-focus") == 0) {
+			char socket[PATH_MAX] = {0};
+			char session[128] = {0};
+			char window_id[64] = {0};
+			char window_index[32] = {0};
+			char pane_id[64] = {0};
+			if (!request_pane_identity(request, socket, sizeof(socket),
+						session, sizeof(session),
+						window_id, sizeof(window_id),
+						window_index, sizeof(window_index),
+						pane_id, sizeof(pane_id))) {
+				preview_write_response(client_fd, "error", "missing pane identity");
+				return;
+			}
+			char *key = build_pane_binding_key(socket, session, pane_id);
+			if (key == NULL) {
+				preview_write_response(client_fd, "error", "invalid pane identity");
+				return;
+			}
+			struct engineos_pane_binding *binding =
+				find_pane_binding_by_key(server, key);
+			if (binding != NULL) {
+				pane_binding_set_focused(server, binding);
+				if (binding->view != NULL && binding->view->mapped) {
+					activate_view(binding->view, "ipc-pane-focus");
+				} else {
+					set_active_slot(server,
+						terminal_role_for_pane_session(session),
+						"ipc-pane-focus-pending");
+					write_shell_state(server, "ipc-pane-focus-pending");
+				}
+				wlr_log(WLR_INFO,
+					"pane focus requested key=%s bound=%s view_id=%u",
+					key,
+					binding->view != NULL && binding->view->mapped ? "true" : "false",
+					binding->view != NULL && binding->view->mapped ?
+						binding->view->view_id : 0);
+			} else {
+				pane_binding_clear_focus(server);
+				if (is_managed_floating_view(server->focused_view)) {
+					set_view_activated(server->focused_view, false);
+					server->focused_view = NULL;
+					wlr_seat_keyboard_notify_clear_focus(server->seat);
+				}
+				set_active_slot(server, terminal_role_for_pane_session(session),
+					"ipc-pane-focus-unbound");
+				relayout_shell_views(server, "ipc-pane-focus-unbound");
+				write_shell_state(server, "ipc-pane-focus-unbound");
+				wlr_log(WLR_INFO, "pane focus requested key=%s bound=false", key);
+			}
+			free(key);
+			preview_write_response(client_fd, "ok", NULL);
+			return;
+		}
+		if (strcmp(op, "pane-geometry") == 0) {
+			char socket[PATH_MAX] = {0};
+			char session[128] = {0};
+			char window_id[64] = {0};
+			char window_index[32] = {0};
+			char pane_id[64] = {0};
+			struct engineos_layout_request geometry;
+			if (!request_pane_identity(request, socket, sizeof(socket),
+						session, sizeof(session),
+						window_id, sizeof(window_id),
+						window_index, sizeof(window_index),
+						pane_id, sizeof(pane_id))) {
+				preview_write_response(client_fd, "error", "missing pane identity");
+				return;
+			}
+			if (!request_pane_geometry(request, &geometry)) {
+				preview_write_response(client_fd, "error", "invalid pane geometry");
+				return;
+			}
+			char *key = build_pane_binding_key(socket, session, pane_id);
+			if (key == NULL) {
+				preview_write_response(client_fd, "error", "invalid pane identity");
+				return;
+			}
+			struct engineos_pane_binding *binding =
+				find_pane_binding_by_key(server, key);
+			if (binding != NULL) {
+				update_pane_binding_identity(binding, socket, session,
+					window_id, window_index, pane_id);
+				update_pane_binding_geometry(binding, &geometry);
+				relayout_shell_views(server, "ipc-pane-geometry");
+				write_shell_state(server, "ipc-pane-geometry");
+				wlr_log(WLR_INFO,
+					"pane geometry updated key=%s bounds=%d,%d %dx%d window=%dx%d",
+					key, geometry.pane_left, geometry.pane_top,
+					geometry.pane_width, geometry.pane_height,
+					geometry.window_width, geometry.window_height);
+			} else {
+				wlr_log(WLR_INFO, "pane geometry ignored key=%s bound=false", key);
+			}
+			free(key);
+			preview_write_response(client_fd, "ok", NULL);
+			return;
+		}
+		if (strcmp(op, "pane-unbind") == 0) {
+			char socket[PATH_MAX] = {0};
+			char session[128] = {0};
+			char window_id[64] = {0};
+			char window_index[32] = {0};
+			char pane_id[64] = {0};
+			if (!request_pane_identity(request, socket, sizeof(socket),
+						session, sizeof(session),
+						window_id, sizeof(window_id),
+						window_index, sizeof(window_index),
+						pane_id, sizeof(pane_id))) {
+				preview_write_response(client_fd, "error", "missing pane identity");
+				return;
+			}
+			char *key = build_pane_binding_key(socket, session, pane_id);
+			if (key == NULL) {
+				preview_write_response(client_fd, "error", "invalid pane identity");
+				return;
+			}
+			struct engineos_pane_binding *binding =
+				find_pane_binding_by_key(server, key);
+			if (binding == NULL) {
+				free(key);
+				preview_write_response(client_fd, "error", "unknown pane");
+				return;
+			}
+			struct engineos_shell_view *old_view = binding->view;
+			bool was_focused = binding->focused;
+			free_pane_binding(binding);
+			if (old_view != NULL && old_view->mapped) {
+				apply_view_layout(old_view);
+			}
+			if (was_focused) {
+				set_active_slot(server, terminal_role_for_pane_session(session),
+					"ipc-pane-unbind");
+			}
+			relayout_shell_views(server, "ipc-pane-unbind");
+			write_shell_state(server, "ipc-pane-unbind");
+			wlr_log(WLR_INFO, "pane unbound key=%s", key);
+			free(key);
+			preview_write_response(client_fd, "ok", NULL);
+			return;
+		}
+		if (strcmp(op, "focus-window") == 0) {
+			int window_id = 0;
 		if (!json_extract_int(request, "window_id", &window_id) ||
 				window_id <= 0) {
 			preview_write_response(client_fd, "error", "missing window_id");
@@ -2569,12 +3172,14 @@ static void write_shell_state(struct engineos_shell_server *server,
 		if (!view->mapped) {
 			continue;
 		}
-		struct engineos_view_geometry geometry = {0};
-		compute_view_geometry(view, &geometry);
-		bool visible = view_geometry_visible(server, view, &geometry);
-		if (!first_window) {
-			fprintf(file, ",");
-		}
+			struct engineos_view_geometry geometry = {0};
+			compute_view_geometry(view, &geometry);
+			bool visible = view_geometry_visible(server, view, &geometry);
+			struct engineos_pane_binding *pane_binding =
+				pane_binding_for_view(view);
+			if (!first_window) {
+				fprintf(file, ",");
+			}
 		first_window = false;
 		fprintf(file, "\n    {\"id\": %u, \"role\": ", view->view_id);
 		json_write_string(file, surface_role_name(view->role));
@@ -2586,15 +3191,24 @@ static void write_shell_state(struct engineos_shell_server *server,
 		json_write_string(file, geometry.layout);
 		fprintf(file, ", \"x\": %d, \"y\": %d, \"width\": %d, \"height\": %d, \"title\": ",
 			geometry.x, geometry.y, geometry.width, geometry.height);
-		json_write_string(file, view_title(view));
-		fprintf(file, ", \"app_id\": ");
-		json_write_string(file, view_app_id(view));
-		fprintf(file, "}");
-	}
-	if (!first_window) {
-		fprintf(file, "\n  ");
-	}
-	fprintf(file, "],\n  \"launches\": [");
+			json_write_string(file, view_title(view));
+			fprintf(file, ", \"app_id\": ");
+			json_write_string(file, view_app_id(view));
+			fprintf(file, ", \"bound\": %s, \"pane_key\": ",
+				pane_binding != NULL ? "true" : "false");
+			json_write_string(file,
+				pane_binding != NULL ? pane_binding->key : "");
+			fprintf(file, ", \"pane_id\": ");
+			json_write_string(file,
+				pane_binding != NULL ? pane_binding->pane_id : "");
+			fprintf(file, "}");
+		}
+		if (!first_window) {
+			fprintf(file, "\n  ");
+		}
+		fprintf(file, "],\n  \"pane_bindings\": ");
+		write_pane_bindings_json(file, server);
+		fprintf(file, ",\n  \"launches\": [");
 
 	bool first = true;
 	struct engineos_shell_launch *launch;
@@ -3207,7 +3821,7 @@ static void apply_view_layout(struct engineos_shell_view *view) {
 		if (view->xdg_surface != NULL &&
 				xdg_toplevel_can_configure(view->xdg_surface->toplevel)) {
 			if (geometry.layout != NULL &&
-					strcmp(geometry.layout, "tmux-window-pane") == 0) {
+					strcmp(geometry.layout, "tmux-pane-gui") == 0) {
 				set_toplevel_geometry(view->xdg_surface->toplevel, &geometry);
 				wlr_xdg_toplevel_set_maximized(view->xdg_surface->toplevel,
 					false);
@@ -3225,7 +3839,7 @@ static void apply_view_layout(struct engineos_shell_view *view) {
 	}
 	if (view->scene_tree != NULL) {
 		if (geometry.layout != NULL &&
-				strcmp(geometry.layout, "tmux-window-pane") == 0) {
+				strcmp(geometry.layout, "tmux-pane-gui") == 0) {
 			struct wlr_box clip = {
 				.x = 0,
 				.y = 0,
@@ -3353,6 +3967,27 @@ static void relayout_shell_views(struct engineos_shell_server *server,
 		wlr_scene_node_raise_to_top(&server->focused_view->scene_tree->node);
 	}
 	schedule_outputs(server);
+}
+
+static int pane_binding_timer_tick(void *data) {
+	struct engineos_shell_server *server = data;
+	bool changed = prune_expired_pane_bindings(server, "pane-binding-timer");
+	int64_t now = monotonic_msec();
+	struct engineos_pane_binding *binding;
+	wl_list_for_each(binding, &server->pane_bindings, link) {
+		if (binding->view != NULL && !binding->focused &&
+				binding->render_until_msec > 0 &&
+				binding->render_until_msec <= now) {
+			binding->render_until_msec = 0;
+			changed = true;
+		}
+	}
+	if (changed) {
+		relayout_shell_views(server, "pane-binding-timer");
+		write_shell_state(server, "pane-binding-timer");
+	}
+	pane_binding_schedule_timer(server);
+	return 0;
 }
 
 static void set_active_slot(struct engineos_shell_server *server,
@@ -4426,6 +5061,9 @@ static void xdg_surface_map(struct wl_listener *listener, void *data) {
 	struct engineos_shell_view *view = wl_container_of(listener, view, map);
 	view->mapped = true;
 	view->role = classify_view_role(view);
+	if (!is_launchpad_role(view->role)) {
+		bind_view_to_pending_pane(view);
+	}
 	apply_view_layout(view);
 	if (is_launchpad_role(view->role)) {
 		mark_launch_role_mapped(view->server, view->role);
@@ -4460,8 +5098,15 @@ static void xdg_surface_map(struct wl_listener *listener, void *data) {
 	} else {
 		wlr_log(WLR_INFO, "launchpad unknown view excluded id=%u title=%s app_id=%s",
 			view->view_id, view_title(view), view_app_id(view));
-		wlr_scene_node_set_enabled(&view->scene_tree->node, true);
-		if (view->server->input_mode != ENGINEOS_INPUT_SHELL) {
+		struct engineos_view_geometry geometry = {0};
+		compute_view_geometry(view, &geometry);
+		struct engineos_pane_binding *binding = pane_binding_for_view(view);
+		wlr_scene_node_set_enabled(&view->scene_tree->node,
+			view_geometry_render_enabled(view->server, view, &geometry));
+		if (binding != NULL && binding->focused) {
+			activate_view(view, "pane-launch-mapped");
+		} else if (binding == NULL &&
+				view->server->input_mode != ENGINEOS_INPUT_SHELL) {
 			activate_view(view, "floating-view-mapped");
 		}
 	}
@@ -4484,6 +5129,7 @@ static void xdg_surface_unmap(struct wl_listener *listener, void *data) {
 		set_view_activated(view, false);
 		wlr_seat_keyboard_notify_clear_focus(view->server->seat);
 	}
+	remove_pane_binding_for_view(view, "view-unmapped");
 	if (view->role == ENGINEOS_SURFACE_ENGINE && view->server->game_capture) {
 		view->server->game_capture = false;
 		sync_pointer_constraint(view->server, "engine-unmapped");
@@ -5044,6 +5690,17 @@ static void destroy_server(struct engineos_shell_server *server) {
 	hide_image_preview(server, "shell-destroy");
 	hide_wallpaper(server, "shell-destroy");
 	close_preview_ipc(server, false, true);
+	if (server->pane_binding_timer != NULL) {
+		wl_event_source_remove(server->pane_binding_timer);
+		server->pane_binding_timer = NULL;
+	}
+	if (!wl_list_empty(&server->pane_bindings)) {
+		struct engineos_pane_binding *binding;
+		struct engineos_pane_binding *tmp;
+		wl_list_for_each_safe(binding, tmp, &server->pane_bindings, link) {
+			free_pane_binding(binding);
+		}
+	}
 	if (!wl_list_empty(&server->launches)) {
 		struct engineos_shell_launch *launch;
 		struct engineos_shell_launch *tmp;
@@ -5128,6 +5785,7 @@ int main(int argc, char **argv) {
 	struct engineos_shell_server server = {0};
 	server.preview_socket_fd = -1;
 	wl_list_init(&server.launches);
+	wl_list_init(&server.pane_bindings);
 
 	static const struct option options[] = {
 		{"headless", no_argument, NULL, 'H'},
@@ -5229,6 +5887,13 @@ int main(int argc, char **argv) {
 	wl_event_loop_add_signal(event_loop, SIGTERM, terminate_from_signal, &server);
 	wl_event_loop_add_signal(event_loop, SIGHUP, relayout_from_signal, &server);
 	wl_event_loop_add_signal(event_loop, SIGCHLD, reap_child_processes, &server);
+	server.pane_binding_timer =
+		wl_event_loop_add_timer(event_loop, pane_binding_timer_tick, &server);
+	if (server.pane_binding_timer == NULL) {
+		wlr_log(WLR_ERROR, "failed to add pane binding timer");
+		destroy_server(&server);
+		return 1;
+	}
 
 	if (server.smoke_ms > 0) {
 		struct wl_event_source *timer =

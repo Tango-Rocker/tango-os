@@ -257,13 +257,13 @@ configure_tmux() {
   [[ -n "$home" ]] || die "cannot find home for user: $TARGET_USER"
 
   install_managed_tmux_config "$home/.tmux.conf" "$PAYLOAD/assets/tmux.conf" 0644 "$TARGET_USER:$TARGET_USER"
-  if [[ -f "$PAYLOAD/scripts/engineos-tmux-pane-sync" ]]; then
-    as_root install -Dm0755 "$PAYLOAD/scripts/engineos-tmux-pane-sync" /usr/local/bin/engineos-tmux-pane-sync
-    log "installed: /usr/local/bin/engineos-tmux-pane-sync"
+  if [[ -f "$PAYLOAD/scripts/engineos-tmux-pane-bridge" ]]; then
+    as_root install -Dm0755 "$PAYLOAD/scripts/engineos-tmux-pane-bridge" /usr/local/bin/engineos-tmux-pane-bridge
+    log "installed: /usr/local/bin/engineos-tmux-pane-bridge"
   else
-    die "tmux pane sync helper payload missing"
+    die "tmux pane bridge helper payload missing"
   fi
-  for helper in engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
+  for helper in engineos-tmux-pane-sync engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
     if [[ -f "$PAYLOAD/scripts/$helper" ]]; then
       as_root install -Dm0755 "$PAYLOAD/scripts/$helper" "/usr/local/bin/$helper"
       log "installed: /usr/local/bin/$helper"

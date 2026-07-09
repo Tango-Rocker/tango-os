@@ -47,7 +47,6 @@ LOG_FILE="$LOG_DIR/shell.log"
 export ENGINEOS_STATE_DIR="$STATE_DIR"
 DEV_SHELL_UNIT="${ENGINEOS_DEV_SHELL_UNIT:-engineos-dev-shell.service}"
 DEV_SHELL_START="${ENGINEOS_DEV_SHELL_START:-engineos-dev-shell-start}"
-TMUX_SESSION="${ENGINEOS_TMUX_APP_SESSION:-engineos}"
 PROC_DIR="${ENGINEOS_PROC_DIR:-/proc}"
 KILL_CMD="${ENGINEOS_KILL_CMD:-kill}"
 TMUX_CMD="${ENGINEOS_TMUX_CMD:-tmux}"
@@ -108,8 +107,8 @@ the Runtime graphical entry point and bootstraps the launchpad slots by
 default when the real shell binary is installed.
 
 restart-live restarts engineos-dev-shell.service and verifies that a new
-engineos-shell PID appears. refresh-user refreshes tmux/window helper payloads
-and restarts the tmux GUI window sync daemon without broad process matching.
+engineos-shell PID appears. refresh-user refreshes tmux pane bridge helpers,
+sources the managed tmux config, and stops any legacy GUI sync daemon.
 HELP
 }
 
@@ -404,7 +403,7 @@ terminate_pids() {
   "$KILL_CMD" "-$signal" "$@" 2>/dev/null || true
 }
 
-restart_tmux_window_sync_daemon() {
+stop_tmux_window_sync_daemon() {
   local dry_run="$1"
   local daemon_pids=()
   local pid
@@ -439,17 +438,16 @@ restart_tmux_window_sync_daemon() {
   fi
 
   if [[ "$dry_run" == true ]]; then
-    printf '  would_start: %s run-shell -b %q\n' "$TMUX_CMD" "engineos-tmux-window-sync --daemon"
+    printf '  would_sync: %s run-shell -b %q\n' "$TMUX_CMD" "engineos-tmux-pane-bridge sync"
     return 0
   fi
 
-  if "$TMUX_CMD" has-session -t "$TMUX_SESSION" >/dev/null 2>&1; then
-    "$TMUX_CMD" run-shell -b "engineos-tmux-window-sync --daemon"
-    printf '  tmux_sync_daemon: restarted session=%s\n' "$TMUX_SESSION"
+  if "$TMUX_CMD" run-shell -b "engineos-tmux-pane-bridge sync" >/dev/null 2>&1; then
+    printf '  tmux_pane_bridge: synced\n'
   else
-    printf '  tmux_sync_daemon: skipped reason=no-session session=%s\n' "$TMUX_SESSION"
-    return 3
+    printf '  tmux_pane_bridge: skipped reason=no-server-or-run-shell-failed\n'
   fi
+  return 0
 }
 
 run_refresh_user() {
@@ -500,7 +498,7 @@ run_refresh_user() {
     printf '  result:     failed reason=install-tmux-config-failed\n'
     return 1
   fi
-  for helper in engineos-tmux-pane-sync engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
+  for helper in engineos-tmux-pane-bridge engineos-tmux-pane-sync engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
     if ! install_helper_file "$PAYLOAD_DIR/scripts/$helper" "$TMUX_HELPER_DIR/$helper" "$dry_run"; then
       printf '  result:     failed reason=install-helper-failed helper=%s\n' "$helper"
       return 1
@@ -508,7 +506,7 @@ run_refresh_user() {
   done
 
   if ! have_executable "$TMUX_CMD"; then
-    printf '  tmux:       unavailable; tmux config source and daemon restart skipped\n'
+    printf '  tmux:       unavailable; tmux config source and pane bridge sync skipped\n'
     printf '  result:     partial reason=tmux-unavailable\n'
     return 0
   fi
@@ -524,9 +522,9 @@ run_refresh_user() {
     refresh_reason="tmux-source-failed"
   fi
 
-  if ! restart_tmux_window_sync_daemon "$dry_run"; then
+  if ! stop_tmux_window_sync_daemon "$dry_run"; then
     refresh_result="partial"
-    refresh_reason="tmux-session-missing"
+    refresh_reason="tmux-pane-bridge-sync-failed"
   fi
   if [[ "$refresh_result" == "partial" ]]; then
     printf '  result:     partial reason=%s\n' "$refresh_reason"

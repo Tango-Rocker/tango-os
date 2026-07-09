@@ -11,7 +11,6 @@ STATE_DIR="${ENGINEOS_STATE_DIR:-$(engineos_default_state_dir "$ROOT")}"
 APP_STATE_DIR="$STATE_DIR/apps"
 SHELL_STATE_FILE="$STATE_DIR/shell-state.json"
 LAUNCH_BOUNDS_DIR="$STATE_DIR/launch-bounds"
-WINDOW_BOUNDS_DIR="$STATE_DIR/window-bounds"
 APPS_MANIFEST="$(engineos_apps_manifest "$ROOT")"
 DRY_RUN=false
 ACTION="${1:-help}"
@@ -30,6 +29,11 @@ Usage: app.sh launch terminal [args...]
        app.sh launch cube [--smoke]
        app.sh launch quake [--smoke] [--pane|--fullscreen|--output] [--map NAME] [--game MOD]
        app.sh recover preview|terminal|terminal-secondary|cube|quake
+       app.sh pane launch -- COMMAND [ARG...]
+       app.sh pane focus [--pane TMUX_PANE]
+       app.sh pane geometry [--pane TMUX_PANE]
+       app.sh pane unbind [--pane TMUX_PANE]
+       app.sh pane list [--json]
        app.sh pane sync [--all|cube|engine|quake]
        app.sh window list [--json]
        app.sh window focus WINDOW_ID
@@ -48,8 +52,8 @@ pane sync refreshes existing tmux-pane launch bounds and asks engineos-shell to
 re-layout mapped panel clients without restarting them.
 recover asks the running shell to refresh IPC or relaunch a shell-owned slot
 without restarting the compositor service.
-window commands inspect, focus, bind, or launch arbitrary shell-managed GUI
-windows such as Qt apps and browsers.
+pane launch binds arbitrary GUI apps to the invoking tmux pane through the
+running shell. window commands remain for diagnostics and manual recovery.
 HELP
 }
 
@@ -271,6 +275,95 @@ tmux_pane_cell_size() {
   printf '%s %s\n' "$cell_width" "$cell_height"
 }
 
+tmux_socket_for_pane() {
+  local target="${1:-${TMUX_PANE:-}}"
+  local socket=""
+  if [[ -n "${TMUX:-}" ]]; then
+    socket="${TMUX%%,*}"
+  fi
+  local format_socket
+  format_socket="$(tmux display-message -p -t "$target" '#{socket_path}' 2>/dev/null || true)"
+  if [[ -n "$format_socket" && "$format_socket" != '#{socket_path}' ]]; then
+    socket="$format_socket"
+  fi
+  printf '%s\n' "${socket:-default}"
+}
+
+tmux_pane_context() {
+  local target="${1:-${TMUX_PANE:-}}"
+  [[ -n "$target" ]] || return 1
+  have_cmd tmux || return 1
+
+  local identity
+  identity="$(tmux display-message -p -t "$target" \
+    '#{session_name} #{window_id} #{window_index} #{pane_id}' 2>/dev/null)" ||
+    return 1
+
+  local session window_id window_index pane_id
+  read -r session window_id window_index pane_id <<<"$identity"
+  [[ -n "$session" && -n "$window_id" && -n "$window_index" && -n "$pane_id" ]] ||
+    return 1
+
+  local geometry
+  geometry="$(tmux_pane_geometry "$pane_id")" || return 1
+  local pane_left pane_top pane_width pane_height window_width window_height
+  read -r pane_left pane_top pane_width pane_height window_width window_height <<<"$geometry"
+
+  local cell_width=0
+  local cell_height=0
+  local cell_size
+  if cell_size="$(tmux_pane_cell_size "$pane_id")"; then
+    read -r cell_width cell_height <<<"$cell_size"
+  fi
+
+  local socket
+  socket="$(tmux_socket_for_pane "$pane_id")"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$socket" "$session" "$window_id" "$window_index" "$pane_id" \
+    "$pane_left" "$pane_top" "$pane_width" "$pane_height" \
+    "$window_width" "$window_height" "$cell_width" "$cell_height"
+}
+
+pane_context_request_json() {
+  local op="$1"
+  local pane_id="$2"
+  local token="${3:-}"
+  local command_label="${4:-}"
+  local context
+  context="$(tmux_pane_context "$pane_id")" || return 1
+
+  local socket session window_id window_index resolved_pane_id
+  local pane_left pane_top pane_width pane_height window_width window_height
+  local cell_width cell_height
+  IFS=$'\t' read -r socket session window_id window_index resolved_pane_id \
+    pane_left pane_top pane_width pane_height window_width window_height \
+    cell_width cell_height <<<"$context"
+
+  printf '{"version":1,"op":'
+  json_string "$op"
+  if [[ -n "$token" ]]; then
+    printf ',"token":'
+    json_string "$token"
+  fi
+  if [[ -n "$command_label" ]]; then
+    printf ',"command_label":'
+    json_string "$command_label"
+  fi
+  printf ',"pane":{"socket":'
+  json_string "$socket"
+  printf ',"session":'
+  json_string "$session"
+  printf ',"window_id":'
+  json_string "$window_id"
+  printf ',"window_index":'
+  json_string "$window_index"
+  printf ',"pane_id":'
+  json_string "$resolved_pane_id"
+  printf '},"geometry":{"pane_left":%s,"pane_top":%s,"pane_width":%s,"pane_height":%s,"window_width":%s,"window_height":%s,"cell_width":%s,"cell_height":%s}}\n' \
+    "$pane_left" "$pane_top" "$pane_width" "$pane_height" \
+    "$window_width" "$window_height" "$cell_width" "$cell_height"
+}
+
 write_tmux_bounds() {
   local role="$1"
   local pane_left="$2"
@@ -481,96 +574,19 @@ if response.get("status") != "ok":
 PY
 }
 
-shell_relayout_windows() {
+send_pane_shell_ipc() {
+  local action="$1"
+  local request="$2"
   local socket_path
   local response
-  if [[ "${ENGINEOS_APP_NOTIFY_SHELL:-true}" != "true" ]]; then
-    log_line "window relayout notify=skipped reason=disabled"
-    return 0
-  fi
   socket_path="$(shell_ipc_socket)"
-  if response="$(send_shell_ipc "$socket_path" '{"version":1,"op":"relayout-windows"}' 2>&1)"; then
-    log_line "window relayout method=shell-ipc socket=$socket_path"
+  if response="$(send_shell_ipc "$socket_path" "$request" 2>&1)"; then
+    log_line "pane $action method=shell-ipc socket=$socket_path response=$response"
     return 0
   fi
-  log_line "window relayout ipc=failed socket=$socket_path error=$response"
-  notify_shell_layout_sync
-}
-
-window_bounds_file() {
-  local window_id="$1"
-  printf '%s/%s.env\n' "$WINDOW_BOUNDS_DIR" "$window_id"
-}
-
-window_tmux_bounds_current() {
-  local window_id="$1"
-  local pane_left="$2"
-  local pane_top="$3"
-  local pane_width="$4"
-  local pane_height="$5"
-  local window_width="$6"
-  local window_height="$7"
-  local pane_id="$8"
-  local file
-
-  file="$(window_bounds_file "$window_id")"
-  [[ -r "$file" ]] || return 1
-  grep -Fx "window_id=$window_id" "$file" >/dev/null || return 1
-  grep -Fx "mode=pane" "$file" >/dev/null || return 1
-  grep -Fx "source=tmux" "$file" >/dev/null || return 1
-  grep -Fx "pane_id=$pane_id" "$file" >/dev/null || return 1
-  grep -Fx "pane_left=$pane_left" "$file" >/dev/null || return 1
-  grep -Fx "pane_top=$pane_top" "$file" >/dev/null || return 1
-  grep -Fx "pane_width=$pane_width" "$file" >/dev/null || return 1
-  grep -Fx "pane_height=$pane_height" "$file" >/dev/null || return 1
-  grep -Fx "window_width=$window_width" "$file" >/dev/null || return 1
-  grep -Fx "window_height=$window_height" "$file" >/dev/null || return 1
-
-  local cell_size
-  if cell_size="$(tmux_pane_cell_size "$pane_id")"; then
-    local cell_width cell_height
-    read -r cell_width cell_height <<<"$cell_size"
-    grep -Fx "cell_width=$cell_width" "$file" >/dev/null || return 1
-    grep -Fx "cell_height=$cell_height" "$file" >/dev/null || return 1
-  fi
-}
-
-write_window_tmux_bounds() {
-  local window_id="$1"
-  local pane_left="$2"
-  local pane_top="$3"
-  local pane_width="$4"
-  local pane_height="$5"
-  local window_width="$6"
-  local window_height="$7"
-  local pane_id="${8:-${TMUX_PANE:-unknown}}"
-  local file
-  local tmp
-
-  mkdir -p "$WINDOW_BOUNDS_DIR"
-  file="$(window_bounds_file "$window_id")"
-  tmp="$file.$$"
-  {
-    printf 'schema=engineos-window-bounds-v0\n'
-    printf 'window_id=%s\n' "$window_id"
-    printf 'mode=pane\n'
-    printf 'source=tmux\n'
-    printf 'pane_id=%s\n' "$pane_id"
-    printf 'pane_left=%s\n' "$pane_left"
-    printf 'pane_top=%s\n' "$pane_top"
-    printf 'pane_width=%s\n' "$pane_width"
-    printf 'pane_height=%s\n' "$pane_height"
-    printf 'window_width=%s\n' "$window_width"
-    printf 'window_height=%s\n' "$window_height"
-    if cell_size="$(tmux_pane_cell_size "$pane_id")"; then
-      local cell_width cell_height
-      read -r cell_width cell_height <<<"$cell_size"
-      printf 'cell_width=%s\n' "$cell_width"
-      printf 'cell_height=%s\n' "$cell_height"
-    fi
-    printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  } >"$tmp"
-  mv "$tmp" "$file"
+  log_line "pane $action ipc=failed socket=$socket_path error=$response"
+  printf 'eos-app: pane %s failed: %s\n' "$action" "$response" >&2
+  return 1
 }
 
 run_window_list() {
@@ -592,30 +608,17 @@ run_window_list() {
   done
 
   [[ -r "$SHELL_STATE_FILE" ]] || die "shell state is not readable: $SHELL_STATE_FILE"
-  python - "$SHELL_STATE_FILE" "$WINDOW_BOUNDS_DIR" "$json" <<'PY'
+  python - "$SHELL_STATE_FILE" "$json" <<'PY'
 import json
-import os
 import sys
 
-state_file, bounds_dir, as_json = sys.argv[1], sys.argv[2], sys.argv[3] == "true"
+state_file, as_json = sys.argv[1], sys.argv[2] == "true"
 with open(state_file, "r", encoding="utf-8") as handle:
     state = json.load(handle)
 
 windows = []
 for item in state.get("windows", []):
     window_id = item.get("id")
-    bound = False
-    pane_id = ""
-    if isinstance(window_id, int):
-        bounds_file = os.path.join(bounds_dir, f"{window_id}.env")
-        if os.path.exists(bounds_file):
-            bound = True
-            with open(bounds_file, "r", encoding="utf-8") as handle:
-                for line in handle:
-                    key, _, value = line.strip().partition("=")
-                    if key == "pane_id":
-                        pane_id = value
-                        break
     windows.append({
         "id": window_id,
         "role": item.get("role", "unknown"),
@@ -629,8 +632,9 @@ for item in state.get("windows", []):
         "y": item.get("y", 0),
         "width": item.get("width", 0),
         "height": item.get("height", 0),
-        "bound": bound,
-        "pane_id": pane_id,
+        "bound": bool(item.get("bound", False)),
+        "pane_key": item.get("pane_key", ""),
+        "pane_id": item.get("pane_id", ""),
     })
 
 if as_json:
@@ -658,46 +662,12 @@ run_window_focus() {
 }
 
 run_window_bind() {
-  local window_id="${1:-}"
-  shift || true
-  is_positive_integer "$window_id" || die "window bind requires a positive numeric window id"
-
-  local pane_id="${TMUX_PANE:-}"
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --pane)
-        shift
-        [[ $# -gt 0 ]] || die "window bind --pane requires a tmux pane id"
-        pane_id="$1"
-        ;;
-      help|--help|-h)
-        usage
-        return 0
-        ;;
-      *)
-        die "unknown app window bind option: $1"
-        ;;
-    esac
-    shift
-  done
-  [[ -n "$pane_id" ]] || die "window bind requires TMUX_PANE or --pane"
-
-  local geometry
-  geometry="$(tmux_pane_geometry "$pane_id")" ||
-    die "window bind could not read tmux geometry for pane $pane_id"
-  local pane_left pane_top pane_width pane_height window_width window_height
-  read -r pane_left pane_top pane_width pane_height window_width window_height <<<"$geometry"
-  if window_tmux_bounds_current "$window_id" "$pane_left" "$pane_top" \
-      "$pane_width" "$pane_height" "$window_width" "$window_height" "$pane_id"; then
-    log_line "window bind id=$window_id source=tmux pane=$pane_id unchanged=true bounds=$geometry"
-    printf 'window %s already bound to pane %s bounds %s\n' "$window_id" "$pane_id" "$geometry"
-    return 0
-  fi
-  # shellcheck disable=SC2086
-  write_window_tmux_bounds "$window_id" $geometry "$pane_id"
-  shell_relayout_windows
-  log_line "window bind id=$window_id source=tmux pane=$pane_id bounds=$geometry"
-  printf 'bound window %s to pane %s bounds %s\n' "$window_id" "$pane_id" "$geometry"
+	  local window_id="${1:-}"
+	  shift || true
+	  is_positive_integer "$window_id" || die "window bind requires a positive numeric window id"
+	  log_line "window bind deprecated id=$window_id"
+	  printf 'eos-app window bind is deprecated. Use eos-app pane launch -- COMMAND to create pane-bound GUI apps, or eos-app pane focus to focus an existing pane binding.\n' >&2
+	  return 2
 }
 
 run_window_launch() {
@@ -788,12 +758,140 @@ run_recover() {
     *)
       die "unknown recover target: $target"
       ;;
-  esac
+	esac
+}
+
+pane_launch_token() {
+  local stamp
+  stamp="$(date -u +%Y%m%dT%H%M%S%N 2>/dev/null || date -u +%s)"
+  printf 'pane-%s-%s-%s\n' "$stamp" "$$" "${RANDOM:-0}"
+}
+
+pane_target_arg() {
+  local pane_id="${TMUX_PANE:-}"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --pane)
+        shift
+        [[ $# -gt 0 ]] || die "pane --pane requires a tmux pane id"
+        pane_id="$1"
+        ;;
+      help|--help|-h)
+        usage
+        return 2
+        ;;
+      *)
+        die "unknown pane option: $1"
+        ;;
+    esac
+    shift
+  done
+  [[ -n "$pane_id" ]] || die "pane command requires TMUX_PANE or --pane"
+  printf '%s\n' "$pane_id"
+}
+
+run_pane_launch() {
+  [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]] ||
+    die "pane launch requires TMUX and TMUX_PANE"
+  if [[ "${1:-}" == "--" ]]; then
+    shift
+  fi
+  [[ $# -gt 0 ]] || die "pane launch requires a command"
+
+  require_shell_display "pane"
+  local token
+  local command_label
+  local request
+  token="$(pane_launch_token)"
+  command_label="${1##*/}"
+  request="$(pane_context_request_json pane-launch "$TMUX_PANE" "$token" "$command_label")" ||
+    die "pane launch could not read tmux context for pane $TMUX_PANE"
+  send_pane_shell_ipc launch "$request"
+
+  prepare_client_env
+  export ENGINEOS_PANE_LAUNCH_TOKEN="$token"
+  log_line "pane launch token=$token pane=$TMUX_PANE display=${WAYLAND_DISPLAY:-missing} command=$(quote_cmd "$@")"
+  exec "$@"
+}
+
+run_pane_focus() {
+  local pane_id
+  local request
+  pane_id="$(pane_target_arg "$@")" || return 0
+  request="$(pane_context_request_json pane-focus "$pane_id")" ||
+    die "pane focus could not read tmux context for pane $pane_id"
+  send_pane_shell_ipc focus "$request"
+  printf 'focused pane %s\n' "$pane_id"
+}
+
+run_pane_geometry() {
+  local pane_id
+  local request
+  pane_id="$(pane_target_arg "$@")" || return 0
+  request="$(pane_context_request_json pane-geometry "$pane_id")" ||
+    die "pane geometry could not read tmux context for pane $pane_id"
+  send_pane_shell_ipc geometry "$request"
+  printf 'updated pane %s geometry\n' "$pane_id"
+}
+
+run_pane_unbind() {
+  local pane_id
+  local request
+  pane_id="$(pane_target_arg "$@")" || return 0
+  request="$(pane_context_request_json pane-unbind "$pane_id")" ||
+    die "pane unbind could not read tmux context for pane $pane_id"
+  send_pane_shell_ipc unbind "$request"
+  printf 'unbound pane %s\n' "$pane_id"
+}
+
+run_pane_list() {
+  local json=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json)
+        json=true
+        ;;
+      help|--help|-h)
+        usage
+        return 0
+        ;;
+      *)
+        die "unknown app pane list option: $1"
+        ;;
+    esac
+    shift
+  done
+
+  [[ -r "$SHELL_STATE_FILE" ]] || die "shell state is not readable: $SHELL_STATE_FILE"
+  python - "$SHELL_STATE_FILE" "$json" <<'PY'
+import json
+import sys
+
+state_file, as_json = sys.argv[1], sys.argv[2] == "true"
+with open(state_file, "r", encoding="utf-8") as handle:
+    state = json.load(handle)
+
+bindings = state.get("pane_bindings", [])
+if as_json:
+    print(json.dumps({"ok": True, "pane_bindings": bindings}, separators=(",", ":")))
+else:
+    print("KEY\tFOCUS\tPENDING\tVIEW\tPANE\tCOMMAND")
+    for binding in bindings:
+        view_id = binding.get("view_id")
+        print("{key}\t{focused}\t{pending}\t{view}\t{pane}\t{command}".format(
+            key=binding.get("key", ""),
+            focused=bool(binding.get("focused", False)),
+            pending=bool(binding.get("pending", False)),
+            view=view_id if view_id is not None else "",
+            pane=binding.get("pane_id", ""),
+            command=binding.get("command_label", ""),
+        ))
+PY
 }
 
 run_pane_sync() {
-  local sync_all=false
-  local roles=()
+	local sync_all=false
+	local roles=()
   local role
   local normalized
   local current_pane="${TMUX_PANE:-}"
@@ -870,10 +968,25 @@ run_pane() {
   local sub="${1:-help}"
   shift || true
 
-  case "$sub" in
-    sync)
-      run_pane_sync "$@"
-      ;;
+	case "$sub" in
+	    launch)
+	      run_pane_launch "$@"
+	      ;;
+	    focus)
+	      run_pane_focus "$@"
+	      ;;
+	    geometry)
+	      run_pane_geometry "$@"
+	      ;;
+	    unbind)
+	      run_pane_unbind "$@"
+	      ;;
+	    list)
+	      run_pane_list "$@"
+	      ;;
+	    sync)
+	      run_pane_sync "$@"
+	      ;;
     help|--help|-h)
       usage
       ;;

@@ -61,30 +61,16 @@ These are historical proof artifacts only; they are not the active work path:
 - Agent-pack hygiene currently passes. Canonical ownership is
   `.agents/index.toml` plus `docs/agent-roles.md`; reusable workflows belong
   in skills; CLI work stays on direct `eos-*` commands.
-- Tmux-mirrored GUI window tracking is live on the bare-metal EngineDev
-  session: mapped shell windows have session-local IDs in shell state,
-  `eos-app window list|focus|bind|launch` is the control surface, tmux proxy
-  helpers mirror non-terminal GUI windows, and pane-bound generic GUI windows
-  are resized/clipped through per-window bounds. GUI proxy tabs now bind
-  windows using tmux client cell dimensions, refresh bounds on tmux tab/layout
-  and client-resize hooks, bring the app forward when the proxy tab is
-  selected, bind matching launcher panes such as a `falkon` tmux window
-  directly to the shell window instead of requiring a generated proxy tab, hide
-  pane-bound GUI windows again when a normal tmux tab is selected, preserve the
-  focused pane-bound GUI across bounds refreshes, prune stale proxy tabs for
-  dead shell window IDs, select the new proxy tab when a freshly mapped GUI app
-  is already focused, and suppress no-op pane sync text in hook output. The rebuilt
-  `engineos-shell` and `engineos-tools` packages were reinstalled,
-  `engineos-dev-shell.service` was restarted, and live Qt/Falkon proxy
-  focus/bind was proven with window bounds written under
-  `/run/user/1000/engineos/window-bounds/`. A follow-up fix prevents the
-  tmux GUI window-sync daemon from recovering the primary terminal from
-  unbound panes and skips unchanged pane-bound window relayouts, avoiding
-  periodic focus steals from the secondary terminal and slow redraw churn when
-  switching Qt/Falkon-style GUI panes. A shell-side follow-up keeps hidden
-  pane-bound GUI scene nodes render-enabled under the terminal so Qt/Falkon
-  clients stay warm between tmux proxy selections instead of being cold-enabled
-  on focus. The EngineOS command-surface hardening is deployed through
+- Source tree work now replaces tmux-mirrored GUI proxy tracking with the v1
+  tmux pane bridge: `eos-app pane launch -- COMMAND` registers a tmux pane
+  launch token with `engineos-shell`, shell state owns `pane_bindings`,
+  generic GUI clients are laid out as `tmux-pane-gui`, and
+  `engineos-tmux-pane-bridge` reports focus and geometry from tmux hooks
+  without proxy tabs or a polling daemon. Cube/engine pane launches still use
+  the existing `launch-bounds/*.env` path. This source change still needs the
+  package reinstall/restart loop and live Falkon pane proof before it replaces
+  the currently installed proxy-window behavior on bare metal. The EngineOS
+  command-surface hardening is deployed through
   `engineos-tools 0.1.0-20`: `eos-source-test` clears installed-session
   contamination, `eos-proof` fails closed on required evidence, repeatable
   package selection is normalized through `eos-ci local`, and

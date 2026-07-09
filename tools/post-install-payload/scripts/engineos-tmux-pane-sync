@@ -1,23 +1,25 @@
 #!/usr/bin/env bash
 set -u
 
-log_warning() {
+log_event() {
   local state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/engineos"
   mkdir -p "$state_dir" 2>/dev/null || return 0
-  printf '%s tmux-warning %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$state_dir/tmux.log" 2>/dev/null || true
+  printf '%s pane-bridge deprecated-helper=engineos-tmux-pane-sync args=%q\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$state_dir/tmux.log" 2>/dev/null || true
 }
 
-if ! command -v eos-app >/dev/null 2>&1; then
+log_event "$*"
+
+if ! command -v engineos-tmux-pane-bridge >/dev/null 2>&1; then
   exit 0
 fi
 
-output="$(eos-app pane sync "$@" 2>&1)"
-rc=$?
-if [[ "$rc" -ne 0 ]]; then
-  log_warning "eos-app pane sync $* failed status=$rc"
-  if [[ -n "$output" ]]; then
-    log_warning "$output"
-  fi
+if [[ "${1:-}" == "--all" || "${1:-}" == "-a" ]]; then
+  exec engineos-tmux-pane-bridge geometry --all-visible
 fi
 
-exit 0
+if [[ -n "${TMUX_PANE:-}" ]]; then
+  exec engineos-tmux-pane-bridge geometry --pane "$TMUX_PANE"
+fi
+
+exec engineos-tmux-pane-bridge geometry --all-visible

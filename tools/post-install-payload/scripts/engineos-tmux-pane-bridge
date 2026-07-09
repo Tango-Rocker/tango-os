@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+set -u
+
+log_event() {
+  local state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/engineos"
+  mkdir -p "$state_dir" 2>/dev/null || return 0
+  printf '%s pane-bridge %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$state_dir/tmux.log" 2>/dev/null || true
+}
+
+usage() {
+  cat <<'HELP'
+Usage: engineos-tmux-pane-bridge focus [--pane TMUX_PANE]
+       engineos-tmux-pane-bridge geometry [--pane TMUX_PANE|--all-visible]
+       engineos-tmux-pane-bridge sync
+
+Report tmux pane focus and geometry to engineos-shell through eos-app pane IPC.
+HELP
+}
+
+have_cmd() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+eos_app_cmd() {
+  if have_cmd eos-app; then
+    printf 'eos-app\n'
+    return 0
+  fi
+  log_event "eos-app unavailable"
+  return 1
+}
+
+current_pane() {
+  if [[ -n "${TMUX_PANE:-}" ]]; then
+    printf '%s\n' "$TMUX_PANE"
+    return 0
+  fi
+  tmux display-message -p '#{pane_id}' 2>/dev/null
+}
+
+visible_panes() {
+  local listed=false
+  while IFS=$'\t' read -r pane visible; do
+    [[ -n "$pane" ]] || continue
+    listed=true
+    [[ "$visible" == "0" ]] && continue
+    printf '%s\n' "$pane"
+  done < <(tmux list-panes -a -F '#{pane_id}	#{pane_visible}' 2>/dev/null || true)
+
+  if [[ "$listed" == false ]]; then
+    tmux list-panes -a -F '#{pane_id}' 2>/dev/null || true
+  fi
+}
+
+bridge_focus() {
+  local pane="${TMUX_PANE:-}"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --pane)
+        shift
+        [[ $# -gt 0 ]] || return 2
+        pane="$1"
+        ;;
+      help|--help|-h)
+        usage
+        return 0
+        ;;
+      *)
+        log_event "focus unknown-option=$1"
+        return 2
+        ;;
+    esac
+    shift
+  done
+  if [[ -z "$pane" ]]; then
+    pane="$(current_pane || true)"
+  fi
+  [[ -n "$pane" ]] || return 0
+  local eos_app
+  eos_app="$(eos_app_cmd)" || return 0
+  if ! TMUX_PANE="$pane" "$eos_app" pane focus --pane "$pane" >/dev/null 2>&1; then
+    log_event "focus failed pane=$pane"
+    return 1
+  fi
+}
+
+bridge_geometry_one() {
+  local pane="$1"
+  local eos_app
+  eos_app="$(eos_app_cmd)" || return 0
+  if ! TMUX_PANE="$pane" "$eos_app" pane geometry --pane "$pane" >/dev/null 2>&1; then
+    log_event "geometry failed pane=$pane"
+    return 1
+  fi
+}
+
+bridge_sync_panel_bounds() {
+  local eos_app
+  eos_app="$(eos_app_cmd)" || return 0
+  "$eos_app" pane sync --all >/dev/null 2>&1 || true
+}
+
+bridge_geometry() {
+  local all_visible=false
+  local pane="${TMUX_PANE:-}"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --all-visible|--all)
+        all_visible=true
+        ;;
+      --pane)
+        shift
+        [[ $# -gt 0 ]] || return 2
+        pane="$1"
+        ;;
+      help|--help|-h)
+        usage
+        return 0
+        ;;
+      *)
+        log_event "geometry unknown-option=$1"
+        return 2
+        ;;
+    esac
+    shift
+  done
+
+  local failed=0
+  if [[ "$all_visible" == true ]]; then
+    local visible_pane
+    while IFS= read -r visible_pane; do
+      [[ -n "$visible_pane" ]] || continue
+      bridge_geometry_one "$visible_pane" || failed=$((failed + 1))
+    done < <(visible_panes)
+  else
+    if [[ -z "$pane" ]]; then
+      pane="$(current_pane || true)"
+    fi
+    [[ -n "$pane" ]] || return 0
+    bridge_geometry_one "$pane" || failed=$((failed + 1))
+  fi
+
+  bridge_sync_panel_bounds
+  (( failed == 0 ))
+}
+
+bridge_sync() {
+  bridge_geometry --all-visible || true
+  bridge_focus || true
+}
+
+if ! have_cmd tmux; then
+  exit 0
+fi
+
+action="${1:-sync}"
+shift || true
+case "$action" in
+  focus)
+    bridge_focus "$@"
+    ;;
+  geometry)
+    bridge_geometry "$@"
+    ;;
+  sync)
+    bridge_sync "$@"
+    ;;
+  help|--help|-h)
+    usage
+    ;;
+  *)
+    log_event "unknown action=$action"
+    usage >&2
+    exit 2
+    ;;
+esac
