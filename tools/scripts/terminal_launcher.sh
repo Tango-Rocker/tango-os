@@ -279,7 +279,7 @@ if terminal_cmd="$(select_terminal)"; then
 
   if [[ -n "${ENGINEOS_TERMINAL_SESSION_CMD:-}" ]]; then
     log_line "session command=$ENGINEOS_TERMINAL_SESSION_CMD"
-    exec "$terminal_cmd" "${TERMINAL_ARGS[@]}" -- zsh -lc "exec $ENGINEOS_TERMINAL_SESSION_CMD"
+    exec "$terminal_cmd" "${TERMINAL_ARGS[@]}" -- zsh -lc "unset TMUX TMUX_PANE; $ENGINEOS_TERMINAL_SESSION_CMD"
   fi
 
   exec "$terminal_cmd" "${TERMINAL_ARGS[@]}"

@@ -6,7 +6,7 @@ Codex CLI, tmux, Docker, and the EngineOS command surface.
 Default workflow:
 
 1. Work from the live source checkout on bare metal.
-2. Use `tmux new -A -s engineos` for persistent terminal work.
+2. Use `engineos-tmux-attach-primary` for persistent terminal work.
 3. Use `eos-doctor`, `eos-source-test agent`,
    `eos-validate boot --bare-metal`, and focused `eos-source-test <scope>`
    checks before broad rebuilds.

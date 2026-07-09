@@ -16,7 +16,7 @@ Environment=ENGINEOS_LOG_DIR=/var/log/engineos
 Environment=XDG_SESSION_TYPE=wayland
 Environment=ENGINEOS_TERMINAL_REQUIRE_WAYLAND=true
 Environment=ENGINEOS_SHELL_BOOTSTRAP=terminal
-Environment="ENGINEOS_TERMINAL_SESSION_CMD=tmux new -A -s engineos"
+Environment="ENGINEOS_TERMINAL_SESSION_CMD=engineos-tmux-attach-primary"
 ExecStart=/usr/local/bin/engineos-dev-shell-start
 Restart=on-failure
 RestartSec=3

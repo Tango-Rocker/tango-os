@@ -349,7 +349,8 @@ proc_uid_matches() {
   local status_file="$PROC_DIR/$pid/status"
   local uid
   [[ -r "$status_file" ]] || return 1
-  uid="$(awk '/^Uid:/ { print $2; exit }' "$status_file")"
+  uid="$(awk '/^Uid:/ { print $2; exit }' "$status_file" 2>/dev/null || true)"
+  [[ -n "$uid" ]] || return 1
   [[ "$uid" == "$(id -u)" ]]
 }
 
@@ -498,7 +499,7 @@ run_refresh_user() {
     printf '  result:     failed reason=install-tmux-config-failed\n'
     return 1
   fi
-  for helper in engineos-tmux-pane-bridge engineos-tmux-pane-sync engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
+  for helper in engineos-tmux-attach-primary engineos-tmux-pane-bridge engineos-tmux-pane-sync engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
     if ! install_helper_file "$PAYLOAD_DIR/scripts/$helper" "$TMUX_HELPER_DIR/$helper" "$dry_run"; then
       printf '  result:     failed reason=install-helper-failed helper=%s\n' "$helper"
       return 1

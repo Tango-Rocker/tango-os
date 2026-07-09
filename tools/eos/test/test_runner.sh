@@ -1043,7 +1043,7 @@ FAKE
     "$SCRIPT_DIR/shell_runner.sh" restart-live --dry-run >"$restart_out"
   grep -F 'old_pids:   100' "$restart_out" >/dev/null ||
     die "restart-live dry-run did not report old shell pid"
-  if grep -F '101' "$restart_out" >/dev/null; then
+  if grep -E '^  old_pids:.*(^|[[:space:]])101($|[[:space:]])' "$restart_out" >/dev/null; then
     die "restart-live dry-run matched shell text instead of the engineos-shell process"
   fi
   grep -F 'would_verify: new same-user engineos-shell pid' "$restart_out" >/dev/null ||
@@ -2769,6 +2769,7 @@ run_terminal() {
   local fake_bin="$tmp_dir/bin"
   local log_dir="$tmp_dir/logs"
   local launched="$tmp_dir/launched.txt"
+  local tmux_log="$tmp_dir/tmux.log"
   local out="$tmp_dir/out.txt"
 
   cleanup_terminal() {
@@ -2785,8 +2786,32 @@ FAKE
 #!/usr/bin/env bash
 printf 'foot %s\n' "$*" >"$ENGINEOS_FAKE_TERMINAL_LAUNCHED"
 FAKE
+  cat >"$fake_bin/tmux" <<'FAKE'
+#!/usr/bin/env bash
+printf 'tmux %s\n' "$*" >>"$ENGINEOS_FAKE_TMUX_LOG"
+case "$1" in
+  has-session)
+    exit 1
+    ;;
+  list-sessions)
+    printf 'engineos-side\t1\t200\n'
+    printf '2\t1\t100\n'
+    ;;
+  attach-session|new-session)
+    exit 0
+    ;;
+esac
+exit 1
+FAKE
   chmod +x "$fake_bin/alacritty"
   chmod +x "$fake_bin/foot"
+  chmod +x "$fake_bin/tmux"
+
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_FAKE_TMUX_LOG="$tmux_log" \
+    "$ROOT/tools/post-install-payload/scripts/engineos-tmux-attach-primary"
+  grep -F 'tmux attach-session -t =2' "$tmux_log" >/dev/null ||
+    die "tmux primary attach helper did not skip engineos-side"
 
   PATH="$fake_bin:$PATH" \
     ENGINEOS_TERMINAL_CANDIDATES="missing-terminal alacritty" \
@@ -2813,10 +2838,10 @@ FAKE
     ENGINEOS_TERMINAL_CANDIDATES="foot" \
     ENGINEOS_TERMINAL_APP_ID="engineos-terminal" \
     ENGINEOS_TERMINAL_TITLE="EngineOS Terminal" \
-    ENGINEOS_TERMINAL_SESSION_CMD="tmux new -A -s engineos" \
+    ENGINEOS_TERMINAL_SESSION_CMD="engineos-tmux-attach-primary" \
     WAYLAND_DISPLAY="engineos-test-wayland" \
     "$SCRIPT_DIR/terminal_launcher.sh" >/dev/null
-  grep -F 'foot --override csd.preferred=none --override csd.size=0 --app-id engineos-terminal --title EngineOS Terminal -- zsh -lc exec tmux new -A -s engineos' "$launched" >/dev/null ||
+  grep -F 'foot --override csd.preferred=none --override csd.size=0 --app-id engineos-terminal --title EngineOS Terminal -- zsh -lc unset TMUX TMUX_PANE; engineos-tmux-attach-primary' "$launched" >/dev/null ||
     die "terminal launcher did not disable foot titlebar decorations"
 
   PATH="$fake_bin:$PATH" \
@@ -2825,12 +2850,12 @@ FAKE
     ENGINEOS_TERMINAL_CANDIDATES="alacritty" \
     ENGINEOS_TERMINAL_APP_ID="engineos-terminal-secondary" \
     ENGINEOS_TERMINAL_TITLE="EngineOS Side" \
-    ENGINEOS_TERMINAL_SESSION_CMD="tmux new -A -s engineos" \
+    ENGINEOS_TERMINAL_SESSION_CMD="tmux new -A -s engineos-side" \
     WAYLAND_DISPLAY="engineos-test-wayland" \
     "$SCRIPT_DIR/terminal_launcher.sh" >/dev/null
-  grep -F 'alacritty --class engineos-terminal-secondary --title EngineOS Side -- zsh -lc exec tmux new -A -s engineos' "$launched" >/dev/null ||
+  grep -F 'alacritty --class engineos-terminal-secondary --title EngineOS Side -- zsh -lc unset TMUX TMUX_PANE; tmux new -A -s engineos-side' "$launched" >/dev/null ||
     die "terminal launcher did not start named tmux session through zsh"
-  grep -F 'session command=tmux new -A -s engineos' "$log_dir/terminal.log" >/dev/null ||
+  grep -F 'session command=tmux new -A -s engineos-side' "$log_dir/terminal.log" >/dev/null ||
     die "terminal launcher did not log tmux session command"
 
   if env -u WAYLAND_DISPLAY -u DISPLAY \
@@ -3589,7 +3614,7 @@ FAKE
   } >"$shell_launch_logs/shell.log"
   {
     printf '[2026-01-01T00:00:03Z] terminal launch owner=engineos-shell display=wayland-1\n'
-    printf '[2026-01-01T00:00:04Z] session command=tmux new -A -s engineos\n'
+    printf '[2026-01-01T00:00:04Z] session command=engineos-tmux-attach-primary\n'
   } >"$shell_launch_logs/terminal.log"
   if PATH="$fake_bin:$PATH" \
       ENGINEOS_LOG_DIR="$shell_launch_logs" \
@@ -3878,7 +3903,7 @@ run_post_first_deploy() {
     die "post-first-deploy zsh config does not use packaged oh-my-zsh"
   grep -F 'zsh-autosuggestions.zsh' "$payload_dir/assets/zshrc" >/dev/null ||
     die "post-first-deploy zsh config does not source packaged plugins"
-  grep -F 'tmux new-session -A -s engineos' "$payload_dir/assets/zprofile" >/dev/null ||
+  grep -F 'engineos-tmux-attach-primary' "$payload_dir/assets/zprofile" >/dev/null ||
     die "post-first-deploy zprofile does not auto-attach tmux"
   grep -F 'tools/scripts/update_check.sh" --init' "$payload_dir/assets/zprofile" >/dev/null ||
     die "post-first-deploy zprofile does not run source update init check"
@@ -3907,13 +3932,15 @@ run_post_first_deploy() {
     die "post-first-deploy dev shell start does not clear stale Wayland sockets"
   grep -F 'engineos-tmux-pane-bridge' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not install tmux pane bridge helper"
+  grep -F 'engineos-tmux-attach-primary' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not install tmux primary attach helper"
   grep -F 'engineos-tmux-window-sync' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not install deprecated tmux GUI helper wrappers"
   [[ -f "$payload_dir/assets/systemd/engineos-dev-shell.service" ]] ||
     die "post-first-deploy payload missing dev shell service"
   grep -F 'ENGINEOS_TERMINAL_REQUIRE_WAYLAND=true' "$payload_dir/assets/systemd/engineos-dev-shell.service" >/dev/null ||
     die "post-first-deploy dev shell service does not require Wayland terminal ownership"
-  grep -F 'ENGINEOS_TERMINAL_SESSION_CMD=tmux new -A -s engineos' "$payload_dir/assets/systemd/engineos-dev-shell.service" >/dev/null ||
+  grep -F 'ENGINEOS_TERMINAL_SESSION_CMD=engineos-tmux-attach-primary' "$payload_dir/assets/systemd/engineos-dev-shell.service" >/dev/null ||
     die "post-first-deploy dev shell service does not launch tmux"
   grep -F 'engineos-shell' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not request engineos-shell"
@@ -4121,7 +4148,7 @@ run_boot() {
     printf 'ENGINEOS_CUBE_CMD="eos-app launch cube"\n'
     printf 'ENGINEOS_ENGINE_CMD="eos-app launch quake"\n'
     printf 'ENGINEOS_RUNTIME_RECOVERY_TTY=tty2\n'
-    printf 'ENGINEOS_TERMINAL_SESSION_CMD="tmux new -A -s engineos"\n'
+    printf 'ENGINEOS_TERMINAL_SESSION_CMD="engineos-tmux-attach-primary"\n'
   } >"$runtime_conf"
   cat >"$apps_manifest" <<'EOF_MANIFEST'
 [apps.terminal]

@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+TMUX_CMD="${ENGINEOS_TMUX_CMD:-tmux}"
+FALLBACK_SESSION="${ENGINEOS_TMUX_FALLBACK_SESSION:-engineos}"
+PREFERRED_SESSION="${ENGINEOS_TMUX_PRIMARY_SESSION:-}"
+EXCLUDED_SESSIONS="${ENGINEOS_TMUX_ATTACH_EXCLUDE:-engineos-side}"
+
+usage() {
+  cat <<'HELP'
+Usage: engineos-tmux-attach-primary
+
+Attach the EngineOS primary terminal to an existing tmux session, preferring
+attached sessions that are not reserved for secondary terminal slots. If no
+usable session exists, create or attach the fallback "engineos" session.
+
+Environment:
+  ENGINEOS_TMUX_CMD               tmux binary to run
+  ENGINEOS_TMUX_PRIMARY_SESSION   preferred exact session name
+  ENGINEOS_TMUX_FALLBACK_SESSION  fallback session to create or attach
+  ENGINEOS_TMUX_ATTACH_EXCLUDE    space-separated session names to skip
+HELP
+}
+
+session_is_excluded() {
+  local session="$1"
+  local excluded
+  for excluded in $EXCLUDED_SESSIONS; do
+    [[ "$session" == "$excluded" ]] && return 0
+  done
+  return 1
+}
+
+session_exists() {
+  local session="$1"
+  [[ -n "$session" ]] || return 1
+  "$TMUX_CMD" has-session -t "=$session" >/dev/null 2>&1
+}
+
+select_session() {
+  local name attached activity
+  local best_attached=""
+  local best_attached_activity=-1
+  local best_any=""
+  local best_any_activity=-1
+
+  if session_exists "$PREFERRED_SESSION" && ! session_is_excluded "$PREFERRED_SESSION"; then
+    printf '%s\n' "$PREFERRED_SESSION"
+    return 0
+  fi
+
+  while IFS=$'\t' read -r name attached activity; do
+    [[ -n "$name" ]] || continue
+    session_is_excluded "$name" && continue
+    [[ "$activity" =~ ^[0-9]+$ ]] || activity=0
+    if [[ "$attached" =~ ^[0-9]+$ && "$attached" -gt 0 &&
+        "$activity" -gt "$best_attached_activity" ]]; then
+      best_attached="$name"
+      best_attached_activity="$activity"
+    fi
+    if [[ "$activity" -gt "$best_any_activity" ]]; then
+      best_any="$name"
+      best_any_activity="$activity"
+    fi
+  done < <("$TMUX_CMD" list-sessions -F '#{session_name}	#{session_attached}	#{session_activity}' 2>/dev/null || true)
+
+  if [[ -n "$best_attached" ]]; then
+    printf '%s\n' "$best_attached"
+    return 0
+  fi
+  if [[ -n "$best_any" ]]; then
+    printf '%s\n' "$best_any"
+    return 0
+  fi
+  return 1
+}
+
+case "${1:-}" in
+  help|--help|-h)
+    usage
+    exit 0
+    ;;
+  "")
+    ;;
+  *)
+    printf 'engineos-tmux-attach-primary: unknown option: %s\n' "$1" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+
+target="$(select_session || true)"
+if [[ -n "$target" ]]; then
+  exec "$TMUX_CMD" attach-session -t "=$target"
+fi
+
+exec "$TMUX_CMD" new-session -A -s "$FALLBACK_SESSION"

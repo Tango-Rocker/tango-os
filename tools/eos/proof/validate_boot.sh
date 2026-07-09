@@ -176,10 +176,10 @@ runtime_config_check() {
     fail "runtime recovery TTY has unexpected format: $recovery_tty"
   fi
 
-  if [[ "$terminal_session" == *"tmux new -A -s engineos"* ]]; then
-    ok "runtime terminal session starts tmux engineos"
+  if [[ "$terminal_session" == *"engineos-tmux-attach-primary"* ]]; then
+    ok "runtime terminal session attaches existing primary tmux or starts engineos"
   else
-    fail "runtime terminal session must start tmux engineos"
+    fail "runtime terminal session must use engineos-tmux-attach-primary"
   fi
 
   if [[ "$bootstrap" == "launchpad" ]]; then

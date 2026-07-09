@@ -514,7 +514,7 @@ proof_shell_launch() {
     run_step "shell binary dry-run" printf '%s\n' "would require: command -v engineos-shell"
     run_step "shell process dry-run" printf '%s\n' "would require: pgrep -a engineos-shell"
     run_step "shell log ownership dry-run" printf '%s\n' "would require: grep -E 'engineos-shell mode=|client launch environment|renderer diagnostics' $shell_log"
-    run_step "terminal/tmux ownership dry-run" printf '%s\n' "would require: grep -E 'owner=engineos-shell|session command=tmux new -A -s engineos' $terminal_log"
+    run_step "terminal/tmux ownership dry-run" printf '%s\n' "would require: grep -E 'owner=engineos-shell|session command=engineos-tmux-attach-primary' $terminal_log"
     run_step "app launch ownership dry-run" printf '%s\n' "would require: grep -F 'app launch app=terminal owner=engineos-shell' $app_log"
     run_step "renderer doctor dry-run" printf '%s\n' "would require: eos-doctor --vm"
     if [[ "$mode" == "bare-metal" ]]; then
@@ -549,7 +549,7 @@ proof_shell_launch() {
   [[ -r "$terminal_log" ]] || die "terminal log missing: $terminal_log"
   grep -F 'owner=engineos-shell' "$terminal_log" >/dev/null ||
     die "terminal log does not show shell ownership"
-  grep -F 'session command=tmux new -A -s engineos' "$terminal_log" >/dev/null ||
+  grep -F 'session command=engineos-tmux-attach-primary' "$terminal_log" >/dev/null ||
     die "terminal log does not show tmux session startup"
 
   [[ -r "$app_log" ]] || die "app log missing: $app_log"

@@ -61,16 +61,26 @@ These are historical proof artifacts only; they are not the active work path:
 - Agent-pack hygiene currently passes. Canonical ownership is
   `.agents/index.toml` plus `docs/agent-roles.md`; reusable workflows belong
   in skills; CLI work stays on direct `eos-*` commands.
-- Source tree work now replaces tmux-mirrored GUI proxy tracking with the v1
-  tmux pane bridge: `eos-app pane launch -- COMMAND` registers a tmux pane
-  launch token with `engineos-shell`, shell state owns `pane_bindings`,
-  generic GUI clients are laid out as `tmux-pane-gui`, and
+- Bare-metal EngineDev has the v1 tmux pane bridge deployed through the local
+  package reinstall/restart loop. `eos-app pane launch -- COMMAND` registers a
+  tmux pane launch token with `engineos-shell`, shell state owns
+  `pane_bindings`, generic GUI clients are laid out as `tmux-pane-gui`, and
   `engineos-tmux-pane-bridge` reports focus and geometry from tmux hooks
   without proxy tabs or a polling daemon. Cube/engine pane launches still use
-  the existing `launch-bounds/*.env` path. This source change still needs the
-  package reinstall/restart loop and live Falkon pane proof before it replaces
-  the currently installed proxy-window behavior on bare metal. The EngineOS
-  command-surface hardening is deployed through
+  the existing `launch-bounds/*.env` path. The 2026-07-09 deploy refreshed
+  `engineos-shell 0.1.0-16`, `engineos-tools 0.1.0-20`, and
+  `engineos-config 0.1.0-3`; force-installed the managed tmux config and
+  `/usr/local/bin/engineos-tmux-pane-bridge`; and left
+  `/run/user/1000/engineos/shell-state.json` JSON-readable with
+  `pane_bindings`. The same deploy added `engineos-tmux-attach-primary` for
+  shell-owned terminal startup, so restarts attach the existing primary tmux
+  session before creating the fallback `engineos` session. The live restart
+  proof replaced shell PID 125037 with 167915 and verified only the expected
+  sessions remain: primary client `tmux attach-session -t =2` on session `2`,
+  and secondary client `tmux new -A -s engineos-side` on `engineos-side`; no
+  detached `engineos` orphan session came back. `eos-app manifest validate`
+  passes after the restart. The live Falkon pane visual proof is still pending.
+  The EngineOS command-surface hardening is deployed through
   `engineos-tools 0.1.0-20`: `eos-source-test` clears installed-session
   contamination, `eos-proof` fails closed on required evidence, repeatable
   package selection is normalized through `eos-ci local`, and
@@ -84,7 +94,13 @@ These are historical proof artifacts only; they are not the active work path:
   Quake surface in Runtime.
 - Interactive Quake keyboard, mouse, and audible audio in a live Runtime
   console session with user assets.
-- Hardware GL shell startup proof on the AMD target.
+- Full `eos-proof shell-launch --bare-metal` still fails in the boot-validation
+  gate: `ttf-dejavu` is missing, `getty@tty2.service` is not enabled,
+  `engineos-recovery-help` is unavailable, `runtime-start.log` has no final
+  startup decision, and the broad renderer heuristic sees an llvmpipe device.
+  The restarted `engineos-shell` log itself shows AMD/radeonsi GLES2 rendering
+  on the current shell, so the remaining failure is the broader boot gate, not
+  the tmux pane bridge deploy path.
 - Manual TrenchBroom GUI compile/run click-through proof. Setup generation,
   open-file smoke, packaged launcher setup, the equivalent compile/launch
   command path, entity-browser placement, and OS-level Wayland drag-and-drop
@@ -101,9 +117,8 @@ Bare-metal/source-checkout loop:
 ```bash
 ./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-ci local --test agent --install --clean-generated --no-validate-repo
-eos-runtime shell refresh-user
-eos-runtime shell restart-live
 eos-app manifest validate
+eos-app pane launch -- falkon
 eos-proof shell-launch --bare-metal
 ```
 

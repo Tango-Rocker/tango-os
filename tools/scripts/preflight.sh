@@ -702,7 +702,7 @@ check_iso() {
     fi
     if grep -F 'systemctl enable engineos-dev-shell.service' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
         grep -F 'ENGINEOS_TERMINAL_REQUIRE_WAYLAND=true' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-dev-shell.service" >/dev/null &&
-        grep -F 'ENGINEOS_TERMINAL_SESSION_CMD=tmux new -A -s engineos' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-dev-shell.service" >/dev/null; then
+        grep -F 'ENGINEOS_TERMINAL_SESSION_CMD=engineos-tmux-attach-primary' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-dev-shell.service" >/dev/null; then
       ok "$profile_dir dev shell autostarts tmux on shell-owned Wayland"
     else
       fail "$profile_dir dev shell autostart is not configured for shell-owned tmux"

@@ -123,7 +123,7 @@ install_managed_zprofile() {
   local owner="${4:-}"
 
   if [[ -e "$dest" && "$FORCE_CONFIG" != true ]]; then
-    if grep -F 'tmux new-session -A -s engineos' "$dest" >/dev/null 2>&1; then
+    if grep -F 'engineos-tmux-attach-primary' "$dest" >/dev/null 2>&1; then
       log "keep existing current zprofile: $dest"
       return
     fi
@@ -263,7 +263,7 @@ configure_tmux() {
   else
     die "tmux pane bridge helper payload missing"
   fi
-  for helper in engineos-tmux-pane-sync engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
+  for helper in engineos-tmux-attach-primary engineos-tmux-pane-sync engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
     if [[ -f "$PAYLOAD/scripts/$helper" ]]; then
       as_root install -Dm0755 "$PAYLOAD/scripts/$helper" "/usr/local/bin/$helper"
       log "installed: /usr/local/bin/$helper"
