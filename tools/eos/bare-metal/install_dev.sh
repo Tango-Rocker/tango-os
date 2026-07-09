@@ -328,9 +328,11 @@ Profile: enginedev
 Run: eos-doctor --bare-metal
 Repo: /srv/engineos
 EOF
-  printf 'LANG=C.UTF-8\n' | sudo tee "$target/etc/locale.conf" >/dev/null
+  sudo sed -i 's/^#\(en_US\.UTF-8 UTF-8\)/\1/' "$target/etc/locale.gen"
+  sudo arch-chroot "$target" locale-gen
+  printf 'LANG=en_US.UTF-8\n' | sudo tee "$target/etc/locale.conf" >/dev/null
   printf 'KEYMAP=us\n' | sudo tee "$target/etc/vconsole.conf" >/dev/null
-  sudo ln -sf /usr/share/zoneinfo/UTC "$target/etc/localtime"
+  sudo ln -sf /usr/share/zoneinfo/America/Argentina/Buenos_Aires "$target/etc/localtime"
 }
 
 write_bootloader_entry() {

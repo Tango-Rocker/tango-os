@@ -16,8 +16,10 @@ install -d -m 0755 /etc/engineos
 chown root:wheel /var/log/engineos /var/lib/engineos
 chmod 2775 /var/log/engineos /var/lib/engineos
 
-ln -sf /usr/share/zoneinfo/UTC /etc/localtime
-printf 'LANG=C.UTF-8\n' >/etc/locale.conf
+sed -i 's/^#\(en_US\.UTF-8 UTF-8\)/\1/' /etc/locale.gen
+locale-gen
+ln -sf /usr/share/zoneinfo/America/Argentina/Buenos_Aires /etc/localtime
+printf 'LANG=en_US.UTF-8\n' >/etc/locale.conf
 printf 'KEYMAP=us\n' >/etc/vconsole.conf
 printf 'enginedev\n' >/etc/hostname
 systemctl mask systemd-firstboot.service

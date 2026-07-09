@@ -710,9 +710,11 @@ check_iso() {
     else
       fail "$profile_dir live ISO does not provide Codex on-demand setup"
     fi
-    if grep -F "printf 'LANG=C.UTF-8\\n' >/etc/locale.conf" "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
+    if grep -F "sed -i 's/^#\\(en_US\\.UTF-8 UTF-8\\)/\\1/' /etc/locale.gen" "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
+        grep -F 'locale-gen' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
+        grep -F "printf 'LANG=en_US.UTF-8\\n' >/etc/locale.conf" "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
         grep -F "printf 'KEYMAP=us\\n' >/etc/vconsole.conf" "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
-        grep -F 'ln -sf /usr/share/zoneinfo/UTC /etc/localtime' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
+        grep -F 'ln -sf /usr/share/zoneinfo/America/Argentina/Buenos_Aires /etc/localtime' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
         grep -F 'systemctl mask systemd-firstboot.service' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null; then
       ok "$profile_dir live boot skips interactive systemd-firstboot"
     else
@@ -802,9 +804,11 @@ check_iso() {
     else
       fail "$profile_dir live SSH password auth is not configured for engineos"
     fi
-    if grep -F "printf 'LANG=C.UTF-8\\n' >/etc/locale.conf" "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
+    if grep -F "sed -i 's/^#\\(en_US\\.UTF-8 UTF-8\\)/\\1/' /etc/locale.gen" "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
+        grep -F 'locale-gen' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
+        grep -F "printf 'LANG=en_US.UTF-8\\n' >/etc/locale.conf" "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
         grep -F "printf 'KEYMAP=us\\n' >/etc/vconsole.conf" "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
-        grep -F 'ln -sf /usr/share/zoneinfo/UTC /etc/localtime' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
+        grep -F 'ln -sf /usr/share/zoneinfo/America/Argentina/Buenos_Aires /etc/localtime' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
         grep -F 'systemctl mask systemd-firstboot.service' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null; then
       ok "$profile_dir live boot skips interactive systemd-firstboot"
     else
