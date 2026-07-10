@@ -670,7 +670,7 @@ FAKE
   "$SCRIPT_DIR/shell_runner.sh" refresh-user --force-config >"$refresh_out"
   [[ -f "$refresh_home/.tmux.conf" ]] ||
     die "refresh-user did not install tmux config"
-  for helper in engineos-tmux-pane-bridge engineos-tmux-pane-sync engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
+  for helper in engineos-tmux-pane-bridge engineos-tmux-pane-sync engineos-tmux-window-move engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
     [[ -x "$helper_dir/$helper" ]] ||
       die "refresh-user did not install helper: $helper"
   done
@@ -3476,10 +3476,14 @@ run_builder_doctor() {
 run_post_first_deploy() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-post-first-deploy-test-$$"
   local out="$tmp_dir/post-first-deploy.txt"
+  local move_socket="engineos-window-move-test-$$"
   local payload_dir
   payload_dir="$(post_install_payload_dir)"
 
   cleanup_post_first_deploy() {
+    if command -v tmux >/dev/null 2>&1; then
+      tmux -L "$move_socket" kill-server 2>/dev/null || true
+    fi
     rm -rf "$tmp_dir"
   }
   trap cleanup_post_first_deploy RETURN
@@ -3529,6 +3533,10 @@ run_post_first_deploy() {
     die "post-first-deploy tmux config does not wire pane focus hooks"
   grep -F 'engineos-tmux-pane-bridge geometry --all-visible' "$payload_dir/assets/tmux.conf" >/dev/null ||
     die "post-first-deploy tmux config does not wire pane geometry hooks"
+  grep -F '"Move to Session..."' "$payload_dir/assets/tmux.conf" >/dev/null ||
+    die "post-first-deploy tmux window menu does not offer session moves"
+  grep -F 'engineos-tmux-window-move choose' "$payload_dir/assets/tmux.conf" >/dev/null ||
+    die "post-first-deploy tmux window menu does not invoke the move helper"
   if grep -F 'engineos-tmux-window-sync --daemon' "$payload_dir/assets/tmux.conf" >/dev/null ||
       grep -F 'engineos-tmux-window-focus' "$payload_dir/assets/tmux.conf" >/dev/null; then
     die "post-first-deploy tmux config still wires legacy GUI proxy helpers"
@@ -3549,6 +3557,35 @@ run_post_first_deploy() {
     die "post-first-deploy payload missing tmux pane bridge helper"
   grep -F 'pane-bridge' "$payload_dir/scripts/engineos-tmux-pane-bridge" >/dev/null ||
     die "post-first-deploy tmux pane bridge helper does not log failures"
+  [[ -x "$payload_dir/scripts/engineos-tmux-window-move" ]] ||
+    die "post-first-deploy payload missing tmux window move helper"
+  grep -F 'move-window -s "$source_window_id" -t "$destination_session_id:"' \
+      "$payload_dir/scripts/engineos-tmux-window-move" >/dev/null ||
+    die "tmux window move helper does not move by stable window and session ids"
+  grep -F '"$BRIDGE_BIN" sync' "$payload_dir/scripts/engineos-tmux-window-move" >/dev/null ||
+    die "tmux window move helper does not resync EngineOS pane state"
+  if command -v tmux >/dev/null 2>&1; then
+    local move_tmux="$tmp_dir/tmux-move"
+    local source_window_id destination_session_id
+    cat >"$move_tmux" <<EOF
+#!/usr/bin/env bash
+exec tmux -L "$move_socket" "\$@"
+EOF
+    chmod +x "$move_tmux"
+    tmux -L "$move_socket" -f /dev/null new-session -d -s source -n moving
+    tmux -L "$move_socket" new-window -d -t source: -n keep
+    tmux -L "$move_socket" new-session -d -s destination -n existing
+    source_window_id="$(tmux -L "$move_socket" list-windows -t source \
+      -F '#{window_id} #{window_name}' | awk '$2 == "moving" { print $1 }')"
+    destination_session_id="$(tmux -L "$move_socket" display-message \
+      -p -t destination '#{session_id}')"
+    ENGINEOS_TMUX_CMD="$move_tmux" ENGINEOS_TMUX_PANE_BRIDGE=true \
+      "$payload_dir/scripts/engineos-tmux-window-move" \
+      apply "$source_window_id" "$destination_session_id"
+    [[ "$(tmux -L "$move_socket" display-message -p -t "$source_window_id" \
+      '#{session_name}')" == destination ]] ||
+      die "tmux window move helper did not move the selected window"
+  fi
   for helper in engineos-tmux-pane-sync engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
     [[ -x "$payload_dir/scripts/$helper" ]] ||
       die "post-first-deploy payload missing executable deprecated tmux GUI helper: $helper"
@@ -3596,6 +3633,8 @@ run_post_first_deploy() {
     die "post-first-deploy setup does not install tmux pane bridge helper"
   grep -F 'engineos-tmux-attach-primary' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not install tmux primary attach helper"
+  grep -F 'engineos-tmux-window-move' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not install tmux window move helper"
   grep -F 'engineos-tmux-window-sync' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not install deprecated tmux GUI helper wrappers"
   [[ -f "$payload_dir/assets/systemd/engineos-dev-shell.service" ]] ||

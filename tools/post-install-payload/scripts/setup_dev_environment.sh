@@ -266,7 +266,7 @@ configure_tmux() {
   else
     die "tmux pane bridge helper payload missing"
   fi
-  for helper in engineos-tmux-attach-primary engineos-tmux-pane-sync engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
+  for helper in engineos-tmux-attach-primary engineos-tmux-pane-sync engineos-tmux-window-move engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
     if [[ -f "$PAYLOAD/scripts/$helper" ]]; then
       as_root install -Dm0755 "$PAYLOAD/scripts/$helper" "/usr/local/bin/$helper"
       log "installed: /usr/local/bin/$helper"

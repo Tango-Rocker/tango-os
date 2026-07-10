@@ -499,7 +499,7 @@ run_refresh_user() {
     printf '  result:     failed reason=install-tmux-config-failed\n'
     return 1
   fi
-  for helper in engineos-tmux-attach-primary engineos-tmux-pane-bridge engineos-tmux-pane-sync engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
+  for helper in engineos-tmux-attach-primary engineos-tmux-pane-bridge engineos-tmux-pane-sync engineos-tmux-window-move engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
     if ! install_helper_file "$PAYLOAD_DIR/scripts/$helper" "$TMUX_HELPER_DIR/$helper" "$dry_run"; then
       printf '  result:     failed reason=install-helper-failed helper=%s\n' "$helper"
       return 1

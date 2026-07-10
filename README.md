@@ -47,6 +47,9 @@ The primary shell terminal reattaches the most relevant existing tmux session.
 The second output uses the reserved `engineos-side` session. Both clients share
 one tmux server; shell restarts do not create proxy GUI windows.
 
+Right-click a tmux window name and select `Move to Session...` to send that
+window to another session without recreating its panes or processes.
+
 MC image previews carry the invoking tmux pane and client tty. The shell draws
 them only on the registered terminal output; ambiguous pane ownership is an
 error instead of a guessed screen.

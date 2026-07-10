@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+TMUX_BIN="${ENGINEOS_TMUX_CMD:-tmux}"
+BRIDGE_BIN="${ENGINEOS_TMUX_PANE_BRIDGE:-engineos-tmux-pane-bridge}"
+SELF="${ENGINEOS_TMUX_WINDOW_MOVE_SELF:-engineos-tmux-window-move}"
+
+usage() {
+  cat <<'HELP'
+Usage: engineos-tmux-window-move choose WINDOW_ID PANE_ID [CLIENT_NAME]
+       engineos-tmux-window-move apply WINDOW_ID SESSION_ID [CLIENT_NAME]
+
+Open a destination-session menu for a tmux window or apply the selected move.
+HELP
+}
+
+log_event() {
+  local state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/engineos"
+  mkdir -p "$state_dir" 2>/dev/null || return 0
+  printf '%s window-move %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" \
+    >>"$state_dir/tmux.log" 2>/dev/null || true
+}
+
+notify_client() {
+  local client="$1"
+  local message
+  shift
+  message="$*"
+  message="${message//#/##}"
+  if [[ -n "$client" ]]; then
+    if "$TMUX_BIN" display-message -c "$client" -- "$message" 2>/dev/null; then
+      return 0
+    fi
+  elif "$TMUX_BIN" display-message -- "$message" 2>/dev/null; then
+    return 0
+  fi
+  printf 'engineos-tmux-window-move: %s\n' "$*" >&2
+  return 0
+}
+
+format_literal() {
+  local value="$1"
+  printf '%s\n' "${value//#/##}"
+}
+
+window_info() {
+  local window_id="$1"
+  "$TMUX_BIN" display-message -p -t "$window_id" \
+    $'#{window_id}\t#{session_id}\t#{session_name}\t#{window_name}\t#{pane_id}'
+}
+
+choose_session() {
+  local window_id="$1"
+  local pane_id="$2"
+  local client="${3:-}"
+  local info
+  local source_window_id source_session_id source_session_name window_name active_pane_id
+  local destination_count=0
+  local session_id session_token session_name session_windows command
+  local menu_session_name menu_source_session_name menu_window_name
+  local menu_args=()
+
+  info="$(window_info "$window_id" 2>/dev/null || true)"
+  if [[ -z "$info" ]]; then
+    notify_client "$client" "Window $window_id no longer exists"
+    return 1
+  fi
+  IFS=$'\t' read -r source_window_id source_session_id source_session_name window_name active_pane_id <<<"$info"
+  [[ -n "$pane_id" ]] || pane_id="$active_pane_id"
+  menu_source_session_name="$(format_literal "$source_session_name")"
+  menu_window_name="$(format_literal "$window_name")"
+
+  menu_args=(display-menu)
+  if [[ -n "$client" ]]; then
+    menu_args+=(-c "$client")
+  fi
+  menu_args+=(
+    -t "$pane_id"
+    -T "Move ${menu_source_session_name}:${menu_window_name} to"
+    -x W
+    -y W
+  )
+
+  while IFS=$'\t' read -r session_id session_name session_windows; do
+    [[ -n "$session_id" ]] || continue
+    [[ "$session_id" != "$source_session_id" ]] || continue
+    destination_count=$((destination_count + 1))
+    session_token="${session_id#\$}"
+    menu_session_name="$(format_literal "$session_name")"
+    command="run-shell -b '$SELF apply $source_window_id $session_token $client'"
+    menu_args+=("Session: $menu_session_name ($session_windows windows)" "" "$command")
+  done < <("$TMUX_BIN" list-sessions -F $'#{session_id}\t#{session_name}\t#{session_windows}')
+
+  if [[ "$destination_count" -eq 0 ]]; then
+    notify_client "$client" "No other tmux session is available"
+    return 0
+  fi
+
+  "$TMUX_BIN" "${menu_args[@]}"
+}
+
+apply_move() {
+  local window_id="$1"
+  local destination_session_arg="$2"
+  local destination_session_id
+  local client="${3:-}"
+  local source_info destination_info
+  local source_window_id source_session_id source_session_name window_name source_pane_id
+  local destination_name
+
+  if [[ "$destination_session_arg" =~ ^[0-9]+$ ]]; then
+    destination_session_id="\$$destination_session_arg"
+  elif [[ "$destination_session_arg" =~ ^\$[0-9]+$ ]]; then
+    destination_session_id="$destination_session_arg"
+  else
+    notify_client "$client" "Invalid destination session ID"
+    return 2
+  fi
+
+  source_info="$(window_info "$window_id" 2>/dev/null || true)"
+  if [[ -z "$source_info" ]]; then
+    notify_client "$client" "Window $window_id no longer exists"
+    return 1
+  fi
+  IFS=$'\t' read -r source_window_id source_session_id source_session_name window_name source_pane_id <<<"$source_info"
+
+  destination_info="$("$TMUX_BIN" display-message -p -t "$destination_session_id" '#{session_name}' 2>/dev/null || true)"
+  if [[ -z "$destination_info" ]]; then
+    notify_client "$client" "Destination session no longer exists"
+    return 1
+  fi
+  destination_name="$destination_info"
+  if [[ "$destination_session_id" == "$source_session_id" ]]; then
+    notify_client "$client" "Window is already in session $destination_name"
+    return 1
+  fi
+
+  if ! "$TMUX_BIN" move-window -s "$source_window_id" -t "$destination_session_id:"; then
+    log_event "window=$source_window_id destination=$destination_session_id status=move-failed"
+    notify_client "$client" "Failed to move $window_name to $destination_name"
+    return 1
+  fi
+
+  if ! "$BRIDGE_BIN" sync; then
+    log_event "window=$source_window_id source=$source_session_id destination=$destination_session_id status=sync-failed"
+    notify_client "$client" "Moved $window_name to $destination_name; pane sync failed"
+    return 1
+  fi
+  log_event "window=$source_window_id source=$source_session_id destination=$destination_session_id status=ok"
+  notify_client "$client" "Moved $window_name to session $destination_name"
+}
+
+command="${1:-}"
+case "$command" in
+  choose)
+    [[ $# -ge 3 ]] || { usage >&2; exit 2; }
+    choose_session "$2" "$3" "${4:-}"
+    ;;
+  apply)
+    [[ $# -ge 3 ]] || { usage >&2; exit 2; }
+    apply_move "$2" "$3" "${4:-}"
+    ;;
+  help|--help|-h)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

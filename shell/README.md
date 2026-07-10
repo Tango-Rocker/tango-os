@@ -68,6 +68,11 @@ The primary terminal uses `engineos-tmux-attach-primary`, which reattaches an
 existing work session before creating the fallback `engineos` session. The
 secondary terminal uses `engineos-side`. Both clients share one tmux server.
 
+Right-clicking a window name in the tmux status bar keeps the standard window
+menu and adds `Move to Session...`. The submenu lists every other session;
+selection moves the clicked stable window ID to the destination's next free
+index and runs a pane-bridge sync.
+
 ## Image Preview
 
 The shell listens on `$XDG_RUNTIME_DIR/engineos/preview.sock`, or the equivalent
