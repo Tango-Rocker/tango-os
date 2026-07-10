@@ -94,10 +94,12 @@ install_managed_tmux_config() {
 
   if [[ -e "$dest" && "$FORCE_CONFIG" != true ]]; then
     if grep -F '@engineos-plugins' "$dest" >/dev/null 2>&1; then
-      log "keep existing current tmux config: $dest"
-      return
-    fi
-    if grep -F 'TMUX_PLUGIN_MANAGER_PATH' "$dest" >/dev/null 2>&1 ||
+      if cmp -s "$src" "$dest"; then
+        log "keep existing current tmux config: $dest"
+        return
+      fi
+      log "update existing managed tmux config: $dest"
+    elif grep -F 'TMUX_PLUGIN_MANAGER_PATH' "$dest" >/dev/null 2>&1 ||
         grep -F "set -g @plugin 'tmux-plugins/" "$dest" >/dev/null 2>&1 ||
         grep -F '/usr/share/tmux/plugins/tpm/tpm' "$dest" >/dev/null 2>&1; then
       as_root cp "$dest" "$dest.engineos-legacy.bak"

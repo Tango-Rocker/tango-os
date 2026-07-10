@@ -686,6 +686,38 @@ FAKE
   grep -F 'result:     refreshed' "$refresh_out" >/dev/null ||
     die "refresh-user did not report full refresh result"
 
+  printf "set -g @engineos-plugins 'stale-managed-config'\n" >"$refresh_home/.tmux.conf"
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_USER_HOME="$refresh_home" \
+    ENGINEOS_TMUX_HELPER_DIR="$helper_dir" \
+    ENGINEOS_PROC_DIR="$proc_dir" \
+    ENGINEOS_KILL_CMD="$fake_bin/fake-kill" \
+    ENGINEOS_FAKE_KILL_LOG="$kill_log" \
+    ENGINEOS_FAKE_PROC_DIR="$proc_dir" \
+    ENGINEOS_TMUX_CMD="$fake_bin/tmux" \
+    ENGINEOS_FAKE_TMUX_LOG="$tmux_log" \
+    "$SCRIPT_DIR/shell_runner.sh" refresh-user >"$refresh_out"
+  grep -F 'Move to Session...' "$refresh_home/.tmux.conf" >/dev/null ||
+    die "refresh-user did not update a stale EngineOS-managed tmux config"
+  grep -F 'managed_update:' "$refresh_out" >/dev/null ||
+    die "refresh-user did not report the managed tmux config update"
+
+  printf '# user-owned tmux config\n' >"$refresh_home/.tmux.conf"
+  PATH="$fake_bin:$PATH" \
+    ENGINEOS_USER_HOME="$refresh_home" \
+    ENGINEOS_TMUX_HELPER_DIR="$helper_dir" \
+    ENGINEOS_PROC_DIR="$proc_dir" \
+    ENGINEOS_KILL_CMD="$fake_bin/fake-kill" \
+    ENGINEOS_FAKE_KILL_LOG="$kill_log" \
+    ENGINEOS_FAKE_PROC_DIR="$proc_dir" \
+    ENGINEOS_TMUX_CMD="$fake_bin/tmux" \
+    ENGINEOS_FAKE_TMUX_LOG="$tmux_log" \
+    "$SCRIPT_DIR/shell_runner.sh" refresh-user >"$refresh_out"
+  grep -F '# user-owned tmux config' "$refresh_home/.tmux.conf" >/dev/null ||
+    die "refresh-user replaced an unmanaged tmux config"
+  grep -F 'keep:' "$refresh_out" >/dev/null ||
+    die "refresh-user did not report preserving an unmanaged tmux config"
+
   local bridge_log="$tmp_dir/bridge-eos-app.log"
   : >"$bridge_log"
   cat >"$fake_bin/eos-app" <<'FAKE'

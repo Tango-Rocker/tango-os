@@ -458,6 +458,7 @@ run_refresh_user() {
   local refresh_result="refreshed"
   local refresh_reason="none"
   local tmux_conf
+  local tmux_force_config=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -495,7 +496,15 @@ run_refresh_user() {
   fi
 
   tmux_conf="$USER_HOME/.tmux.conf"
-  if ! install_user_file "$PAYLOAD_DIR/assets/tmux.conf" "$tmux_conf" 0644 "$dry_run" "$force_config"; then
+  if [[ "$force_config" == true ]]; then
+    tmux_force_config=true
+  elif [[ -e "$tmux_conf" ]] &&
+      grep -F '@engineos-plugins' "$tmux_conf" >/dev/null 2>&1 &&
+      ! cmp -s "$PAYLOAD_DIR/assets/tmux.conf" "$tmux_conf"; then
+    tmux_force_config=true
+    printf '  managed_update: %s\n' "$tmux_conf"
+  fi
+  if ! install_user_file "$PAYLOAD_DIR/assets/tmux.conf" "$tmux_conf" 0644 "$dry_run" "$tmux_force_config"; then
     printf '  result:     failed reason=install-tmux-config-failed\n'
     return 1
   fi
