@@ -28,6 +28,7 @@ libjpeg_dep = dependency('libjpeg', required: true)
 json_c_dep = dependency('json-c', required: true)
 freetype_dep = dependency('freetype2', required: true)
 fontconfig_dep = dependency('fontconfig', required: true)
+pixman_dep = dependency('pixman-1', required: true)
 mux_inc = include_directories('../mux/include')
 
 wayland_scanner = find_program(
@@ -70,6 +71,7 @@ executable(
     json_c_dep,
     freetype_dep,
     fontconfig_dep,
+    pixman_dep,
   ],
   install: true,
 )

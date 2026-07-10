@@ -38,9 +38,13 @@ SGR classifier with focused-view cell coordinates; the contract proves pane
 hit-testing, wheel-triggered copy mode, drag selection, authoritative border
 resize, ranged status selection, menu opening, and menu-command activation.
 The shell routes motion, buttons, modifiers, and vertical scroll through that
-boundary. Incremental GPU glyph-atlas updates, compound presentations, process
-scopes, leases, games/images, hardware acceptance, and legacy cutover remain
-open.
+boundary. The native terminal renderer now uses a colour-keyed GPU glyph atlas,
+double-buffered pane targets, clipped sparse-cell draws, wlroots scene damage,
+and a nonblank GPU readback. Its installed contract uses the local AMD render
+node through GLES2/radeonsi and distinguishes the explicit pixman smoke path
+from hardware rendering. Compound presentations, process scopes, multi-pane
+clipping/resize/zoom on direct KMS, leases, games/images, final hardware
+acceptance, and legacy cutover remain open.
 
 ## Workstream 1: Integrate The Protocol Into Engine Mux
 

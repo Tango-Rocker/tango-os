@@ -196,9 +196,14 @@ struct engineos_shell_server {
 	struct wlr_scene_tree *mux_pane_tree;
 	struct wlr_scene_buffer *mux_terminal_scene;
 	struct wlr_buffer *mux_terminal_buffer;
+	struct engineos_terminal_renderer *mux_terminal_renderer;
 	int mux_terminal_width;
 	int mux_terminal_height;
 	uint32_t mux_terminal_glyph_cells;
+	uint32_t mux_terminal_atlas_entries;
+	uint32_t mux_terminal_damaged_cells;
+	uint32_t mux_terminal_nonblank_pixels;
+	uint64_t mux_terminal_frame;
 	uint32_t mux_pointer_button;
 	uint32_t mux_pointer_x;
 	uint32_t mux_pointer_y;
@@ -2331,13 +2336,24 @@ static void reset_image_surface(struct engineos_preview_surface *surface) {
 
 static bool setup_native_terminal_scene(struct engineos_shell_server *server) {
 	char error[256] = {0};
-	server->mux_terminal_buffer = engineos_terminal_render(&server->mux_client,
-		&server->mux_terminal_width, &server->mux_terminal_height,
-		&server->mux_terminal_glyph_cells, error, sizeof(error));
-	if (server->mux_terminal_buffer == NULL) {
+	server->mux_terminal_renderer = engineos_terminal_renderer_create(
+		server->renderer, server->allocator, &server->mux_client,
+		error, sizeof(error));
+	if (server->mux_terminal_renderer == NULL) {
 		wlr_log(WLR_ERROR, "native terminal render failed: %s", error);
 		return false;
 	}
+	server->mux_terminal_buffer = engineos_terminal_renderer_buffer(
+		server->mux_terminal_renderer);
+	struct engineos_terminal_render_stats stats;
+	engineos_terminal_renderer_stats(server->mux_terminal_renderer, &stats);
+	server->mux_terminal_width = stats.width;
+	server->mux_terminal_height = stats.height;
+	server->mux_terminal_glyph_cells = stats.glyph_cells;
+	server->mux_terminal_atlas_entries = stats.atlas_entries;
+	server->mux_terminal_damaged_cells = stats.damaged_cells;
+	server->mux_terminal_nonblank_pixels = stats.nonblank_pixels;
+	server->mux_terminal_frame = stats.frame;
 	server->mux_pane_tree = wlr_scene_tree_create(&server->scene->tree);
 	if (server->mux_pane_tree == NULL) {
 		wlr_log(WLR_ERROR, "failed to create native mux pane scene tree");
@@ -2351,37 +2367,52 @@ static bool setup_native_terminal_scene(struct engineos_shell_server *server) {
 	}
 	wlr_scene_node_set_position(&server->mux_pane_tree->node, 0, 0);
 	wlr_log(WLR_INFO,
-		"native terminal scene pane=%%%u generation=%u grid_revision=%llu pixels=%dx%d glyph_cells=%u",
+		"native terminal scene pane=%%%u generation=%u grid_revision=%llu pixels=%dx%d glyph_cells=%u renderer=%s atlas_entries=%u damaged_cells=%u nonblank_pixels=%u frame=%llu",
 		server->mux_client.pane_id, server->mux_client.pane_generation,
 		(unsigned long long)server->mux_client.grid_revision,
 		server->mux_terminal_width, server->mux_terminal_height,
-		server->mux_terminal_glyph_cells);
+		server->mux_terminal_glyph_cells,
+		engineos_terminal_renderer_mode(server->mux_terminal_renderer),
+		server->mux_terminal_atlas_entries,
+		server->mux_terminal_damaged_cells,
+		server->mux_terminal_nonblank_pixels,
+		(unsigned long long)server->mux_terminal_frame);
+	engineos_mux_client_clear_render_damage(&server->mux_client);
 	return true;
 }
 
 static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
 		const char *reason) {
 	char error[256] = {0};
-	int width = 0, height = 0;
-	uint32_t glyph_cells = 0;
-	struct wlr_buffer *buffer = engineos_terminal_render(&server->mux_client,
-		&width, &height, &glyph_cells, error, sizeof(error));
-	if (buffer == NULL) {
+	if (!engineos_terminal_renderer_update(server->mux_terminal_renderer,
+			&server->mux_client, error, sizeof(error))) {
 		wlr_log(WLR_ERROR, "native terminal damage render failed: %s", error);
 		return false;
 	}
-	wlr_scene_buffer_set_buffer(server->mux_terminal_scene, buffer);
-	if (server->mux_terminal_buffer != NULL)
-		wlr_buffer_drop(server->mux_terminal_buffer);
-	server->mux_terminal_buffer = buffer;
-	server->mux_terminal_width = width;
-	server->mux_terminal_height = height;
-	server->mux_terminal_glyph_cells = glyph_cells;
+	server->mux_terminal_buffer = engineos_terminal_renderer_buffer(
+		server->mux_terminal_renderer);
+	wlr_scene_buffer_set_buffer_with_damage(server->mux_terminal_scene,
+		server->mux_terminal_buffer,
+		engineos_terminal_renderer_damage(server->mux_terminal_renderer));
+	struct engineos_terminal_render_stats stats;
+	engineos_terminal_renderer_stats(server->mux_terminal_renderer, &stats);
+	server->mux_terminal_width = stats.width;
+	server->mux_terminal_height = stats.height;
+	server->mux_terminal_glyph_cells = stats.glyph_cells;
+	server->mux_terminal_atlas_entries = stats.atlas_entries;
+	server->mux_terminal_damaged_cells = stats.damaged_cells;
+	server->mux_terminal_nonblank_pixels = stats.nonblank_pixels;
+	server->mux_terminal_frame = stats.frame;
+	engineos_mux_client_clear_render_damage(&server->mux_client);
 	wlr_log(WLR_DEBUG,
-		"native terminal refresh pane=%%%u grid_revision=%llu pixels=%dx%d glyph_cells=%u reason=%s",
+		"native terminal refresh pane=%%%u grid_revision=%llu pixels=%dx%d glyph_cells=%u renderer=%s atlas_entries=%u damaged_cells=%u nonblank_pixels=%u frame=%llu reason=%s",
 		server->mux_client.pane_id,
 		(unsigned long long)server->mux_client.grid_revision,
-		width, height, glyph_cells, reason);
+		stats.width, stats.height, stats.glyph_cells,
+		engineos_terminal_renderer_mode(server->mux_terminal_renderer),
+		stats.atlas_entries, stats.damaged_cells,
+		stats.nonblank_pixels,
+		(unsigned long long)stats.frame, reason);
 	schedule_outputs(server);
 	write_shell_state(server, reason);
 	return true;
@@ -3318,7 +3349,7 @@ static void write_shell_state(struct engineos_shell_server *server,
 	fprintf(file, ", \"session_id\": ");
 	json_write_string(file, server->mux_client.session_id);
 	fprintf(file,
-		", \"client_view_id\": %u, \"pane_id\": \"%%%u\", \"generation\": %u, \"grid\": {\"revision\": %llu, \"columns\": %u, \"rows\": %u, \"cursor_x\": %u, \"cursor_y\": %u, \"nonblank_cells\": %u, \"rendered\": %s, \"pixel_width\": %d, \"pixel_height\": %d, \"glyph_cells\": %u}, \"ui\": {\"columns\": %u, \"rows\": %u, \"status_y\": %d, \"status_rows\": %zu, \"mode\": ",
+		", \"client_view_id\": %u, \"pane_id\": \"%%%u\", \"generation\": %u, \"grid\": {\"revision\": %llu, \"columns\": %u, \"rows\": %u, \"cursor_x\": %u, \"cursor_y\": %u, \"nonblank_cells\": %u, \"rendered\": %s, \"pixel_width\": %d, \"pixel_height\": %d, \"glyph_cells\": %u, \"renderer\": ",
 		server->mux_client.primary_view_id,
 		server->mux_client.pane_id, server->mux_client.pane_generation,
 		(unsigned long long)server->mux_client.grid_revision,
@@ -3327,7 +3358,15 @@ static void write_shell_state(struct engineos_shell_server *server,
 		server->mux_client.grid_nonblank_cells,
 		server->mux_terminal_scene != NULL ? "true" : "false",
 		server->mux_terminal_width, server->mux_terminal_height,
-		server->mux_terminal_glyph_cells,
+		server->mux_terminal_glyph_cells);
+	json_write_string(file, server->mux_terminal_renderer != NULL ?
+		engineos_terminal_renderer_mode(server->mux_terminal_renderer) : NULL);
+	fprintf(file,
+		", \"atlas_entries\": %u, \"damaged_cells\": %u, \"nonblank_pixels\": %u, \"frame\": %llu}, \"ui\": {\"columns\": %u, \"rows\": %u, \"status_y\": %d, \"status_rows\": %zu, \"mode\": ",
+		server->mux_terminal_atlas_entries,
+		server->mux_terminal_damaged_cells,
+		server->mux_terminal_nonblank_pixels,
+		(unsigned long long)server->mux_terminal_frame,
 		server->mux_client.ui_columns, server->mux_client.ui_rows,
 		server->mux_client.ui_status_y,
 		server->mux_client.ui_status_row_count);
@@ -6383,10 +6422,9 @@ static void destroy_server(struct engineos_shell_server *server) {
 		server->mux_pane_tree = NULL;
 		server->mux_terminal_scene = NULL;
 	}
-	if (server->mux_terminal_buffer != NULL) {
-		wlr_buffer_drop(server->mux_terminal_buffer);
-		server->mux_terminal_buffer = NULL;
-	}
+	engineos_terminal_renderer_destroy(server->mux_terminal_renderer);
+	server->mux_terminal_renderer = NULL;
+	server->mux_terminal_buffer = NULL;
 	if (server->scene != NULL) {
 		wlr_scene_node_destroy(&server->scene->tree.node);
 		server->scene = NULL;

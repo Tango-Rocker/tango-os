@@ -100,7 +100,7 @@ These are historical proof artifacts only; they are not the active work path:
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration stage 1 is installed side by side as
   `engineos-mux 3.6b-14` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-28`, but native mode is not yet the live desktop
+  `engineos-shell 0.1.0-29`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
@@ -162,8 +162,19 @@ These are historical proof artifacts only; they are not the active work path:
   resizing, ranged status-window selection, status-menu opening, and menu-item
   command activation. The shell routes pointer motion, buttons, and vertical
   scroll through that same boundary. The contract passes against the exact
-  `engineos-mux 3.6b-14` and `engineos-shell 0.1.0-28` package binaries.
-  Incremental GPU glyph-atlas updates and hardware-renderer acceptance remain.
+  `engineos-mux 3.6b-14` and `engineos-shell 0.1.0-29` package binaries. The
+  native renderer now keeps FreeType-rasterized, colour-keyed glyphs in a GPU
+  texture atlas and draws them into double-buffered per-pane GPU targets.
+  Sparse tmux cell damage is retained through the mux client, expanded only
+  for wide-glyph and cursor neighbours, applied as clipped GPU draws, and
+  reported to the wlroots scene as pixel damage. Full UI transitions redraw
+  atomically. `shell-state.json` records renderer mode, atlas entries, damaged
+  cells, GPU-readback nonblank pixels, and frame count. The installed package
+  contract passes through the local AMD render node with GLES2, `radeonsi`, a
+  nonblank target readback, and a later frame touching fewer cells than the
+  full grid; pixman is explicitly labeled `cpu-pixman-smoke` rather than
+  silently accepted as hardware. Direct-KMS native-mode clipping across
+  multiple panes, resize, and zoom remains part of final hardware acceptance.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 

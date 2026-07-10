@@ -21,6 +21,11 @@ struct engineos_mux_ui_row {
 	size_t span_count;
 };
 
+struct engineos_mux_damage_cell {
+	uint32_t x;
+	uint32_t y;
+};
+
 struct engineos_mux_client {
 	int fd;
 	uint64_t revision;
@@ -36,6 +41,10 @@ struct engineos_mux_client {
 	uint32_t grid_nonblank_cells;
 	uint16_t grid_flags;
 	struct engine_mux_grid_cell *grid_cells;
+	struct engineos_mux_damage_cell *grid_damage_cells;
+	size_t grid_damage_count;
+	bool grid_full_damage;
+	bool ui_changed;
 	uint32_t ui_columns;
 	uint32_t ui_rows;
 	int32_t ui_status_y;
@@ -79,6 +88,7 @@ bool engineos_mux_client_send_mouse(struct engineos_mux_client *client,
 	char *error, size_t error_size);
 bool engineos_mux_client_request_ui(struct engineos_mux_client *client,
 	uint32_t view_id, bool *grid_changed, char *error, size_t error_size);
+void engineos_mux_client_clear_render_damage(struct engineos_mux_client *client);
 void engineos_mux_client_destroy(struct engineos_mux_client *client);
 
 #endif

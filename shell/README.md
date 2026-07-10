@@ -17,6 +17,12 @@ eos-test shell
 eos-test input
 ```
 
+On an AMD development host, exercise the native pane renderer itself with:
+
+```bash
+ENGINEOS_MUX_TEST_RENDERER=gles2 ENGINEOS_MUX_REQUIRE_RADEONSI=true eos-test mux
+```
+
 The live shell is managed by `engineos-dev-shell.service`. Use
 `eos-runtime shell refresh-user` after changing tmux/user helpers and
 `eos-runtime shell restart-live` for a verified PID-replacing restart.
@@ -30,10 +36,13 @@ receive a valid versioned snapshot before compositor setup. The default remains
 
 Native mode also selects the active tmux pane, validates and retains its full
 binary terminal grid, and records pane identity, grid revision, dimensions,
-cursor, and nonblank-cell evidence in `shell-state.json`. A pane-local scene
-subtree displays a CPU-rasterized FreeType terminal buffer through wlroots
-composition. Flow-controlled server invalidations drive sparse grid updates
-through the compositor event loop; no polling process is involved. Every
+cursor, and nonblank-cell evidence in `shell-state.json`. CPU-rasterized
+FreeType glyphs are cached in a colour-keyed GPU atlas and drawn into a
+double-buffered pane target. Flow-controlled server invalidations retain sparse
+cell coordinates through the mux client, update only affected glyph/cursor
+neighbours with clipped GPU draws, and pass matching pixel damage to the
+wlroots scene; no polling process is involved. Pixman is an explicit
+`cpu-pixman-smoke` path, while GLES2 and Vulkan use the atlas path. Every
 native output registers as a real tmux client, with one focused size owner, and
 keyboard events use tmux key names so prefixes and key tables remain
 authoritative in the server. Pointer clicks transfer focused size ownership;
@@ -44,8 +53,10 @@ observed mode and geometry are recorded in `shell-state.json`. Pointer motion,
 buttons, modifiers, and vertical scroll are mapped to focused-view terminal
 cells and sent to tmux for authoritative hit-testing; wheel input uses tmux's
 copy-mode bindings. Drag selection, border/status/menu click proofs,
-glyph-atlas caching, and live hardware acceptance remain before native mode
-becomes the default.
+status/menu command activation, AMD radeonsi atlas rendering, sparse cell
+damage, and nonblank GPU readback have contract coverage. Direct-KMS multi-pane
+clipping, resize/zoom, compound presentations, and final live hardware
+acceptance remain before native mode becomes the default.
 
 ## Surface Model
 

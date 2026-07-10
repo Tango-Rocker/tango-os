@@ -156,6 +156,7 @@ run_mux() {
 	local fixture="${TMPDIR:-/tmp}/engineos-mux-test-$$"
 	local mux_bin="${ENGINEOS_MUX_BIN:-}"
 	local shell_bin="${ENGINEOS_SHELL_BIN:-$shell_build_dir/engineos-shell}"
+	local shell_renderer="${ENGINEOS_MUX_TEST_RENDERER:-pixman}"
 	local mux_commit="0623d1e968423ad0c192e0d8debf1258671063d5"
 	local first_revision second_revision focus_revision pane_count pane_id
 	local grid_revision damage_revision
@@ -548,7 +549,7 @@ run_mux() {
 
 	XDG_RUNTIME_DIR="$fixture" ENGINEOS_STATE_DIR="$fixture/engineos" \
 		ENGINEOS_MUX_SOCKET="$fixture/engineos/mux.sock" \
-		WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=2 WLR_RENDERER=pixman \
+		WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=2 WLR_RENDERER="$shell_renderer" \
 		"$shell_bin" --headless --smoke-ms 15000 \
 		--bootstrap none --mux native >"$fixture/shell-native.log" 2>&1 &
 	shell_pid=$!
@@ -567,6 +568,23 @@ run_mux() {
 	jq -e '.mux.client_view_id == 1' \
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "shell state did not identify its graphical mux client view"
+	if [[ "$shell_renderer" == gles2 ]]; then
+		if [[ "${ENGINEOS_MUX_REQUIRE_RADEONSI:-false}" == true ]]; then
+			grep -F 'EGL driver name: radeonsi' "$fixture/shell-native.log" \
+				>/dev/null ||
+				die "native GLES2 mux proof did not use the AMD radeonsi driver"
+		fi
+		jq -e '.mux.grid.renderer == "gpu-glyph-atlas-gles2" and
+			.mux.grid.atlas_entries > 0 and .mux.grid.nonblank_pixels > 0 and
+			.mux.grid.frame >= 1' \
+			"$fixture/engineos/shell-state.json" >/dev/null ||
+			die "native shell did not initialize its GLES2 glyph atlas"
+	elif [[ "$shell_renderer" == pixman ]]; then
+		jq -e '.mux.grid.renderer == "cpu-pixman-smoke" and
+			.mux.grid.atlas_entries == 0' \
+			"$fixture/engineos/shell-state.json" >/dev/null ||
+			die "native shell did not identify its pixman smoke renderer"
+	fi
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		list-clients -F '#{client_name} #{client_flags}' \
 		>"$fixture/graphical-clients.txt"
@@ -667,6 +685,13 @@ run_mux() {
 	done
 	[[ "$updated_native_revision" -gt "$initial_native_revision" ]] ||
 		die "native shell did not consume event-driven grid damage"
+	if [[ "$shell_renderer" == gles2 ]]; then
+		jq -e '.mux.grid.damaged_cells > 0 and
+			.mux.grid.damaged_cells < (.mux.grid.columns * .mux.grid.rows) and
+			.mux.grid.atlas_entries > 0 and .mux.grid.frame > 1' \
+			"$fixture/engineos/shell-state.json" >/dev/null ||
+			die "GLES2 terminal renderer did not retain sparse cell damage"
+	fi
 	wait "$shell_pid" || die "engineos-shell native damage run failed"
 	shell_pid=""
 	if XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \

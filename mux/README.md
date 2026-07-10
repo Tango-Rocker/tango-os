@@ -51,5 +51,5 @@ meson compile -C build/mux
 ./tools/engineos/eos-test mux
 ```
 
-The next migration proof is incremental GPU glyph-atlas damage followed by the
-compound pane-presentation and process-scope boundary.
+The next migration proof is the compound pane-presentation and process-scope
+boundary, followed by direct-KMS multi-pane clipping and resize/zoom acceptance.

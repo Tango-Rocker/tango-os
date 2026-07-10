@@ -208,6 +208,10 @@ static bool request_grid(struct engineos_mux_client *client, char *error,
 	client->grid_rows = rows;
 	client->grid_cursor_x = ntohl(header.cursor_x);
 	client->grid_cursor_y = ntohl(header.cursor_y);
+	free(client->grid_damage_cells);
+	client->grid_damage_cells = NULL;
+	client->grid_damage_count = 0;
+	client->grid_full_damage = true;
 	update_nonblank_count(client);
 	return true;
 }
@@ -337,6 +341,17 @@ receive_again:
 		return false;
 	}
 	const unsigned char *cursor = packet + sizeof(frame) + sizeof(header);
+	struct engineos_mux_damage_cell *render_damage = NULL;
+	if (damage_count != 0) {
+		render_damage = realloc(client->grid_damage_cells,
+			(client->grid_damage_count + damage_count) * sizeof(*render_damage));
+		if (render_damage == NULL) {
+			free(packet);
+			snprintf(error, error_size, "out of memory");
+			return false;
+		}
+		client->grid_damage_cells = render_damage;
+	}
 	for (uint32_t index = 0; index < damage_count; index++) {
 		struct engine_mux_grid_damage_cell damage;
 		memcpy(&damage, cursor, sizeof(damage));
@@ -349,7 +364,10 @@ receive_again:
 			return false;
 		}
 		client->grid_cells[(size_t)y * columns + x] = damage.cell;
+		client->grid_damage_cells[client->grid_damage_count + index] =
+			(struct engineos_mux_damage_cell){.x = x, .y = y};
 	}
+	client->grid_damage_count += damage_count;
 	uint64_t old_revision = client->grid_revision;
 	client->grid_revision = be64_to_host(header.grid.grid_revision);
 	client->grid_flags = ntohs(header.grid.flags);
@@ -764,6 +782,7 @@ static bool parse_ui_model(struct engineos_mux_client *client,
 	client->ui_prompt_active = prompt_active;
 	client->ui_message_active = message_active;
 	client->ui_menu_active = menu_active;
+	client->ui_changed = true;
 	return true;
 
 invalid:
@@ -1070,6 +1089,14 @@ bool engineos_mux_client_request_ui(struct engineos_mux_client *client,
 	return result;
 }
 
+void engineos_mux_client_clear_render_damage(struct engineos_mux_client *client) {
+	free(client->grid_damage_cells);
+	client->grid_damage_cells = NULL;
+	client->grid_damage_count = 0;
+	client->grid_full_damage = false;
+	client->ui_changed = false;
+}
+
 void engineos_mux_client_destroy(struct engineos_mux_client *client) {
 	if (client->fd >= 0) {
 		close(client->fd);
@@ -1078,9 +1105,12 @@ void engineos_mux_client_destroy(struct engineos_mux_client *client) {
 	free(client->socket_path);
 	free(client->session_id);
 	free(client->grid_cells);
+	free(client->grid_damage_cells);
 	free_ui_rows(client->ui_status_rows, client->ui_status_row_count);
 	free_ui_rows(client->ui_menu_rows, client->ui_menu_row_count);
 	client->grid_cells = NULL;
+	client->grid_damage_cells = NULL;
+	client->grid_damage_count = 0;
 	client->ui_status_rows = NULL;
 	client->ui_status_row_count = 0;
 	client->ui_menu_rows = NULL;
