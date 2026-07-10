@@ -168,6 +168,8 @@ static int request_grid(int fd, uint32_t pane_id) {
 	json_object_object_add(root, "schema", json_object_new_string("engine-mux/grid-v1"));
 	json_object_object_add(root, "pane_id", json_object_new_int64(ntohl(header.pane_id)));
 	json_object_object_add(root, "generation", json_object_new_int64(ntohl(header.generation)));
+	json_object_object_add(root, "grid_revision",
+		json_object_new_int64((int64_t)be64_to_host(header.grid_revision)));
 	json_object_object_add(root, "columns", json_object_new_int64(columns));
 	json_object_object_add(root, "rows", json_object_new_int64(rows));
 	json_object_object_add(root, "cursor_x", json_object_new_int64(ntohl(header.cursor_x)));
@@ -222,8 +224,111 @@ static int request_grid(int fd, uint32_t pane_id) {
 	return 0;
 }
 
+static int request_damage(int fd, uint32_t pane_id, uint64_t grid_revision,
+		bool expect_stale) {
+	struct engine_mux_grid_damage_request request = {
+		.pane_id = htonl(pane_id),
+		.generation = htonl(1),
+		.grid_revision = host_to_be64(grid_revision),
+	};
+	struct engine_mux_frame_header frame = {
+		.magic = htonl(ENGINE_MUX_MAGIC),
+		.version = htons(ENGINE_MUX_PROTOCOL_VERSION),
+		.type = htons(ENGINE_MUX_GRID_DAMAGE_REQUEST),
+		.request_id = host_to_be64(4),
+		.payload_length = htonl(sizeof(request)),
+	};
+	struct iovec parts[] = {
+		{.iov_base = &frame, .iov_len = sizeof(frame)},
+		{.iov_base = &request, .iov_len = sizeof(request)},
+	};
+	struct msghdr message = {.msg_iov = parts, .msg_iovlen = 2};
+	if (sendmsg(fd, &message, MSG_NOSIGNAL) < 0) return -1;
+	size_t capacity = sizeof(frame) + ENGINE_MUX_MAX_PAYLOAD;
+	unsigned char *packet = malloc(capacity);
+	if (packet == NULL) return -1;
+	ssize_t count = recv(fd, packet, capacity, 0);
+	if (count < (ssize_t)sizeof(frame)) {
+		free(packet); errno = EPROTO; return -1;
+	}
+	memcpy(&frame, packet, sizeof(frame));
+	uint32_t payload_length = ntohl(frame.payload_length);
+	uint16_t response_type = ntohs(frame.type);
+	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
+			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
+			payload_length > ENGINE_MUX_MAX_PAYLOAD ||
+			sizeof(frame) + payload_length != (size_t)count) {
+		free(packet); errno = EPROTO; return -1;
+	}
+	if (response_type == ENGINE_MUX_ERROR) {
+		char *error_text = malloc((size_t)payload_length + 1);
+		if (error_text == NULL) { free(packet); return -1; }
+		memcpy(error_text, packet + sizeof(frame), payload_length);
+		error_text[payload_length] = '\0';
+		struct json_object *error = json_tokener_parse(error_text);
+		free(error_text);
+		free(packet);
+		if (error == NULL) { errno = EPROTO; return -1; }
+		struct json_object *code = NULL;
+		bool stale = json_object_object_get_ex(error, "code", &code) &&
+			strcmp(json_object_get_string(code), "grid-resync-required") == 0;
+		printf("%s\n", json_object_to_json_string_ext(error, JSON_C_TO_STRING_PRETTY));
+		json_object_put(error);
+		if (expect_stale && stale) return 0;
+		errno = ESTALE;
+		return -1;
+	}
+	if (expect_stale || response_type != ENGINE_MUX_GRID_DAMAGE ||
+			payload_length < sizeof(struct engine_mux_grid_damage_header)) {
+		free(packet); errno = EPROTO; return -1;
+	}
+	struct engine_mux_grid_damage_header header;
+	memcpy(&header, packet + sizeof(frame), sizeof(header));
+	uint32_t damage_count = ntohl(header.damage_count);
+	if (payload_length != sizeof(header) +
+			(size_t)damage_count * sizeof(struct engine_mux_grid_damage_cell)) {
+		free(packet); errno = EPROTO; return -1;
+	}
+	struct json_object *root = json_object_new_object();
+	struct json_object *cells = json_object_new_array();
+	json_object_object_add(root, "schema", json_object_new_string("engine-mux/grid-damage-v1"));
+	json_object_object_add(root, "pane_id", json_object_new_int64(ntohl(header.grid.pane_id)));
+	json_object_object_add(root, "generation", json_object_new_int64(ntohl(header.grid.generation)));
+	json_object_object_add(root, "grid_revision", json_object_new_int64(
+		(int64_t)be64_to_host(header.grid.grid_revision)));
+	json_object_object_add(root, "columns", json_object_new_int64(ntohl(header.grid.columns)));
+	json_object_object_add(root, "rows", json_object_new_int64(ntohl(header.grid.rows)));
+	json_object_object_add(root, "cursor_x", json_object_new_int64(ntohl(header.grid.cursor_x)));
+	json_object_object_add(root, "cursor_y", json_object_new_int64(ntohl(header.grid.cursor_y)));
+	json_object_object_add(root, "damage_count", json_object_new_int64(damage_count));
+	const unsigned char *damage_bytes = packet + sizeof(frame) + sizeof(header);
+	for (uint32_t index = 0; index < damage_count; index++) {
+		struct engine_mux_grid_damage_cell damage;
+		memcpy(&damage, damage_bytes, sizeof(damage));
+		damage_bytes += sizeof(damage);
+		if (damage.cell.text_length > ENGINE_MUX_GRID_CELL_TEXT_MAX) {
+			json_object_put(root); free(packet); errno = EPROTO; return -1;
+		}
+		struct json_object *item = json_object_new_object();
+		json_object_object_add(item, "x", json_object_new_int64(ntohl(damage.x)));
+		json_object_object_add(item, "y", json_object_new_int64(ntohl(damage.y)));
+		json_object_object_add(item, "text", json_object_new_string_len(
+			(const char *)damage.cell.text, damage.cell.text_length));
+		json_object_object_add(item, "attributes",
+			json_object_new_int(ntohs(damage.cell.attributes)));
+		json_object_object_add(item, "foreground",
+			json_object_new_int64((int32_t)ntohl(damage.cell.foreground)));
+		json_object_array_add(cells, item);
+	}
+	json_object_object_add(root, "cells", cells);
+	printf("%s\n", json_object_to_json_string_ext(root, JSON_C_TO_STRING_PRETTY));
+	json_object_put(root);
+	free(packet);
+	return 0;
+}
+
 static void usage(FILE *stream, const char *program) {
-	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID\n", program);
+	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|damage PANE_ID REVISION|stale-grid PANE_ID\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -247,8 +352,13 @@ int main(int argc, char **argv) {
 		return 2;
 	}
 	const char *command = argv[optind];
-	if ((strcmp(command, "grid") == 0 && optind + 2 != argc) ||
-			(strcmp(command, "grid") != 0 && optind + 1 != argc)) {
+	bool is_grid = strcmp(command, "grid") == 0;
+	bool is_damage = strcmp(command, "damage") == 0;
+	bool is_stale_grid = strcmp(command, "stale-grid") == 0;
+	if ((is_grid && optind + 2 != argc) ||
+			(is_damage && optind + 3 != argc) ||
+			(is_stale_grid && optind + 2 != argc) ||
+			(!is_grid && !is_damage && !is_stale_grid && optind + 1 != argc)) {
 		usage(stderr, argv[0]);
 		return 2;
 	}
@@ -266,13 +376,27 @@ int main(int argc, char **argv) {
 		free(owned_socket);
 		return 1;
 	}
-	if (strcmp(command, "grid") == 0) {
+	if (is_grid || is_damage || is_stale_grid) {
 		const char *pane_text = argv[optind + 1];
 		if (*pane_text == '%') pane_text++;
 		char *end = NULL;
 		unsigned long pane_id = strtoul(pane_text, &end, 10);
-		if (*pane_text == '\0' || *end != '\0' || pane_id > UINT32_MAX ||
-				request_grid(fd, (uint32_t)pane_id) != 0) {
+		uint64_t grid_revision = UINT64_MAX;
+		if (is_damage) {
+			char *revision_end = NULL;
+			grid_revision = strtoull(argv[optind + 2], &revision_end, 10);
+			if (*argv[optind + 2] == '\0' || *revision_end != '\0') {
+				close(fd); free(owned_socket); return 2;
+			}
+		}
+		if (*pane_text == '\0' || *end != '\0' || pane_id > UINT32_MAX) {
+			close(fd);
+			free(owned_socket);
+			return 2;
+		}
+		int grid_result = is_grid ? request_grid(fd, (uint32_t)pane_id) :
+			request_damage(fd, (uint32_t)pane_id, grid_revision, is_stale_grid);
+		if (grid_result != 0) {
 			fprintf(stderr, "engine-muxctl: grid request failed: %s\n", strerror(errno));
 			close(fd);
 			free(owned_socket);

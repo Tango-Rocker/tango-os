@@ -157,6 +157,7 @@ run_mux() {
 	local mux_bin="${ENGINEOS_MUX_BIN:-}"
 	local mux_commit="0623d1e968423ad0c192e0d8debf1258671063d5"
 	local first_revision second_revision focus_revision pane_count pane_id
+	local grid_revision damage_revision
 
 	if [[ -z "$mux_bin" ]]; then
 		mux_bin="$ROOT/artifacts/build/engineos-mux/engineos-mux/src/tmux-$mux_commit/tmux"
@@ -240,6 +241,28 @@ run_mux() {
 		.wide_cells >= 1 and ([.text_rows[] | contains("AR界é")] | any)' \
 		"$fixture/grid.json" >/dev/null ||
 		die "binary terminal grid did not preserve text, colour, and wide cells"
+	grid_revision="$(jq -er '.grid_revision' "$fixture/grid.json")"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -t "$pane_id" "printf DAMAGE" Enter
+	for _ in {1..100}; do
+		XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" damage \
+			"$pane_id" "$grid_revision" >"$fixture/damage.json"
+		if jq -e '.damage_count > 0' "$fixture/damage.json" >/dev/null; then
+			break
+		fi
+		grid_revision="$(jq -er '.grid_revision' "$fixture/damage.json")"
+		sleep 0.02
+	done
+	damage_revision="$(jq -er '.grid_revision' "$fixture/damage.json")"
+	[[ "$damage_revision" -gt 1 ]] ||
+		die "grid revision did not advance after terminal cell damage"
+	jq -e '.schema == "engine-mux/grid-damage-v1" and .damage_count > 0 and
+		(.damage_count < (.columns * .rows))' "$fixture/damage.json" >/dev/null ||
+		die "grid damage did not remain sparse"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" stale-grid \
+		"$pane_id" >"$fixture/stale-grid.json"
+	jq -e '.code == "grid-resync-required"' "$fixture/stale-grid.json" >/dev/null ||
+		die "stale grid revision did not require a complete resynchronization"
 	for index in {1..8}; do
 		XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot \
 			>"$fixture/concurrent-$index.json" &

@@ -37,6 +37,10 @@ The migration is side by side and disabled by default:
   combining data, width/padding, attributes, colours, underline colour,
   hyperlinks, cursor state, and alternate-screen state. The decoder contract
   proves ANSI colour plus wide and combining Unicode cells.
+- Each pane grid has an independent revision. A current revision receives only
+  changed cell coordinates plus updated screen/cursor metadata; stale revisions,
+  generation changes, resizes, and oversized damage require an explicit full
+  grid resynchronization.
 - Layout content changes advance the server revision. Mutation requests with a
   stale revision are rejected and direct the client to request a full snapshot.
 - `engineos-shell --mux native` (or `ENGINEOS_MUX_MODE=native`) requires a
@@ -44,15 +48,14 @@ The migration is side by side and disabled by default:
   not fall back to the bridge. The observed mode, socket, connection state, and
   mux revision are written to `shell-state.json`.
 
-The in-server frontend exposes `layout-snapshot` and `terminal-grid-v1`.
-Command execution, grid damage, scrollback, and graphical presentation
-ownership still return explicit unsupported errors.
+The in-server frontend exposes `layout-snapshot`, `terminal-grid-v1`, and
+revisioned grid damage. Command execution, scrollback, and graphical
+presentation ownership still return explicit unsupported errors.
 
 ## Required next proof
 
-Add per-pane grid revisions and compact damage frames, then render one
-terminal-only mux session in `engineos-shell` before adding app scopes or
-removing any bridge code.
+Export scrollback and copy-mode state, then render one terminal-only mux session
+in `engineos-shell` before adding app scopes or removing any bridge code.
 
 Later stages add compound presentations and `prefix + v`, dedicated transient
 app scopes, surface-to-scope binding, multiple output views and presentation

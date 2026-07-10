@@ -12,9 +12,11 @@ enum engine_mux_message_type {
 	ENGINE_MUX_SNAPSHOT_REQUEST = 2,
 	ENGINE_MUX_COMMAND_REQUEST = 3,
 	ENGINE_MUX_GRID_REQUEST = 4,
+	ENGINE_MUX_GRID_DAMAGE_REQUEST = 5,
 	ENGINE_MUX_SERVER_HELLO = 0x8001,
 	ENGINE_MUX_SNAPSHOT = 0x8002,
 	ENGINE_MUX_GRID_SNAPSHOT = 0x8003,
+	ENGINE_MUX_GRID_DAMAGE = 0x8004,
 	ENGINE_MUX_ERROR = 0xffff,
 };
 
@@ -35,11 +37,18 @@ struct engine_mux_grid_request {
 	uint32_t generation;
 } __attribute__((packed));
 
+struct engine_mux_grid_damage_request {
+	uint32_t pane_id;
+	uint32_t generation;
+	uint64_t grid_revision;
+} __attribute__((packed));
+
 struct engine_mux_grid_header {
 	uint16_t version;
 	uint16_t flags;
 	uint32_t pane_id;
 	uint32_t generation;
+	uint64_t grid_revision;
 	uint32_t columns;
 	uint32_t rows;
 	uint32_t cursor_x;
@@ -62,6 +71,17 @@ struct engine_mux_grid_cell {
 	uint32_t underline_colour;
 	uint32_t hyperlink;
 	uint8_t text[ENGINE_MUX_GRID_CELL_TEXT_MAX];
+} __attribute__((packed));
+
+struct engine_mux_grid_damage_header {
+	struct engine_mux_grid_header grid;
+	uint32_t damage_count;
+} __attribute__((packed));
+
+struct engine_mux_grid_damage_cell {
+	uint32_t x;
+	uint32_t y;
+	struct engine_mux_grid_cell cell;
 } __attribute__((packed));
 
 /* All integer fields are encoded in network byte order. */
