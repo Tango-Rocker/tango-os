@@ -158,6 +158,7 @@ run_mux() {
 	local mux_commit="0623d1e968423ad0c192e0d8debf1258671063d5"
 	local first_revision second_revision focus_revision pane_count pane_id
 	local grid_revision damage_revision
+	local history_rows history_start
 
 	if [[ -z "$mux_bin" ]]; then
 		mux_bin="$ROOT/artifacts/build/engineos-mux/engineos-mux/src/tmux-$mux_commit/tmux"
@@ -263,6 +264,36 @@ run_mux() {
 		"$pane_id" >"$fixture/stale-grid.json"
 	jq -e '.code == "grid-resync-required"' "$fixture/stale-grid.json" >/dev/null ||
 		die "stale grid revision did not require a complete resynchronization"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -t "$pane_id" \
+		"i=1; while [ \$i -le 80 ]; do printf 'HISTORY-%02d\\n' \$i; i=\$((i+1)); done" Enter
+	for _ in {1..100}; do
+		XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot \
+			>"$fixture/history-snapshot.json"
+		history_rows="$(jq -er --arg pane "$pane_id" \
+			'.panes[] | select(.pane_id == $pane) | .history_rows' \
+			"$fixture/history-snapshot.json")"
+		[[ "$history_rows" -ge 5 ]] && break
+		sleep 0.02
+	done
+	[[ "$history_rows" -ge 5 ]] || die "pane history did not reach scrollback"
+	history_start=$((history_rows - 5))
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" scrollback \
+		"$pane_id" "$history_start" 5 >"$fixture/scrollback.json"
+	jq -e '.schema == "engine-mux/scrollback-v1" and .total_rows >= 5 and
+		.row_count == 5 and ([.text_rows[] | contains("HISTORY-")] | any)' \
+		"$fixture/scrollback.json" >/dev/null ||
+		die "paged scrollback did not preserve pane history"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		copy-mode -t "$pane_id"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot \
+		>"$fixture/copy-mode.json"
+	jq -e --arg pane "$pane_id" \
+		'.panes[] | select(.pane_id == $pane) | .copy_mode == true' \
+		"$fixture/copy-mode.json" >/dev/null ||
+		die "mux snapshot did not expose copy-mode state"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -X -t "$pane_id" cancel
 	for index in {1..8}; do
 		XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot \
 			>"$fixture/concurrent-$index.json" &

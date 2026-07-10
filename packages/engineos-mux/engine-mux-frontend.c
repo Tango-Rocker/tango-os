@@ -148,7 +148,7 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 	struct window_pane *pane;
 	char *layout, *command;
 	char *result;
-	int first = 1, pane_active, window_active;
+	int first = 1, pane_active, window_active, copy_mode;
 	uint64_t hash = UINT64_C(1469598103934665603);
 
 	buffer = evbuffer_new();
@@ -165,6 +165,7 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 			layout = layout_dump(window->layout_root);
 			TAILQ_FOREACH(pane, &window->panes, entry) {
 				pane_active = window->active == pane;
+				copy_mode = pane->screen != &pane->base;
 				command = engine_mux_current_command(pane);
 				if (!first)
 					evbuffer_add(buffer, ",", 1);
@@ -183,8 +184,10 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 				    pane->id, (long long)pane->pid);
 				engine_mux_json_string(buffer, pane->tty);
 				evbuffer_add_printf(buffer,
-				    ",\"columns\":%u,\"rows\":%u,\"active\":%s,\"command\":",
+				    ",\"columns\":%u,\"rows\":%u,\"history_rows\":%u,\"history_scrolled\":%u,\"copy_mode\":%s,\"active\":%s,\"command\":",
 				    pane->sx, pane->sy,
+				    pane->base.grid->hsize, pane->base.grid->hscrolled,
+				    copy_mode ? "true" : "false",
 				    pane_active ? "true" : "false");
 				engine_mux_json_string(buffer, command);
 				evbuffer_add(buffer, ",\"title\":", 9);
@@ -211,6 +214,12 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 				    sizeof pane->sx);
 				engine_mux_hash_bytes(&hash, &pane->sy,
 				    sizeof pane->sy);
+				engine_mux_hash_bytes(&hash, &pane->base.grid->hsize,
+				    sizeof pane->base.grid->hsize);
+				engine_mux_hash_bytes(&hash, &pane->base.grid->hscrolled,
+				    sizeof pane->base.grid->hscrolled);
+				engine_mux_hash_bytes(&hash, &copy_mode,
+				    sizeof copy_mode);
 				engine_mux_hash_bytes(&hash, &pane_active,
 				    sizeof pane_active);
 				engine_mux_hash_string(&hash, command);
@@ -228,6 +237,21 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 	evbuffer_free(buffer);
 	*content_hash = hash;
 	return (result);
+}
+
+static void
+engine_mux_encode_cell(struct engine_mux_grid_cell *wire_cell,
+    struct grid_cell *cell)
+{
+	wire_cell->attributes = htons(cell->attr);
+	wire_cell->flags = cell->flags;
+	wire_cell->width = cell->data.width;
+	wire_cell->text_length = cell->data.have;
+	wire_cell->foreground = htonl((uint32_t)cell->fg);
+	wire_cell->background = htonl((uint32_t)cell->bg);
+	wire_cell->underline_colour = htonl((uint32_t)cell->us);
+	wire_cell->hyperlink = htonl(cell->link);
+	memcpy(wire_cell->text, cell->data.data, cell->data.have);
 }
 
 static u_char *
@@ -277,15 +301,54 @@ engine_mux_build_grid(struct window_pane *pane, size_t *size)
 	for (y = 0; y < rows; y++) {
 		for (x = 0; x < columns; x++, wire_cell++) {
 			grid_view_get_cell(screen->grid, x, y, &cell);
-			wire_cell->attributes = htons(cell.attr);
-			wire_cell->flags = cell.flags;
-			wire_cell->width = cell.data.width;
-			wire_cell->text_length = cell.data.have;
-			wire_cell->foreground = htonl((uint32_t)cell.fg);
-			wire_cell->background = htonl((uint32_t)cell.bg);
-			wire_cell->underline_colour = htonl((uint32_t)cell.us);
-			wire_cell->hyperlink = htonl(cell.link);
-			memcpy(wire_cell->text, cell.data.data, cell.data.have);
+			engine_mux_encode_cell(wire_cell, &cell);
+		}
+	}
+	return (payload);
+}
+
+static u_char *
+engine_mux_build_scrollback(struct window_pane *pane, u_int start,
+    u_int count, size_t *size)
+{
+	struct grid *grid = pane->base.grid;
+	struct engine_mux_scrollback_header *header;
+	struct engine_mux_grid_cell *wire_cell;
+	struct grid_cell cell;
+	u_char *payload;
+	u_int x, y, columns = grid->sx;
+	size_t cell_count;
+
+	if (start > grid->hsize || count > grid->hsize - start) {
+		errno = ERANGE;
+		return (NULL);
+	}
+	cell_count = (size_t)columns * count;
+	if (columns != 0 && cell_count / columns != count) {
+		errno = EMSGSIZE;
+		return (NULL);
+	}
+	if (cell_count > (ENGINE_MUX_MAX_PAYLOAD - sizeof *header) /
+	    sizeof *wire_cell) {
+		errno = EMSGSIZE;
+		return (NULL);
+	}
+	*size = sizeof *header + cell_count * sizeof *wire_cell;
+	payload = xcalloc(1, *size);
+	header = (struct engine_mux_scrollback_header *)payload;
+	header->version = htons(ENGINE_MUX_GRID_VERSION);
+	header->pane_id = htonl(pane->id);
+	header->generation = htonl(1);
+	header->columns = htonl(columns);
+	header->total_rows = htonl(grid->hsize);
+	header->start_row = htonl(start);
+	header->row_count = htonl(count);
+	header->cell_count = htonl((uint32_t)cell_count);
+	wire_cell = (struct engine_mux_grid_cell *)(header + 1);
+	for (y = start; y < start + count; y++) {
+		for (x = 0; x < columns; x++, wire_cell++) {
+			grid_get_cell(grid, x, y, &cell);
+			engine_mux_encode_cell(wire_cell, &cell);
 		}
 	}
 	return (payload);
@@ -548,7 +611,10 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	uint64_t request_id, request_revision;
 	struct engine_mux_grid_request grid_request;
 	struct engine_mux_grid_damage_request damage_request;
+	struct engine_mux_scrollback_request scrollback_request;
 	struct window_pane *pane;
+	u_char *scrollback;
+	size_t scrollback_size;
 	const char *hello =
 	    "{\"schema\":\"engine-mux/hello-v1\",\"server\":\"engine-mux\","
 	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\"]}";
@@ -679,6 +745,48 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 			    "grid-resync-required", "grid revision is stale; request a full grid") != 0)
 				engine_mux_client_free(client);
 		}
+		return;
+	}
+	if (type == ENGINE_MUX_SCROLLBACK_REQUEST) {
+		if (payload_size != sizeof scrollback_request) {
+			free(packet);
+			if (engine_mux_send_error(client->fd, request_id,
+			    "malformed-scrollback-request", "scrollback request has the wrong size") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		memcpy(&scrollback_request, packet + sizeof header,
+		    sizeof scrollback_request);
+		free(packet);
+		if (ntohl(scrollback_request.generation) != 1) {
+			if (engine_mux_send_error(client->fd, request_id,
+			    "stale-generation", "pane generation is not current") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		pane = window_pane_find_by_id(ntohl(scrollback_request.pane_id));
+		if (pane == NULL) {
+			if (engine_mux_send_error(client->fd, request_id,
+			    "pane-not-found", "pane does not exist") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		scrollback = engine_mux_build_scrollback(pane,
+		    ntohl(scrollback_request.start_row),
+		    ntohl(scrollback_request.row_count), &scrollback_size);
+		if (scrollback == NULL) {
+			if (engine_mux_send_error(client->fd, request_id,
+			    errno == ERANGE ? "scrollback-range" : "scrollback-too-large",
+			    errno == ERANGE ? "scrollback range is outside pane history" :
+			    "scrollback page exceeds the protocol payload limit") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		if (engine_mux_send_frame(client->fd, ENGINE_MUX_SCROLLBACK,
+		    request_id, engine_mux_revision, (char *)scrollback,
+		    scrollback_size) != 0)
+			engine_mux_client_free(client);
+		free(scrollback);
 		return;
 	}
 	free(packet);

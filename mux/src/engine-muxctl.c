@@ -327,8 +327,91 @@ static int request_damage(int fd, uint32_t pane_id, uint64_t grid_revision,
 	return 0;
 }
 
+static int request_scrollback(int fd, uint32_t pane_id, uint32_t start,
+		uint32_t rows) {
+	struct engine_mux_scrollback_request request = {
+		.pane_id = htonl(pane_id), .generation = htonl(1),
+		.start_row = htonl(start), .row_count = htonl(rows),
+	};
+	struct engine_mux_frame_header frame = {
+		.magic = htonl(ENGINE_MUX_MAGIC),
+		.version = htons(ENGINE_MUX_PROTOCOL_VERSION),
+		.type = htons(ENGINE_MUX_SCROLLBACK_REQUEST),
+		.request_id = host_to_be64(5),
+		.payload_length = htonl(sizeof(request)),
+	};
+	struct iovec parts[] = {
+		{.iov_base = &frame, .iov_len = sizeof(frame)},
+		{.iov_base = &request, .iov_len = sizeof(request)},
+	};
+	struct msghdr message = {.msg_iov = parts, .msg_iovlen = 2};
+	if (sendmsg(fd, &message, MSG_NOSIGNAL) < 0) return -1;
+	size_t capacity = sizeof(frame) + ENGINE_MUX_MAX_PAYLOAD;
+	unsigned char *packet = malloc(capacity);
+	if (packet == NULL) return -1;
+	ssize_t count = recv(fd, packet, capacity, 0);
+	if (count < (ssize_t)(sizeof(frame) + sizeof(struct engine_mux_scrollback_header))) {
+		free(packet); errno = EPROTO; return -1;
+	}
+	memcpy(&frame, packet, sizeof(frame));
+	uint32_t payload_length = ntohl(frame.payload_length);
+	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
+			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
+			ntohs(frame.type) != ENGINE_MUX_SCROLLBACK ||
+			payload_length > ENGINE_MUX_MAX_PAYLOAD ||
+			sizeof(frame) + payload_length != (size_t)count) {
+		free(packet); errno = EPROTO; return -1;
+	}
+	struct engine_mux_scrollback_header header;
+	memcpy(&header, packet + sizeof(frame), sizeof(header));
+	uint32_t columns = ntohl(header.columns);
+	uint32_t row_count = ntohl(header.row_count);
+	uint32_t cell_count = ntohl(header.cell_count);
+	if (ntohs(header.version) != ENGINE_MUX_GRID_VERSION ||
+			(columns != 0 && row_count > UINT32_MAX / columns) ||
+			cell_count != columns * row_count ||
+			payload_length != sizeof(header) +
+				(size_t)cell_count * sizeof(struct engine_mux_grid_cell)) {
+		free(packet); errno = EPROTO; return -1;
+	}
+	struct json_object *root = json_object_new_object();
+	struct json_object *text_rows = json_object_new_array();
+	json_object_object_add(root, "schema", json_object_new_string("engine-mux/scrollback-v1"));
+	json_object_object_add(root, "pane_id", json_object_new_int64(ntohl(header.pane_id)));
+	json_object_object_add(root, "generation", json_object_new_int64(ntohl(header.generation)));
+	json_object_object_add(root, "columns", json_object_new_int64(columns));
+	json_object_object_add(root, "total_rows", json_object_new_int64(ntohl(header.total_rows)));
+	json_object_object_add(root, "start_row", json_object_new_int64(ntohl(header.start_row)));
+	json_object_object_add(root, "row_count", json_object_new_int64(row_count));
+	const unsigned char *cell_bytes = packet + sizeof(frame) + sizeof(header);
+	for (uint32_t y = 0; y < row_count; y++) {
+		char *row_text = malloc((size_t)columns * ENGINE_MUX_GRID_CELL_TEXT_MAX + 1);
+		if (row_text == NULL) { json_object_put(root); free(packet); return -1; }
+		size_t used = 0;
+		for (uint32_t x = 0; x < columns; x++) {
+			struct engine_mux_grid_cell cell;
+			memcpy(&cell, cell_bytes, sizeof(cell));
+			cell_bytes += sizeof(cell);
+			if (cell.text_length > ENGINE_MUX_GRID_CELL_TEXT_MAX) {
+				free(row_text); json_object_put(root); free(packet); errno = EPROTO; return -1;
+			}
+			if ((cell.flags & ENGINE_MUX_GRID_CELL_PADDING) == 0) {
+				memcpy(row_text + used, cell.text, cell.text_length);
+				used += cell.text_length;
+			}
+		}
+		json_object_array_add(text_rows, json_object_new_string_len(row_text, (int)used));
+		free(row_text);
+	}
+	json_object_object_add(root, "text_rows", text_rows);
+	printf("%s\n", json_object_to_json_string_ext(root, JSON_C_TO_STRING_PRETTY));
+	json_object_put(root);
+	free(packet);
+	return 0;
+}
+
 static void usage(FILE *stream, const char *program) {
-	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|damage PANE_ID REVISION|stale-grid PANE_ID\n", program);
+	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -355,10 +438,13 @@ int main(int argc, char **argv) {
 	bool is_grid = strcmp(command, "grid") == 0;
 	bool is_damage = strcmp(command, "damage") == 0;
 	bool is_stale_grid = strcmp(command, "stale-grid") == 0;
+	bool is_scrollback = strcmp(command, "scrollback") == 0;
 	if ((is_grid && optind + 2 != argc) ||
 			(is_damage && optind + 3 != argc) ||
 			(is_stale_grid && optind + 2 != argc) ||
-			(!is_grid && !is_damage && !is_stale_grid && optind + 1 != argc)) {
+			(is_scrollback && optind + 4 != argc) ||
+			(!is_grid && !is_damage && !is_stale_grid && !is_scrollback &&
+			 optind + 1 != argc)) {
 		usage(stderr, argv[0]);
 		return 2;
 	}
@@ -376,7 +462,7 @@ int main(int argc, char **argv) {
 		free(owned_socket);
 		return 1;
 	}
-	if (is_grid || is_damage || is_stale_grid) {
+	if (is_grid || is_damage || is_stale_grid || is_scrollback) {
 		const char *pane_text = argv[optind + 1];
 		if (*pane_text == '%') pane_text++;
 		char *end = NULL;
@@ -394,8 +480,23 @@ int main(int argc, char **argv) {
 			free(owned_socket);
 			return 2;
 		}
-		int grid_result = is_grid ? request_grid(fd, (uint32_t)pane_id) :
-			request_damage(fd, (uint32_t)pane_id, grid_revision, is_stale_grid);
+		int grid_result;
+		if (is_scrollback) {
+			char *start_end = NULL, *count_end = NULL;
+			unsigned long start = strtoul(argv[optind + 2], &start_end, 10);
+			unsigned long rows = strtoul(argv[optind + 3], &count_end, 10);
+			if (*start_end != '\0' || *count_end != '\0' ||
+					start > UINT32_MAX || rows > UINT32_MAX) {
+				close(fd); free(owned_socket); return 2;
+			}
+			grid_result = request_scrollback(fd, (uint32_t)pane_id,
+				(uint32_t)start, (uint32_t)rows);
+		} else if (is_grid) {
+			grid_result = request_grid(fd, (uint32_t)pane_id);
+		} else {
+			grid_result = request_damage(fd, (uint32_t)pane_id,
+				grid_revision, is_stale_grid);
+		}
 		if (grid_result != 0) {
 			fprintf(stderr, "engine-muxctl: grid request failed: %s\n", strerror(errno));
 			close(fd);

@@ -41,6 +41,8 @@ The migration is side by side and disabled by default:
   changed cell coordinates plus updated screen/cursor metadata; stale revisions,
   generation changes, resizes, and oversized damage require an explicit full
   grid resynchronization.
+- Scrollback is exported from tmux's base grid in caller-sized bounded pages,
+  and pane snapshots expose history size, history offset, and copy-mode state.
 - Layout content changes advance the server revision. Mutation requests with a
   stale revision are rejected and direct the client to request a full snapshot.
 - `engineos-shell --mux native` (or `ENGINEOS_MUX_MODE=native`) requires a
@@ -48,14 +50,16 @@ The migration is side by side and disabled by default:
   not fall back to the bridge. The observed mode, socket, connection state, and
   mux revision are written to `shell-state.json`.
 
-The in-server frontend exposes `layout-snapshot`, `terminal-grid-v1`, and
-revisioned grid damage. Command execution, scrollback, and graphical
-presentation ownership still return explicit unsupported errors.
+The in-server frontend exposes `layout-snapshot`, `terminal-grid-v1`,
+revisioned grid damage, paged scrollback, and copy-mode state. Command
+execution and graphical presentation ownership still return explicit
+unsupported errors.
 
 ## Required next proof
 
-Export scrollback and copy-mode state, then render one terminal-only mux session
-in `engineos-shell` before adding app scopes or removing any bridge code.
+Export status, menu, and prompt models, then render one terminal-only mux
+session in `engineos-shell` before adding app scopes or removing any bridge
+code.
 
 Later stages add compound presentations and `prefix + v`, dedicated transient
 app scopes, surface-to-scope binding, multiple output views and presentation
