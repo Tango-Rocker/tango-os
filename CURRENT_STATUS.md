@@ -43,50 +43,55 @@ These are historical proof artifacts only; they are not the active work path:
   `/boot/vmlinuz-linux-restore-engineos-20260704` and
   `/boot/initramfs-linux-restore-engineos-20260704.img`. The normal default
   remains `enginedev.conf`.
-- EngineDev-only Quake level-agent V1 is live-proven without an ISO rebuild:
-  terminal `serve/build/status/load` works, Quake console
-  `agent` / `agent_status` / `agent_load` works through the tracked
-  QuakeSpasm command patch, and TrenchBroom setup/open-file smoke is packaged.
-  The live editor path now uses `engineos-level-agent 0.1.0-8` and
-  `engineos-trenchbroom 2026.1-4`; the packaged `trenchbroom` and
-  `engineos-trenchbroom` commands both regenerate the canonical
-  `EngineOSQuake` profile before opening the real editor binary, with entity
-  definitions resolved from `Quake.fgd` inside that profile, the TrenchBroom
-  game path set to the resolved EngineOS Quake asset root, and Quake model
-  loading configured with `gfx/palette.lmp`. The package also carries an
-  EngineOS source patch so clicking a point entity in the entity browser creates
-  it at the map origin and selects it. Entity browser placement through the
-  shell's Wayland drag/drop path is also live-confirmed on the current
-  EngineDev session.
-- Agent-pack hygiene currently passes. Canonical ownership is
-  `.agents/index.toml` plus `docs/agent-roles.md`; reusable workflows belong
-  in skills; CLI work stays on direct `eos-*` commands.
+- EngineDev-only Quake work now has one user-facing workflow:
+  `eos-game quake setup|create|build|edit|play|reload|status|proof|stop`.
+  The tracked `engineos-quake.service` and `engineos-level-agent.service`
+  user units replace the retired `engineos-engine-runner` package and service.
+  The live install has `engineos-dgen 0.1.0-1`,
+  `engineos-level-agent 0.1.0-9`, and `engineos-quakespasm 0.97.0-2`;
+  `engineos-engine-runner` is absent. Dgen is built from the exact local
+  `quake-generator` commit, and package builds fail when that source or commit
+  is unavailable instead of silently substituting another generator.
+- Agent-pack hygiene currently passes with a smaller role/skill router and no
+  dispatch queue or profile indirection. Session extraction is provided by
+  `codex-extractor 0.2.0`, using Luna on medium reasoning, and the autonomy
+  harness pins that exact extractor contract and fails closed. Codex is updated
+  to the verified current release, `codex-cli 0.144.1`; npm updates are handled
+  by the managed root-owned install path.
 - Bare-metal EngineDev has the v1 tmux pane bridge deployed through the local
   package reinstall/restart loop. `eos-app pane launch -- COMMAND` registers a
   tmux pane launch token with `engineos-shell`, shell state owns
   `pane_bindings`, generic GUI clients are laid out as `tmux-pane-gui`, and
   `engineos-tmux-pane-bridge` reports focus and geometry from tmux hooks
   without proxy tabs or a polling daemon. Cube/engine pane launches still use
-  the existing `launch-bounds/*.env` path. The 2026-07-09 deploy refreshed
-  `engineos-shell 0.1.0-16`, `engineos-tools 0.1.0-20`, and
+  the existing `launch-bounds/*.env` path. The 2026-07-09/10 deploy refreshed
+  `engineos-shell 0.1.0-17`, `engineos-tools 0.1.0-23`, and
   `engineos-config 0.1.0-3`; force-installed the managed tmux config and
   `/usr/local/bin/engineos-tmux-pane-bridge`; and left
   `/run/user/1000/engineos/shell-state.json` JSON-readable with
   `pane_bindings`. The same deploy added `engineos-tmux-attach-primary` for
   shell-owned terminal startup, so restarts attach the existing primary tmux
-  session before creating the fallback `engineos` session. The live restart
-  proof replaced shell PID 125037 with 167915 and verified only the expected
-  sessions remain: primary client `tmux attach-session -t =2` on session `2`,
-  and secondary client `tmux new -A -s engineos-side` on `engineos-side`; no
-  detached `engineos` orphan session came back. `eos-app manifest validate`
-  passes after the restart. The live Falkon pane visual proof is still pending.
+  session before creating the fallback `engineos` session. Repeated shell
+  restarts preserved one tmux server and its two attached clients: primary
+  `/dev/pts/0` remains on session `2`, and secondary `/dev/pts/1` remains on
+  `engineos-side`; no detached `engineos` session or proxy windows were
+  created. `eos-app manifest validate` passes after restart. The live Falkon
+  pane visual proof is still pending.
   The EngineOS command-surface hardening is deployed through
-  `engineos-tools 0.1.0-20`: `eos-source-test` clears installed-session
+  `engineos-tools 0.1.0-23`: `eos-source-test` clears installed-session
   contamination, `eos-proof` fails closed on required evidence, repeatable
   package selection is normalized through `eos-ci local`, and
   `eos-runtime shell restart-live` only reports success when a new
-  `engineos-shell` PID is verified. The live shell package is
-  `engineos-shell 0.1.0-16`.
+  `engineos-shell` PID is verified.
+- MC Quick View now routes through an exact tmux client identity instead of a
+  stale terminal-role environment variable. The live `eos-proof mc-preview`
+  run from pane `%3` passed its installed image contract, IPC ping, and real
+  show/hide path. Shell evidence maps `%3` through `/dev/pts/0` to the primary
+  `terminal` slot and renders inside `x=960 y=180 size=960x720` with
+  `bounds=960x1080`; the former incorrect secondary placement was at `x=3000`.
+  Pane `%6` independently resolves through `/dev/pts/1` to
+  `terminal-secondary`. The proof log is
+  `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 
 ## Not Yet Proven
 
@@ -105,8 +110,8 @@ These are historical proof artifacts only; they are not the active work path:
   open-file smoke, packaged launcher setup, the equivalent compile/launch
   command path, entity-browser placement, and OS-level Wayland drag-and-drop
   are proven.
-- Visual live MC Quick View acceptance capture with the real
-  `engine-image-preview` and shell preview path.
+- Screenshot-based MC Quick View acceptance capture. The real live renderer,
+  output selection, pane geometry, and show/hide IPC path are proven.
 - Persistent Quake asset handling outside generated ISO images.
 - Real Secure Boot and installer work only if explicitly re-enabled.
 
@@ -118,7 +123,9 @@ Bare-metal/source-checkout loop:
 ./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-ci local --test agent --install --clean-generated --no-validate-repo
 eos-app manifest validate
+eos-proof mc-preview
 eos-app pane launch -- falkon
+eos-game quake proof
 eos-proof shell-launch --bare-metal
 ```
 
