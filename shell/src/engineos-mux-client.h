@@ -26,12 +26,25 @@ struct engineos_mux_damage_cell {
 	uint32_t y;
 };
 
+struct engineos_mux_presentation_target {
+	uint32_t pane_id;
+	uint32_t generation;
+	char presentation[16];
+	char view_mode[16];
+};
+
 struct engineos_mux_client {
 	int fd;
 	uint64_t revision;
 	uint64_t grid_revision;
 	uint32_t pane_id;
 	uint32_t pane_generation;
+	char pane_presentation[16];
+	char pane_view_mode[16];
+	char prefix[32];
+	char prefix2[32];
+	bool pane_presentation_mapped;
+	uint32_t pane_surface_tabs;
 	char *session_id;
 	uint32_t primary_view_id;
 	uint32_t grid_columns;
@@ -68,6 +81,8 @@ bool engineos_mux_client_connect(struct engineos_mux_client *client,
 	const char *socket_path, char *error, size_t error_size);
 bool engineos_mux_client_handle_event(struct engineos_mux_client *client,
 	bool *grid_changed, char *error, size_t error_size);
+bool engineos_mux_client_refresh_presentation(struct engineos_mux_client *client,
+	char *error, size_t error_size);
 bool engineos_mux_client_send_input(struct engineos_mux_client *client,
 	const void *bytes, size_t length, bool *grid_changed,
 	char *error, size_t error_size);
@@ -88,6 +103,16 @@ bool engineos_mux_client_send_mouse(struct engineos_mux_client *client,
 	char *error, size_t error_size);
 bool engineos_mux_client_request_ui(struct engineos_mux_client *client,
 	uint32_t view_id, bool *grid_changed, char *error, size_t error_size);
+bool engineos_mux_client_resolve_presentation(struct engineos_mux_client *client,
+	int32_t pid, struct engineos_mux_presentation_target *target,
+	bool *grid_changed, char *error, size_t error_size);
+bool engineos_mux_client_map_presentation(struct engineos_mux_client *client,
+	const struct engineos_mux_presentation_target *target, int32_t pid,
+	uint32_t surface_id, const char *role, bool *grid_changed,
+	char *error, size_t error_size);
+bool engineos_mux_client_unmap_presentation(struct engineos_mux_client *client,
+	uint32_t pane_id, uint32_t generation, int32_t pid, uint32_t surface_id,
+	bool *grid_changed, char *error, size_t error_size);
 void engineos_mux_client_clear_render_damage(struct engineos_mux_client *client);
 void engineos_mux_client_destroy(struct engineos_mux_client *client);
 

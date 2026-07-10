@@ -132,6 +132,34 @@ engine_pane_surface_find(struct window_pane *wp, u_int id)
 	return (NULL);
 }
 
+struct window_pane *
+engine_pane_resolve_pid(pid_t pid, char **cause)
+{
+	struct window_pane *wp, *match = NULL;
+	char *unit = NULL;
+
+	if (pid <= 0 || sd_pid_get_user_unit(pid, &unit) < 0 || unit == NULL) {
+		free(unit);
+		*cause = xstrdup("process is not in a registered user scope");
+		return (NULL);
+	}
+	RB_FOREACH(wp, window_pane_tree, &all_window_panes) {
+		if (wp->engine_presentation == ENGINE_PANE_TERMINAL ||
+		    wp->engine_scope == NULL || strcmp(unit, wp->engine_scope) != 0)
+			continue;
+		if (match != NULL) {
+			free(unit);
+			*cause = xstrdup("process scope resolves to multiple panes");
+			return (NULL);
+		}
+		match = wp;
+	}
+	free(unit);
+	if (match == NULL)
+		*cause = xstrdup("process is outside every pending pane launch scope");
+	return (match);
+}
+
 int
 engine_pane_surface_map(struct window_pane *wp, pid_t pid, u_int id,
     const char *role_name, char **cause)

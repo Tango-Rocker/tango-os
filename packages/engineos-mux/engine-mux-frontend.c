@@ -31,6 +31,7 @@ struct engine_mux_client {
 	uint64_t subscribed_hash;
 	int subscribed;
 	int invalidation_pending;
+	int state_invalidation_pending;
 	struct engine_mux_view_list views;
 	TAILQ_ENTRY(engine_mux_client) entry;
 };
@@ -61,6 +62,24 @@ static int engine_mux_send_frame(int, uint16_t, uint64_t, uint64_t,
 static void engine_mux_client_free(struct engine_mux_client *);
 static void engine_mux_hash_bytes(uint64_t *, const void *, size_t);
 static struct json_object *engine_mux_build_ui_model(struct engine_mux_view *);
+
+static void
+engine_mux_notify_state_clients(void)
+{
+	struct engine_mux_client *client, *next;
+
+	TAILQ_FOREACH_SAFE(client, &engine_mux_clients, entry, next) {
+		if (TAILQ_EMPTY(&client->views) || client->state_invalidation_pending)
+			continue;
+		if (engine_mux_send_frame(client->fd, ENGINE_MUX_STATE_INVALIDATED,
+		    0, engine_mux_revision, NULL, 0) != 0) {
+			if (errno != EAGAIN && errno != EWOULDBLOCK)
+				engine_mux_client_free(client);
+			continue;
+		}
+		client->state_invalidation_pending = 1;
+	}
+}
 
 static uint64_t
 engine_mux_ui_model_hash(struct json_object *model)
@@ -844,7 +863,9 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 	struct winlink *winlink;
 	struct window *window;
 	struct window_pane *pane;
+	struct options_entry *prefix_option, *prefix2_option;
 	char *layout, *command;
+	char *prefix_name, *prefix2_name;
 	char *result;
 	int first = 1, pane_active, window_active, copy_mode;
 	uint64_t hash = UINT64_C(1469598103934665603);
@@ -857,6 +878,10 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 	    (unsigned long long)revision);
 
 	RB_FOREACH(session, sessions, &sessions) {
+		prefix_option = options_get(session->options, "prefix");
+		prefix2_option = options_get(session->options, "prefix2");
+		prefix_name = options_to_string(prefix_option, -1, 0);
+		prefix2_name = options_to_string(prefix2_option, -1, 0);
 		RB_FOREACH(winlink, winlinks, &session->windows) {
 			window = winlink->window;
 			window_active = session->curw == winlink;
@@ -872,6 +897,10 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 				    "{\"session_id\":\"$%u\",\"session_name\":",
 				    session->id);
 				engine_mux_json_string(buffer, session->name);
+				evbuffer_add(buffer, ",\"prefix\":", 10);
+				engine_mux_json_string(buffer, prefix_name);
+				evbuffer_add(buffer, ",\"prefix2\":", 11);
+				engine_mux_json_string(buffer, prefix2_name);
 				evbuffer_add_printf(buffer,
 				    ",\"window_id\":\"@%u\",\"window_index\":%d,\"window_active\":%s,\"window_layout\":",
 				    window->id, winlink->idx,
@@ -910,6 +939,8 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 				engine_mux_hash_bytes(&hash, &session->id,
 				    sizeof session->id);
 				engine_mux_hash_string(&hash, session->name);
+				engine_mux_hash_string(&hash, prefix_name);
+				engine_mux_hash_string(&hash, prefix2_name);
 				engine_mux_hash_bytes(&hash, &window->id,
 				    sizeof window->id);
 				engine_mux_hash_bytes(&hash, &winlink->idx,
@@ -954,6 +985,8 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 			}
 			free(layout);
 		}
+		free(prefix_name);
+		free(prefix2_name);
 	}
 	evbuffer_add(buffer, "]}", 2);
 	*size = EVBUFFER_LENGTH(buffer);
@@ -1304,6 +1337,7 @@ engine_mux_frontend_sync(void)
 	engine_mux_snapshot_hash = content_hash;
 	engine_mux_notify_grid_clients();
 	engine_mux_notify_ui_clients();
+	engine_mux_notify_state_clients();
 }
 
 static int
@@ -1395,7 +1429,7 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	size_t scrollback_size;
 	const char *hello =
 	    "{\"schema\":\"engine-mux/hello-v1\",\"server\":\"engine-mux\","
-	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\",\"ui-model-v1\",\"ui-invalidate-v1\",\"tmux-mouse-v1\",\"pane-presentation-v1\"]}";
+	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\",\"ui-model-v1\",\"ui-invalidate-v1\",\"tmux-mouse-v1\",\"pane-presentation-v1\",\"presentation-resolve-v1\"]}";
 	const char *subscribe_ack =
 	    "{\"schema\":\"engine-mux/grid-subscribe-v1\",\"subscribed\":true}";
 	const char *input_ack =
@@ -1466,11 +1500,78 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	}
 	if (type == ENGINE_MUX_SNAPSHOT_REQUEST) {
 		free(packet);
+		client->state_invalidation_pending = 0;
 		engine_mux_frontend_sync();
 		if (engine_mux_send_frame(client->fd, ENGINE_MUX_SNAPSHOT,
 		    request_id, engine_mux_revision, engine_mux_snapshot,
 		    engine_mux_snapshot_size) != 0)
 			engine_mux_client_free(client);
+		return;
+	}
+	if (type == ENGINE_MUX_PRESENTATION_RESOLVE_REQUEST) {
+		struct json_object *root, *response;
+		struct window_pane *resolved;
+		const char *schema, *response_text;
+		char *cause = NULL, pane_id[32];
+		u_int pid;
+
+		root = engine_mux_parse_json(packet + sizeof header, payload_size);
+		free(packet);
+		if (root == NULL) {
+			if (engine_mux_send_error(client->fd, request_id,
+			    "malformed-json", "presentation resolve request is not valid JSON") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		schema = engine_mux_json_string_value(root, "schema", 64);
+		if (schema == NULL ||
+		    strcmp(schema, "engine-mux/presentation-resolve-v1") != 0 ||
+		    engine_mux_json_u32(root, "pid", 1, INT32_MAX, &pid) != 0) {
+			json_object_put(root);
+			if (engine_mux_send_error(client->fd, request_id,
+			    "request-rejected", "presentation resolve request is invalid") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		json_object_put(root);
+		resolved = engine_pane_resolve_pid((pid_t)pid, &cause);
+		if (resolved == NULL) {
+			if (engine_mux_send_error(client->fd, request_id,
+			    "request-rejected", cause == NULL ?
+			    "presentation process has no owning pane" : cause) != 0)
+				engine_mux_client_free(client);
+			free(cause);
+			return;
+		}
+		free(cause);
+		response = json_object_new_object();
+		if (response == NULL) {
+			if (engine_mux_send_error(client->fd, request_id,
+			    "server-error", "out of memory") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		xsnprintf(pane_id, sizeof pane_id, "%%%u", resolved->id);
+		json_object_object_add(response, "schema",
+		    json_object_new_string("engine-mux/presentation-resolve-v1"));
+		json_object_object_add(response, "pane_id",
+		    json_object_new_string(pane_id));
+		json_object_object_add(response, "generation",
+		    json_object_new_int64(resolved->engine_generation));
+		json_object_object_add(response, "presentation",
+		    json_object_new_string(engine_pane_presentation_name(resolved)));
+		json_object_object_add(response, "view_mode",
+		    json_object_new_string(engine_pane_view_mode_name(resolved)));
+		response_text = json_object_to_json_string_ext(response,
+		    JSON_C_TO_STRING_PLAIN);
+		if (engine_mux_send_frame(client->fd,
+		    ENGINE_MUX_PRESENTATION_RESOLVE, request_id,
+		    engine_mux_revision, response_text, strlen(response_text)) != 0) {
+			json_object_put(response);
+			engine_mux_client_free(client);
+			return;
+		}
+		json_object_put(response);
 		return;
 	}
 	if (type == ENGINE_MUX_PRESENTATION_MAP_REQUEST ||

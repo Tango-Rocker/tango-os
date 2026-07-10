@@ -170,6 +170,8 @@ run_mux() {
 	local initial_native_revision updated_native_revision stable_revision=""
 	local stable_count=0
 	local pane_scope="" pane_app_pid="" pane_state="" split_pane_id=""
+	local pane_shell_pid="" pane_foreground_pid=""
+	local wayland_display="" unscoped_pid=""
 	local user_runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 	local user_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$user_runtime/bus}"
 
@@ -189,19 +191,35 @@ run_mux() {
 	cc -std=c11 -Wall -Wextra -Werror -O2 \
 		"$ROOT/packages/engineos-mux/engine-pane-host.c" \
 		-o "$fixture/bin/engine-pane-host"
+	local wayland_protocols_dir
+	wayland_protocols_dir="$(pkg-config wayland-protocols --variable=pkgdatadir)"
+	wayland-scanner client-header \
+		"$wayland_protocols_dir/stable/xdg-shell/xdg-shell.xml" \
+		"$fixture/xdg-shell-client-protocol.h"
+	wayland-scanner private-code \
+		"$wayland_protocols_dir/stable/xdg-shell/xdg-shell.xml" \
+		"$fixture/xdg-shell-protocol.c"
+	cc -std=c11 -Wall -Wextra -Werror -O2 -I"$fixture" \
+		"$ROOT/tests/wayland-presentation-client.c" \
+		"$fixture/xdg-shell-protocol.c" \
+		$(pkg-config --cflags --libs wayland-client) \
+		-o "$fixture/bin/engineos-wayland-presentation-client"
 	local PATH="$fixture/bin:$PATH"
 	export PATH DBUS_SESSION_BUS_ADDRESS="$user_bus"
 	export ENGINEOS_USER_RUNTIME_DIR="$user_runtime"
 	cleanup_mux_test() {
-		[[ -z "$overlay_pid" ]] || kill "$overlay_pid" >/dev/null 2>&1 || true
-		[[ -z "$prompt_pid" ]] || kill "$prompt_pid" >/dev/null 2>&1 || true
-		if [[ -n "$shell_pid" ]]; then
+		[[ -z "${unscoped_pid:-}" ]] || kill "$unscoped_pid" >/dev/null 2>&1 || true
+		[[ -z "${overlay_pid:-}" ]] || kill "$overlay_pid" >/dev/null 2>&1 || true
+		[[ -z "${prompt_pid:-}" ]] || kill "$prompt_pid" >/dev/null 2>&1 || true
+		if [[ -n "${shell_pid:-}" ]]; then
 			kill "$shell_pid" >/dev/null 2>&1 || true
 			wait "$shell_pid" 2>/dev/null || true
 		fi
-		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
-			kill-server >/dev/null 2>&1 || true
-		rm -rf "$fixture"
+		if [[ -n "${fixture:-}" && -n "${mux_bin:-}" ]]; then
+			XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+				kill-server >/dev/null 2>&1 || true
+			rm -rf "$fixture"
+		fi
 	}
 	trap cleanup_mux_test EXIT RETURN
 
@@ -248,7 +266,8 @@ run_mux() {
 		(.capabilities | index("ui-model-v1")) and
 		(.capabilities | index("ui-invalidate-v1")) and
 		(.capabilities | index("tmux-mouse-v1")) and
-		(.capabilities | index("pane-presentation-v1"))' \
+		(.capabilities | index("pane-presentation-v1")) and
+		(.capabilities | index("presentation-resolve-v1"))' \
 		"$fixture/hello.json" >/dev/null ||
 		die "mux protocol was not served by engine-mux"
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot >"$fixture/first.json"
@@ -258,10 +277,22 @@ run_mux() {
 		die "initial mux snapshot did not contain one pane"
 	jq -e '.panes[0].command | contains("/") | not' "$fixture/first.json" >/dev/null ||
 		die "mux snapshot did not normalize pane_current_command metadata"
+	jq -e '.panes[0].prefix == "C-b" and .panes[0].prefix2 == "None"' \
+		"$fixture/first.json" >/dev/null ||
+		die "mux snapshot did not expose configured prefix keys"
 	pane_id="$(jq -er '.panes[0].pane_id' "$fixture/first.json")"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		list-keys -T prefix v | grep -F 'pane-presentation toggle' >/dev/null ||
 		die "engine-mux did not bind prefix+v to the native presentation toggle"
+	pane_shell_pid="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" display-message -p -t "$pane_id" '#{pane_pid}')"
+	for _ in {1..100}; do
+		pane_foreground_pid="$(ps -o tpgid= -p "$pane_shell_pid" | tr -d ' ')"
+		[[ "$pane_foreground_pid" == "$pane_shell_pid" ]] && break
+		sleep 0.02
+	done
+	[[ "$pane_foreground_pid" == "$pane_shell_pid" ]] ||
+		die "native pane shell did not acquire its PTY foreground process group"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		launch-pane-app -t "$pane_id" -- /bin/sh -c \
 		'printf "PRESENTATION-STDOUT\n"; printf "PRESENTATION-STDERR\n" >&2; exec sleep 60'
@@ -279,6 +310,10 @@ run_mux() {
 	[[ "$(ps -o tpgid= -p "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
 		"$mux_bin" display-message -p -t "$pane_id" '#{pane_pid}')" | tr -d ' ')" == "$pane_app_pid" ]] ||
 		die "native pane application did not own the PTY foreground process group"
+	for _ in {1..100}; do
+		grep -F "/$pane_scope" "/proc/$pane_app_pid/cgroup" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
 	grep -F "/$pane_scope" "/proc/$pane_app_pid/cgroup" >/dev/null ||
 		die "native pane application was not placed in its registered user scope"
 	if XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
@@ -287,6 +322,22 @@ run_mux() {
 	fi
 	grep -F 'pane has no mapped graphical presentation' "$fixture/unmapped-view.out" >/dev/null ||
 		die "unmapped presentation rejection was not explicit"
+	if XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" \
+		presentation-resolve $$ >"$fixture/wrong-resolve.json" \
+		2>"$fixture/wrong-resolve.err"; then
+		die "presentation resolver accepted an unrelated process"
+	fi
+	jq -e '.code == "request-rejected" and
+		(.message | contains("outside every pending pane launch scope"))' \
+		"$fixture/wrong-resolve.json" >/dev/null ||
+		die "wrong-scope presentation resolution was not explicit"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" \
+		presentation-resolve "$pane_app_pid" >"$fixture/resolved-pane.json"
+	jq -e --arg pane "$pane_id" '.schema == "engine-mux/presentation-resolve-v1" and
+		.pane_id == $pane and .generation == 1 and
+		.presentation == "wayland" and .view_mode == "console"' \
+		"$fixture/resolved-pane.json" >/dev/null ||
+		die "presentation resolver did not return the scoped pane identity"
 	if XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" \
 		presentation-map "$pane_id" 1 $$ 9001 toplevel \
 		>"$fixture/wrong-scope.json" 2>"$fixture/wrong-scope.err"; then
@@ -693,7 +744,7 @@ run_mux() {
 	XDG_RUNTIME_DIR="$fixture" ENGINEOS_STATE_DIR="$fixture/engineos" \
 		ENGINEOS_MUX_SOCKET="$fixture/engineos/mux.sock" \
 		WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=2 WLR_RENDERER="$shell_renderer" \
-		"$shell_bin" --headless --smoke-ms 15000 \
+		"$shell_bin" --headless --smoke-ms 25000 \
 		--bootstrap none --mux native >"$fixture/shell-native.log" 2>&1 &
 	shell_pid=$!
 	for _ in {1..100}; do
@@ -728,6 +779,105 @@ run_mux() {
 			"$fixture/engineos/shell-state.json" >/dev/null ||
 			die "native shell did not identify its pixman smoke renderer"
 	fi
+	wayland_display="$(jq -er '.wayland_display' \
+		"$fixture/engineos/shell-state.json")"
+	WAYLAND_DISPLAY="$fixture/$wayland_display" \
+		"$fixture/bin/engineos-wayland-presentation-client" \
+		>"$fixture/unscoped-wayland.out" 2>"$fixture/unscoped-wayland.err" &
+	unscoped_pid=$!
+	for _ in {1..100}; do
+		grep -F 'native presentation rejected' "$fixture/shell-native.log" \
+			>/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	grep -F 'native presentation rejected' "$fixture/shell-native.log" \
+		>/dev/null || die "native shell did not reject an unscoped Wayland client"
+	wait "$unscoped_pid" ||
+		die "unscoped Wayland client was not closed through the XDG protocol"
+	unscoped_pid=""
+	shell_pane_id="$(jq -er '.mux.pane_id' \
+		"$fixture/engineos/shell-state.json")"
+	pane_shell_pid="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" display-message -p -t "$shell_pane_id" '#{pane_pid}')"
+	for _ in {1..100}; do
+		pane_foreground_pid="$(ps -o tpgid= -p "$pane_shell_pid" | tr -d ' ')"
+		[[ "$pane_foreground_pid" == "$pane_shell_pid" ]] && break
+		sleep 0.02
+	done
+	[[ "$pane_foreground_pid" == "$pane_shell_pid" ]] ||
+		die "selected native pane shell did not regain its PTY foreground group"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		launch-pane-app -t "$shell_pane_id" -- env \
+		ENGINEOS_WAYLAND_TEST_DELAY_MS=250 \
+		WAYLAND_DISPLAY="$fixture/$wayland_display" \
+		"$fixture/bin/engineos-wayland-presentation-client"
+	for _ in {1..150}; do
+		jq -e --arg pane "$shell_pane_id" \
+			'.mux.presentation.type == "wayland" and
+			 .mux.presentation.view_mode == "presentation" and
+			 .mux.presentation.mapped == true and
+			 .mux.presentation.surface_tabs == 1 and
+			 .mux.presentation.terminal_visible == false and
+			 .input.mode == "graphical" and
+			 any(.windows[]; .bound == true and .pane_id == $pane and
+			   .presentation_visible == true and .visible == true)' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg pane "$shell_pane_id" \
+		'.mux.presentation.view_mode == "presentation" and
+		 any(.windows[]; .bound == true and .pane_id == $pane and .visible == true)' \
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '{mux,input,windows}' "$fixture/engineos/shell-state.json" >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
+		die "scoped Wayland client did not bind to its native mux pane"
+	}
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		pane-presentation -t "$shell_pane_id" console
+	for _ in {1..100}; do
+		jq -e '.mux.presentation.view_mode == "console" and
+			.mux.presentation.terminal_visible == true and
+			.input.mode == "terminal" and
+			all(.windows[]; .bound == false or .visible == false)' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '.mux.presentation.view_mode == "console" and
+		.mux.presentation.terminal_visible == true and .input.mode == "terminal"' \
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '{mux,input,windows}' "$fixture/engineos/shell-state.json" >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
+		die "native console toggle did not hide the scoped Wayland surface"
+	}
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		pane-presentation -t "$shell_pane_id" app
+	for _ in {1..100}; do
+		jq -e '.mux.presentation.view_mode == "presentation" and
+			.mux.presentation.terminal_visible == false and
+			.input.mode == "graphical"' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '.mux.presentation.view_mode == "presentation" and
+		.mux.presentation.terminal_visible == false and .input.mode == "graphical"' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "native application toggle did not restore the scoped Wayland surface"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		signal-pane-app -t "$shell_pane_id" TERM
+	for _ in {1..150}; do
+		pane_state="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+			"$mux_bin" display-message -p -t "$shell_pane_id" \
+			'#{pane_presentation}|#{pane_view_mode}|#{pane_surface_count}')"
+		jq -e '.mux.presentation.type == "terminal" and
+			.mux.presentation.terminal_visible == true and
+			.input.mode == "terminal" and
+			all(.windows[]; .bound == false)' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 &&
+			[[ "$pane_state" == 'terminal|presentation|0' ]] && break
+		sleep 0.02
+	done
+	[[ "$pane_state" == 'terminal|presentation|0' ]] ||
+		die "scoped Wayland application exit did not restore the pane console"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		list-clients -F '#{client_name} #{client_flags}' \
 		>"$fixture/graphical-clients.txt"

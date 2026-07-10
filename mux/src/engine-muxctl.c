@@ -81,18 +81,25 @@ static int exchange(int fd, uint16_t type, uint64_t request_id,
 		return -1;
 	}
 	unsigned char packet[sizeof(header) + ENGINE_MUX_MAX_PAYLOAD + 1];
-	ssize_t count = recv(fd, packet, sizeof(packet), 0);
-	if (count < (ssize_t)sizeof(header)) {
-		errno = EPROTO;
-		return -1;
-	}
-	memcpy(&header, packet, sizeof(header));
-	uint32_t length = ntohl(header.payload_length);
-	if (ntohl(header.magic) != ENGINE_MUX_MAGIC ||
-			ntohs(header.version) != ENGINE_MUX_PROTOCOL_VERSION ||
-			length > ENGINE_MUX_MAX_PAYLOAD || sizeof(header) + length != (size_t)count) {
-		errno = EPROTO;
-		return -1;
+	uint32_t length;
+	for (;;) {
+		ssize_t count = recv(fd, packet, sizeof(packet), 0);
+		if (count < (ssize_t)sizeof(header)) {
+			errno = EPROTO;
+			return -1;
+		}
+		memcpy(&header, packet, sizeof(header));
+		length = ntohl(header.payload_length);
+		if (ntohl(header.magic) != ENGINE_MUX_MAGIC ||
+				ntohs(header.version) != ENGINE_MUX_PROTOCOL_VERSION ||
+				length > ENGINE_MUX_MAX_PAYLOAD ||
+				sizeof(header) + length != (size_t)count) {
+			errno = EPROTO;
+			return -1;
+		}
+		if (ntohs(header.type) == ENGINE_MUX_STATE_INVALIDATED && length == 0)
+			continue;
+		break;
 	}
 	char *copy = malloc((size_t)length + 1);
 	if (copy == NULL) {
@@ -961,8 +968,39 @@ static int request_presentation_surface(int fd, bool map, uint32_t pane_id,
 	return 0;
 }
 
+static int request_presentation_resolve(int fd, pid_t pid) {
+	struct json_object *request = json_object_new_object();
+	json_object_object_add(request, "schema",
+		json_object_new_string("engine-mux/presentation-resolve-v1"));
+	json_object_object_add(request, "pid", json_object_new_int64(pid));
+	const char *payload = json_object_to_json_string_ext(request,
+		JSON_C_TO_STRING_PLAIN);
+	uint16_t response_type = 0;
+	uint64_t response_revision = 0;
+	char *response = NULL;
+	int result = exchange(fd, ENGINE_MUX_PRESENTATION_RESOLVE_REQUEST,
+		3000, 0, payload, &response_type, &response_revision, &response);
+	json_object_put(request);
+	if (result != 0)
+		return -1;
+	struct json_object *parsed = json_tokener_parse(response);
+	free(response);
+	if (parsed == NULL) {
+		errno = EPROTO;
+		return -1;
+	}
+	printf("%s\n", json_object_to_json_string_ext(parsed,
+		JSON_C_TO_STRING_PRETTY));
+	json_object_put(parsed);
+	if (response_type != ENGINE_MUX_PRESENTATION_RESOLVE) {
+		errno = EPERM;
+		return -1;
+	}
+	return 0;
+}
+
 static void usage(FILE *stream, const char *program) {
-	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT|input PANE_ID BYTES|keys PANE_ID KEY...|focus-proof PANE_ID|ui PANE_ID [KEY...]|mouse PANE_ID EVENT BUTTON X Y MODIFIERS|mouse-sequence PANE_ID (EVENT BUTTON X Y MODIFIERS)...|mouse-ui PANE_ID (EVENT BUTTON X Y MODIFIERS)...|presentation-map PANE_ID GENERATION PID SURFACE_ID ROLE|presentation-unmap PANE_ID GENERATION PID SURFACE_ID\n", program);
+	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT|input PANE_ID BYTES|keys PANE_ID KEY...|focus-proof PANE_ID|ui PANE_ID [KEY...]|mouse PANE_ID EVENT BUTTON X Y MODIFIERS|mouse-sequence PANE_ID (EVENT BUTTON X Y MODIFIERS)...|mouse-ui PANE_ID (EVENT BUTTON X Y MODIFIERS)...|presentation-resolve PID|presentation-map PANE_ID GENERATION PID SURFACE_ID ROLE|presentation-unmap PANE_ID GENERATION PID SURFACE_ID\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -999,6 +1037,7 @@ int main(int argc, char **argv) {
 	bool is_mouse_ui = strcmp(command, "mouse-ui") == 0;
 	bool is_presentation_map = strcmp(command, "presentation-map") == 0;
 	bool is_presentation_unmap = strcmp(command, "presentation-unmap") == 0;
+	bool is_presentation_resolve = strcmp(command, "presentation-resolve") == 0;
 	size_t mouse_action_arguments = argc > optind + 2 ?
 		(size_t)(argc - optind - 2) : 0;
 	if ((is_grid && optind + 2 != argc) ||
@@ -1012,9 +1051,10 @@ int main(int argc, char **argv) {
 			(is_mouse && optind + 7 != argc) ||
 			(is_presentation_map && optind + 6 != argc) ||
 			(is_presentation_unmap && optind + 5 != argc) ||
+			(is_presentation_resolve && optind + 2 != argc) ||
 			((is_mouse_sequence || is_mouse_ui) &&
 				(mouse_action_arguments == 0 || mouse_action_arguments % 5 != 0)) ||
-			(!is_grid && !is_damage && !is_stale_grid && !is_scrollback && !is_input && !is_keys && !is_focus_proof && !is_ui && !is_mouse && !is_mouse_sequence && !is_mouse_ui && !is_presentation_map && !is_presentation_unmap &&
+			(!is_grid && !is_damage && !is_stale_grid && !is_scrollback && !is_input && !is_keys && !is_focus_proof && !is_ui && !is_mouse && !is_mouse_sequence && !is_mouse_ui && !is_presentation_map && !is_presentation_unmap && !is_presentation_resolve &&
 			 optind + 1 != argc)) {
 		usage(stderr, argv[0]);
 		return 2;
@@ -1032,6 +1072,20 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "engine-muxctl: connect %s: %s\n", socket_path, strerror(errno));
 		free(owned_socket);
 		return 1;
+	}
+	if (is_presentation_resolve) {
+		char *pid_end = NULL;
+		long pid = strtol(argv[optind + 1], &pid_end, 10);
+		if (*argv[optind + 1] == '\0' || *pid_end != '\0' ||
+				pid <= 0 || pid > INT32_MAX) {
+			close(fd); free(owned_socket); return 2;
+		}
+		int resolve_result = request_presentation_resolve(fd, (pid_t)pid);
+		if (resolve_result != 0)
+			fprintf(stderr, "engine-muxctl: request failed: %s\n", strerror(errno));
+		close(fd);
+		free(owned_socket);
+		return resolve_result == 0 ? 0 : 1;
 	}
 	if (is_grid || is_damage || is_stale_grid || is_scrollback || is_input || is_keys || is_focus_proof || is_ui || is_mouse || is_mouse_sequence || is_mouse_ui || is_presentation_map || is_presentation_unmap) {
 		const char *pane_text = argv[optind + 1];

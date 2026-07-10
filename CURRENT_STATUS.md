@@ -99,8 +99,8 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration stage 1 is installed side by side as
-  `engineos-mux 3.6b-15` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-29`, but native mode is not yet the live desktop
+  `engineos-mux 3.6b-18` with the decoder/renderer/control boundary in
+  `engineos-shell 0.1.0-31`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
@@ -162,7 +162,7 @@ These are historical proof artifacts only; they are not the active work path:
   resizing, ranged status-window selection, status-menu opening, and menu-item
   command activation. The shell routes pointer motion, buttons, and vertical
   scroll through that same boundary. The contract passes against the exact
-  `engineos-mux 3.6b-14` and `engineos-shell 0.1.0-29` package binaries. The
+  `engineos-mux 3.6b-18` and `engineos-shell 0.1.0-31` package binaries. The
   native renderer now keeps FreeType-rasterized, colour-keyed glyphs in a GPU
   texture atlas and draws them into double-buffered per-pane GPU targets.
   Sparse tmux cell damage is retained through the mux client, expanded only
@@ -189,8 +189,20 @@ These are historical proof artifacts only; they are not the active work path:
   exit. The installed mux contract proves stdout/stderr retention, foreground
   process groups, signal and respawn behavior, scope isolation, presentation
   toggling, split-host restoration, and the required 15-second unmapped-surface
-  failure in the pane console. Compositor-side XDG surface binding is the next
-  acceptance boundary; the shell does not yet issue these map/unmap frames.
+  failure in the pane console. The server now resolves a Wayland client PID to
+  exactly one registered pane scope without a caller-supplied pane guess and
+  publishes presentation-state invalidations to graphical views. Native shell
+  mode obtains the Wayland client credentials, rejects unscoped clients,
+  issues authoritative map/unmap frames, reparents accepted toplevels beneath
+  the clipped mux pane scene, and switches terminal versus graphical
+  visibility from mux view state. It exports configured tmux prefix keys so
+  prefix commands remain mux-owned while ordinary graphical-mode keys go
+  directly to the Wayland seat. The deterministic headless XDG contract proves
+  wrong-scope rejection, scoped binding, console/application toggling, scene
+  observability, app exit, and terminal restoration against installed package
+  binaries. Complete multi-pane scene construction, transient/popup
+  registration, selectable surface tabs, and graphical presentation leases
+  are the next acceptance boundary.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 

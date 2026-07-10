@@ -75,6 +75,7 @@ enum engineos_shell_mode {
 
 enum engineos_surface_role {
 	ENGINEOS_SURFACE_UNKNOWN,
+	ENGINEOS_SURFACE_MUX_PRESENTATION,
 	ENGINEOS_SURFACE_TERMINAL,
 	ENGINEOS_SURFACE_TERMINAL_SECONDARY,
 	ENGINEOS_SURFACE_CUBE,
@@ -84,6 +85,7 @@ enum engineos_surface_role {
 enum engineos_input_mode {
 	ENGINEOS_INPUT_SHELL,
 	ENGINEOS_INPUT_TERMINAL,
+	ENGINEOS_INPUT_GRAPHICAL,
 	ENGINEOS_INPUT_GAME,
 };
 
@@ -208,6 +210,8 @@ struct engineos_shell_server {
 	uint32_t mux_pointer_x;
 	uint32_t mux_pointer_y;
 	uint32_t keyboard_modifiers;
+	uint32_t mux_consumed_keycode;
+	bool mux_prefix_pending;
 	bool mux_pointer_cell_valid;
 	struct wl_event_source *pane_binding_timer;
 	struct wl_event_source *mux_event_source;
@@ -349,6 +353,11 @@ struct engineos_shell_view {
 	bool fullscreen;
 	bool maximized;
 	bool minimized;
+	bool mux_bound;
+	bool mux_presentation_visible;
+	pid_t mux_client_pid;
+	uint32_t mux_pane_id;
+	uint32_t mux_pane_generation;
 };
 
 
@@ -795,6 +804,8 @@ static const char *surface_role_name(enum engineos_surface_role role) {
 	switch (role) {
 	case ENGINEOS_SURFACE_TERMINAL:
 		return "terminal";
+	case ENGINEOS_SURFACE_MUX_PRESENTATION:
+		return "mux-presentation";
 	case ENGINEOS_SURFACE_TERMINAL_SECONDARY:
 		return "terminal-secondary";
 	case ENGINEOS_SURFACE_CUBE:
@@ -813,6 +824,8 @@ static const char *input_mode_name(enum engineos_input_mode mode) {
 		return "shell";
 	case ENGINEOS_INPUT_TERMINAL:
 		return "terminal";
+	case ENGINEOS_INPUT_GRAPHICAL:
+		return "graphical";
 	case ENGINEOS_INPUT_GAME:
 		return "game";
 	default:
@@ -1723,6 +1736,15 @@ static bool compute_view_geometry(struct engineos_shell_view *view,
 	geometry->height = 0;
 	geometry->fullscreen = view->fullscreen;
 	geometry->layout = "floating";
+	if (view->mux_bound) {
+		geometry->x = 0;
+		geometry->y = 0;
+		geometry->width = view->server->mux_terminal_width;
+		geometry->height = view->server->mux_terminal_height;
+		geometry->fullscreen = false;
+		geometry->layout = "native-mux-presentation";
+		return geometry->width > 0 && geometry->height > 0;
+	}
 
 	if (!is_launchpad_role(view->role)) {
 		ensure_floating_geometry(view);
@@ -1818,6 +1840,12 @@ static bool view_geometry_visible(struct engineos_shell_server *server,
 	}
 	if (view->minimized) {
 		return false;
+	}
+	if (view->mux_bound) {
+		return view->mux_presentation_visible &&
+			view->mux_pane_id == server->mux_client.pane_id &&
+			server->mux_client.pane_presentation_mapped &&
+			strcmp(server->mux_client.pane_view_mode, "presentation") == 0;
 	}
 	if (server->active_slot == view->role || is_terminal_role(view->role)) {
 		return true;
@@ -2418,6 +2446,40 @@ static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
 	return true;
 }
 
+static void sync_native_presentation_visibility(
+		struct engineos_shell_server *server, const char *reason) {
+	bool presentation_visible = server->mux_client.pane_presentation_mapped &&
+		strcmp(server->mux_client.pane_view_mode, "presentation") == 0;
+	struct engineos_shell_view *view;
+	struct engineos_shell_view *active = NULL;
+	wl_list_for_each(view, &server->views, link) {
+		if (!view->mapped || !view->mux_bound ||
+				view->mux_pane_id != server->mux_client.pane_id)
+			continue;
+		bool enabled = presentation_visible &&
+			view->mux_presentation_visible;
+		wlr_scene_node_set_enabled(&view->scene_tree->node, enabled);
+		if (enabled)
+			active = view;
+	}
+	wlr_scene_node_set_enabled(&server->mux_terminal_scene->node,
+		!presentation_visible);
+	if (active != NULL) {
+		if (server->focused_view != active ||
+				server->input_mode != ENGINEOS_INPUT_GRAPHICAL)
+			activate_view(active, reason);
+	} else if (server->focused_view != NULL &&
+			server->focused_view->mux_bound) {
+		set_view_activated(server->focused_view, false);
+		server->focused_view = NULL;
+		wlr_seat_keyboard_notify_clear_focus(server->seat);
+		server->input_mode = ENGINEOS_INPUT_TERMINAL;
+		server->mux_prefix_pending = false;
+		server->mux_consumed_keycode = 0;
+	}
+	schedule_outputs(server);
+}
+
 static int native_mux_event(int fd, uint32_t mask, void *data) {
 	(void)fd;
 	struct engineos_shell_server *server = data;
@@ -2436,6 +2498,14 @@ static int native_mux_event(int fd, uint32_t mask, void *data) {
 		wl_display_terminate(server->display);
 		return 0;
 	}
+	if (!engineos_mux_client_refresh_presentation(&server->mux_client,
+			error, sizeof(error))) {
+		wlr_log(WLR_ERROR, "native mux presentation refresh failed: %s", error);
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+		return 0;
+	}
+	sync_native_presentation_visibility(server, "native-presentation-state");
 	if (changed && !refresh_native_terminal_scene(server,
 			"native-grid-damage")) {
 		server->mux_client.ready = false;
@@ -3348,6 +3418,10 @@ static void write_shell_state(struct engineos_shell_server *server,
 	json_write_string(file, server->mux_client.socket_path);
 	fprintf(file, ", \"session_id\": ");
 	json_write_string(file, server->mux_client.session_id);
+	fprintf(file, ", \"prefix\": ");
+	json_write_string(file, server->mux_client.prefix);
+	fprintf(file, ", \"prefix2\": ");
+	json_write_string(file, server->mux_client.prefix2);
 	fprintf(file,
 		", \"client_view_id\": %u, \"pane_id\": \"%%%u\", \"generation\": %u, \"grid\": {\"revision\": %llu, \"columns\": %u, \"rows\": %u, \"cursor_x\": %u, \"cursor_y\": %u, \"nonblank_cells\": %u, \"rendered\": %s, \"pixel_width\": %d, \"pixel_height\": %d, \"glyph_cells\": %u, \"renderer\": ",
 		server->mux_client.primary_view_id,
@@ -3372,7 +3446,7 @@ static void write_shell_state(struct engineos_shell_server *server,
 		server->mux_client.ui_status_row_count);
 	json_write_string(file, server->mux_client.ui_mode);
 	fprintf(file,
-		", \"rendered\": %s, \"prompt_active\": %s, \"message_active\": %s, \"menu_active\": %s, \"menu_x\": %u, \"menu_y\": %u, \"menu_width\": %u, \"menu_height\": %u}}",
+		", \"rendered\": %s, \"prompt_active\": %s, \"message_active\": %s, \"menu_active\": %s, \"menu_x\": %u, \"menu_y\": %u, \"menu_width\": %u, \"menu_height\": %u}",
 		server->mux_terminal_scene != NULL &&
 			server->mux_client.ui_status_row_count != 0 ? "true" : "false",
 		server->mux_client.ui_prompt_active ? "true" : "false",
@@ -3380,6 +3454,16 @@ static void write_shell_state(struct engineos_shell_server *server,
 		server->mux_client.ui_menu_active ? "true" : "false",
 		server->mux_client.ui_menu_x, server->mux_client.ui_menu_y,
 		server->mux_client.ui_menu_width, server->mux_client.ui_menu_height);
+	fprintf(file, ", \"presentation\": {");
+	fprintf(file, "\"type\": ");
+	json_write_string(file, server->mux_client.pane_presentation);
+	fprintf(file, ", \"view_mode\": ");
+	json_write_string(file, server->mux_client.pane_view_mode);
+	fprintf(file, ", \"mapped\": %s, \"surface_tabs\": %u, \"terminal_visible\": %s}}",
+		server->mux_client.pane_presentation_mapped ? "true" : "false",
+		server->mux_client.pane_surface_tabs,
+		strcmp(server->mux_client.pane_view_mode, "presentation") == 0 &&
+			server->mux_client.pane_presentation_mapped ? "false" : "true");
 	fprintf(file, ",\n  \"active_slot\": ");
 	json_write_string(file, surface_role_name(server->active_slot));
 	fprintf(file, ",\n  \"pending_slot\": ");
@@ -3467,12 +3551,23 @@ static void write_shell_state(struct engineos_shell_server *server,
 			fprintf(file, ", \"app_id\": ");
 			json_write_string(file, view_app_id(view));
 			fprintf(file, ", \"bound\": %s, \"pane_key\": ",
-				pane_binding != NULL ? "true" : "false");
+				pane_binding != NULL || view->mux_bound ? "true" : "false");
 			json_write_string(file,
 				pane_binding != NULL ? pane_binding->key : "");
 			fprintf(file, ", \"pane_id\": ");
-			json_write_string(file,
-				pane_binding != NULL ? pane_binding->pane_id : "");
+			char native_pane_id[32] = {0};
+			if (view->mux_bound)
+				snprintf(native_pane_id, sizeof(native_pane_id), "%%%u",
+					view->mux_pane_id);
+			json_write_string(file, view->mux_bound ? native_pane_id :
+				(pane_binding != NULL ? pane_binding->pane_id : ""));
+			fprintf(file,
+				", \"mux_generation\": %u, \"surface_id\": %u, \"client_pid\": %ld, \"presentation_visible\": %s",
+				view->mux_bound ? view->mux_pane_generation : 0,
+				view->mux_bound ? view->view_id : 0,
+				view->mux_bound ? (long)view->mux_client_pid : 0L,
+				view->mux_bound && view->mux_presentation_visible ?
+					"true" : "false");
 			fprintf(file, "}");
 		}
 		if (!first_window) {
@@ -4111,7 +4206,8 @@ static void apply_view_layout(struct engineos_shell_view *view) {
 	}
 	if (view->scene_tree != NULL) {
 		if (geometry.layout != NULL &&
-				strcmp(geometry.layout, "tmux-pane-gui") == 0) {
+				(strcmp(geometry.layout, "tmux-pane-gui") == 0 ||
+				 strcmp(geometry.layout, "native-mux-presentation") == 0)) {
 			struct wlr_box clip = {
 				.x = 0,
 				.y = 0,
@@ -4314,6 +4410,13 @@ static void set_input_mode(struct engineos_shell_server *server,
 	case ENGINEOS_INPUT_TERMINAL:
 		set_active_slot(server, ENGINEOS_SURFACE_TERMINAL, reason);
 		break;
+	case ENGINEOS_INPUT_GRAPHICAL:
+		server->input_mode = mode;
+		server->game_capture = false;
+		sync_pointer_constraint(server, reason);
+		sync_cursor_image(server, reason);
+		write_shell_state(server, reason);
+		break;
 	case ENGINEOS_INPUT_GAME:
 		if (find_mapped_role(server, ENGINEOS_SURFACE_ENGINE) != NULL) {
 			set_active_slot(server, ENGINEOS_SURFACE_ENGINE, reason);
@@ -4454,7 +4557,8 @@ static void activate_view(struct engineos_shell_view *view, const char *reason) 
 	}
 
 	server->game_capture = false;
-	server->input_mode = ENGINEOS_INPUT_TERMINAL;
+	server->input_mode = view->mux_bound ?
+		ENGINEOS_INPUT_GRAPHICAL : ENGINEOS_INPUT_TERMINAL;
 	if (view->minimized) {
 		view->minimized = false;
 		wlr_scene_node_set_enabled(&view->scene_tree->node, true);
@@ -4819,6 +4923,69 @@ static bool route_native_terminal_key(struct engineos_shell_server *server,
 	return true;
 }
 
+static bool route_native_graphical_prefix_key(
+		struct engineos_shell_server *server, struct wlr_keyboard *keyboard,
+		struct wlr_keyboard_key_event *event, xkb_keysym_t sym,
+		uint32_t keycode, uint32_t modifiers) {
+	if (server->mux_mode != ENGINEOS_MUX_NATIVE ||
+			!server->mux_client.ready ||
+			server->input_mode != ENGINEOS_INPUT_GRAPHICAL)
+		return false;
+	if (server->mux_consumed_keycode == event->keycode) {
+		if (event->state == WL_KEYBOARD_KEY_STATE_RELEASED)
+			server->mux_consumed_keycode = 0;
+		return true;
+	}
+	if (event->state != WL_KEYBOARD_KEY_STATE_PRESSED)
+		return false;
+	char key_name[64];
+	if (native_terminal_key_name(keyboard, sym, keycode, modifiers,
+			key_name) == 0)
+		return false;
+	bool prefix = strcmp(key_name, server->mux_client.prefix) == 0 ||
+		(strcmp(server->mux_client.prefix2, "None") != 0 &&
+		 strcmp(key_name, server->mux_client.prefix2) == 0);
+	if (!server->mux_prefix_pending && !prefix)
+		return false;
+	bool was_pending = server->mux_prefix_pending;
+	bool grid_changed = false;
+	char error[256] = {0};
+	if (!engineos_mux_client_send_key(&server->mux_client,
+			server->mux_client.primary_view_id, key_name, &grid_changed,
+			error, sizeof(error))) {
+		wlr_log(WLR_ERROR, "native graphical prefix key failed key=%s: %s",
+			key_name, error);
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+		return true;
+	}
+	server->mux_prefix_pending = !was_pending;
+	server->mux_consumed_keycode = event->keycode;
+	bool ui_changed = false;
+	if (!engineos_mux_client_request_ui(&server->mux_client,
+			server->mux_client.primary_view_id, &ui_changed,
+			error, sizeof(error)) ||
+			!engineos_mux_client_refresh_presentation(&server->mux_client,
+				error, sizeof(error))) {
+		wlr_log(WLR_ERROR,
+			"native graphical prefix state refresh failed key=%s: %s",
+			key_name, error);
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+		return true;
+	}
+	sync_native_presentation_visibility(server,
+		was_pending ? "native-graphical-prefix-command" :
+			"native-graphical-prefix");
+	if ((grid_changed || ui_changed) &&
+			!refresh_native_terminal_scene(server,
+				"native-graphical-prefix-state")) {
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+	}
+	return true;
+}
+
 static void keyboard_handle_key(struct wl_listener *listener, void *data) {
 	struct engineos_shell_keyboard *keyboard =
 		wl_container_of(listener, keyboard, key);
@@ -4837,6 +5004,10 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
 		for (int i = 0; i < nsyms; i++) {
 			handled = handle_keybinding(server, syms[i], modifiers) || handled;
 		}
+	}
+	if (!handled && nsyms > 0) {
+		handled = route_native_graphical_prefix_key(server,
+			keyboard->keyboard, event, syms[0], keycode, modifiers);
 	}
 	if (!handled && nsyms > 0) {
 		handled = route_native_terminal_key(server, keyboard->keyboard, event,
@@ -5720,10 +5891,161 @@ static const char *view_app_id(struct engineos_shell_view *view) {
 	return view->xdg_surface->toplevel->app_id;
 }
 
+static bool view_client_credentials(struct engineos_shell_view *view,
+		pid_t *pid) {
+	if (view == NULL || view->xdg_surface == NULL ||
+			view->xdg_surface->surface == NULL ||
+			view->xdg_surface->surface->resource == NULL || pid == NULL) {
+		return false;
+	}
+	struct wl_client *client =
+		wl_resource_get_client(view->xdg_surface->surface->resource);
+	if (client == NULL)
+		return false;
+	uid_t uid = 0;
+	gid_t gid = 0;
+	wl_client_get_credentials(client, pid, &uid, &gid);
+	return *pid > 0 && uid == getuid();
+}
+
+static struct engineos_shell_view *native_presentation_other_view(
+		struct engineos_shell_view *view) {
+	struct engineos_shell_view *candidate;
+	wl_list_for_each(candidate, &view->server->views, link) {
+		if (candidate != view && candidate->mapped && candidate->mux_bound &&
+				candidate->mux_pane_id == view->mux_pane_id)
+			return candidate;
+	}
+	return NULL;
+}
+
+static bool native_presentation_map(struct engineos_shell_view *view) {
+	struct engineos_shell_server *server = view->server;
+	pid_t pid = 0;
+	char error[256] = {0};
+	bool grid_changed = false;
+	struct engineos_mux_presentation_target target = {0};
+
+	if (!view_client_credentials(view, &pid) || pid > INT32_MAX) {
+		snprintf(error, sizeof(error), "Wayland client credentials are invalid");
+		goto reject;
+	}
+	if (!engineos_mux_client_resolve_presentation(&server->mux_client,
+			(int32_t)pid, &target, &grid_changed, error, sizeof(error)))
+		goto reject;
+	if (!engineos_mux_client_map_presentation(&server->mux_client, &target,
+			(int32_t)pid, view->view_id, "toplevel", &grid_changed,
+			error, sizeof(error)))
+		goto reject;
+	strcpy(server->mux_client.pane_presentation, target.presentation);
+	strcpy(server->mux_client.pane_view_mode, "presentation");
+	server->mux_client.pane_presentation_mapped = true;
+	server->mux_client.pane_surface_tabs++;
+	if (!engineos_mux_client_refresh_presentation(&server->mux_client,
+			error, sizeof(error))) {
+		wlr_log(WLR_ERROR, "native presentation map state refresh failed: %s",
+			error);
+	}
+
+	view->mux_bound = true;
+	view->mux_client_pid = pid;
+	view->mux_pane_id = target.pane_id;
+	view->mux_pane_generation = target.generation;
+	view->mux_presentation_visible = target.pane_id == server->mux_client.pane_id;
+	wlr_scene_node_reparent(&view->scene_tree->node, server->mux_pane_tree);
+	struct engineos_shell_view *other = native_presentation_other_view(view);
+	if (other != NULL) {
+		other->mux_presentation_visible = false;
+		wlr_scene_node_set_enabled(&other->scene_tree->node, false);
+	}
+	apply_view_layout(view);
+	wlr_scene_node_set_enabled(&view->scene_tree->node,
+		view->mux_presentation_visible);
+	if (view->mux_presentation_visible) {
+		wlr_scene_node_set_enabled(&server->mux_terminal_scene->node, false);
+		activate_view(view, "native-presentation-mapped");
+	}
+	if (grid_changed && !refresh_native_terminal_scene(server,
+			"native-presentation-map")) {
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+	}
+	wlr_log(WLR_INFO,
+		"native presentation mapped pane=%%%u generation=%u pid=%ld surface=%u visible=%s title=%s app_id=%s",
+		view->mux_pane_id, view->mux_pane_generation, (long)pid,
+		view->view_id, view->mux_presentation_visible ? "true" : "false",
+		view_title(view), view_app_id(view));
+	return true;
+
+reject:
+	wlr_log(WLR_ERROR,
+		"native presentation rejected pid=%ld surface=%u reason=%s title=%s app_id=%s",
+		(long)pid, view->view_id, error[0] != '\0' ? error : "unresolved scope",
+		view_title(view), view_app_id(view));
+	wlr_scene_node_set_enabled(&view->scene_tree->node, false);
+	view->mapped = false;
+	if (view->xdg_surface->toplevel != NULL)
+		wlr_xdg_toplevel_send_close(view->xdg_surface->toplevel);
+	return false;
+}
+
+static void native_presentation_unmap(struct engineos_shell_view *view) {
+	if (!view->mux_bound)
+		return;
+	struct engineos_shell_server *server = view->server;
+	bool grid_changed = false;
+	char error[256] = {0};
+	if (!engineos_mux_client_unmap_presentation(&server->mux_client,
+			view->mux_pane_id, view->mux_pane_generation,
+			(int32_t)view->mux_client_pid, view->view_id, &grid_changed,
+			error, sizeof(error))) {
+		wlr_log(WLR_INFO,
+			"native presentation unmap already retired pane=%%%u generation=%u surface=%u reason=%s",
+			view->mux_pane_id, view->mux_pane_generation, view->view_id,
+			error[0] != '\0' ? error : "unknown");
+	}
+	if (!engineos_mux_client_refresh_presentation(&server->mux_client,
+			error, sizeof(error))) {
+		wlr_log(WLR_ERROR, "native presentation state refresh failed: %s",
+			error);
+		if (server->mux_client.pane_surface_tabs > 0)
+			server->mux_client.pane_surface_tabs--;
+		if (server->mux_client.pane_surface_tabs == 0) {
+			server->mux_client.pane_presentation_mapped = false;
+			strcpy(server->mux_client.pane_view_mode, "console");
+		}
+	}
+	uint32_t pane_id = view->mux_pane_id;
+	view->mux_bound = false;
+	view->mux_presentation_visible = false;
+	struct engineos_shell_view *other = native_presentation_other_view(view);
+	if (other != NULL && pane_id == server->mux_client.pane_id) {
+		other->mux_presentation_visible = true;
+		wlr_scene_node_set_enabled(&other->scene_tree->node, true);
+		activate_view(other, "native-presentation-tab-promoted");
+	} else if (pane_id == server->mux_client.pane_id) {
+		wlr_scene_node_set_enabled(&server->mux_terminal_scene->node, true);
+		server->input_mode = ENGINEOS_INPUT_TERMINAL;
+	}
+	if (grid_changed && !refresh_native_terminal_scene(server,
+			"native-presentation-unmap")) {
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+	}
+}
+
 static void xdg_surface_map(struct wl_listener *listener, void *data) {
 	(void)data;
 	struct engineos_shell_view *view = wl_container_of(listener, view, map);
 	view->mapped = true;
+	if (view->server->mux_mode == ENGINEOS_MUX_NATIVE) {
+		view->role = ENGINEOS_SURFACE_MUX_PRESENTATION;
+		if (native_presentation_map(view))
+			write_shell_state(view->server, "native-presentation-mapped");
+		else
+			write_shell_state(view->server, "native-presentation-rejected");
+		return;
+	}
 	view->role = classify_view_role(view);
 	if (!is_launchpad_role(view->role)) {
 		bind_view_to_pending_pane(view);
@@ -5785,6 +6107,8 @@ static void xdg_surface_unmap(struct wl_listener *listener, void *data) {
 	struct engineos_shell_view *view = wl_container_of(listener, view, unmap);
 	view->mapped = false;
 	wlr_scene_node_set_enabled(&view->scene_tree->node, false);
+	if (view->server->mux_mode == ENGINEOS_MUX_NATIVE)
+		native_presentation_unmap(view);
 	if (view->server->moving_view == view) {
 		view->server->moving_view = NULL;
 	}
@@ -5825,7 +6149,8 @@ static void xdg_surface_commit(struct wl_listener *listener, void *data) {
 	struct engineos_shell_view *view = wl_container_of(listener, view, commit);
 	if (view->xdg_surface->initial_commit &&
 			view->xdg_surface->toplevel != NULL) {
-		view->role = classify_view_role(view);
+		view->role = view->server->mux_mode == ENGINEOS_MUX_NATIVE ?
+			ENGINEOS_SURFACE_MUX_PRESENTATION : classify_view_role(view);
 		set_toplevel_wm_capabilities(view->xdg_surface->toplevel);
 		if (is_launchpad_role(view->role)) {
 			struct engineos_view_geometry geometry = {0};
@@ -5995,6 +6320,8 @@ static void xdg_surface_destroy(struct wl_listener *listener, void *data) {
 	(void)data;
 	struct engineos_shell_view *view = wl_container_of(listener, view, destroy);
 	struct engineos_shell_server *server = view->server;
+	if (server->mux_mode == ENGINEOS_MUX_NATIVE && view->mux_bound)
+		native_presentation_unmap(view);
 
 	wlr_log(WLR_INFO, "view destroyed role=%s id=%u title=%s app_id=%s",
 		surface_role_name(view->role), view->view_id,

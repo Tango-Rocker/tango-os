@@ -44,13 +44,14 @@
 +	u_int		 engine_surface_count;
 +	int		 engine_mapped;
 +
-@@ -2888,0 +2928,8 @@ void	 engine_mux_frontend_free(void);
+@@ -2888,0 +2928,9 @@ void	 engine_mux_frontend_free(void);
 +/* engine-pane.c */
 +const char *engine_pane_presentation_name(const struct window_pane *);
 +const char *engine_pane_view_mode_name(const struct window_pane *);
 +int	 engine_pane_surface_map(struct window_pane *, pid_t, u_int,
 +	     const char *, char **);
 +int	 engine_pane_surface_unmap(struct window_pane *, pid_t, u_int, char **);
++struct window_pane *engine_pane_resolve_pid(pid_t, char **);
 +void	 engine_pane_surface_clear(struct window_pane *);
 +void	 engine_pane_sync_all(void);
 +

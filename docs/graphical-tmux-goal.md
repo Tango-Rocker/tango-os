@@ -42,9 +42,16 @@ boundary. The native terminal renderer now uses a colour-keyed GPU glyph atlas,
 double-buffered pane targets, clipped sparse-cell draws, wlroots scene damage,
 and a nonblank GPU readback. Its installed contract uses the local AMD render
 node through GLES2/radeonsi and distinguishes the explicit pixman smoke path
-from hardware rendering. Compound presentations, process scopes, multi-pane
-clipping/resize/zoom on direct KMS, leases, games/images, final hardware
-acceptance, and legacy cutover remain open.
+from hardware rendering. Compound presentation commands, process scopes,
+authoritative PID-to-pane resolution, compositor XDG map/unmap binding,
+clipped presentation scenes, state-driven console/application visibility, and
+configured-prefix routing in graphical mode are now implemented. A
+deterministic XDG client proves that an unscoped surface is rejected, a scoped
+surface maps only to its pane, presentation/console toggles reach the
+compositor, and process exit restores the terminal. Multi-pane scene
+construction, complete surface tabs and popup tracking, leases, games/images,
+direct-KMS clipping/resize/zoom, final hardware acceptance, and legacy cutover
+remain open.
 
 ## Workstream 1: Integrate The Protocol Into Engine Mux
 
