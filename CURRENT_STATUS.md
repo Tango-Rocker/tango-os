@@ -99,7 +99,7 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration stage 1 is installed side by side as
-  `engineos-mux 3.6b-13` with the decoder/renderer/control boundary in
+  `engineos-mux 3.6b-14` with the decoder/renderer/control boundary in
   `engineos-shell 0.1.0-28`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
@@ -155,12 +155,15 @@ These are historical proof artifacts only; they are not the active work path:
   Native pointer events now carry focused client-view cell coordinates,
   buttons, wheel direction, and keyboard modifiers into tmux's normal SGR
   mouse classifier. Tmux remains responsible for pane, border, status, menu,
-  and copy-mode hit-testing. The contract proves a real `MouseDown1Pane`
-  binding and wheel-triggered entry into copy mode, while the shell routes
-  pointer motion, buttons, and vertical scroll through that boundary. The same
-  contract passes against the exact `engineos-mux 3.6b-13` and
-  `engineos-shell 0.1.0-28` package binaries. Drag-selection, border/status/menu
-  click proofs, glyph-atlas updates, and hardware-renderer acceptance remain.
+  and copy-mode hit-testing. The control proof keeps press, motion, and release
+  frames on one registered graphical client and places an event-loop barrier
+  between them. The contract now proves a real `MouseDown1Pane` binding,
+  wheel-triggered copy mode, drag selection into a tmux paste buffer, border
+  resizing, ranged status-window selection, status-menu opening, and menu-item
+  command activation. The shell routes pointer motion, buttons, and vertical
+  scroll through that same boundary. The contract passes against the exact
+  `engineos-mux 3.6b-14` and `engineos-shell 0.1.0-28` package binaries.
+  Incremental GPU glyph-atlas updates and hardware-renderer acceptance remain.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 

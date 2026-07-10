@@ -702,8 +702,21 @@ static int request_focus_proof(int fd, uint32_t pane_id) {
 	return 0;
 }
 
-static int request_mouse(int fd, uint32_t pane_id, const char *event,
-		const char *button, uint32_t x, uint32_t y, uint32_t modifiers) {
+static int parse_mouse_number(const char *text, uint32_t maximum,
+		uint32_t *value) {
+	char *end = NULL;
+	unsigned long parsed = strtoul(text, &end, 10);
+	if (*text == '\0' || *end != '\0' || parsed > maximum) return -1;
+	*value = (uint32_t)parsed;
+	return 0;
+}
+
+static int request_mouse_actions(int fd, uint32_t pane_id, char **actions,
+		size_t action_count, bool return_ui) {
+	if (action_count == 0 || action_count % 5 != 0) {
+		errno = EINVAL;
+		return -1;
+	}
 	uint64_t revision = 0;
 	char *session_id = NULL;
 	if (focus_proof_session(fd, pane_id, &revision, &session_id) != 0)
@@ -714,46 +727,120 @@ static int request_mouse(int fd, uint32_t pane_id, const char *event,
 		return -1;
 	}
 	free(session_id);
-	struct json_object *request = json_object_new_object();
-	if (request == NULL) return -1;
-	json_object_object_add(request, "schema",
-		json_object_new_string("engine-mux/mouse-v1"));
-	json_object_object_add(request, "view_id", json_object_new_int(1));
-	json_object_object_add(request, "x", json_object_new_int64(x));
-	json_object_object_add(request, "y", json_object_new_int64(y));
-	json_object_object_add(request, "event", json_object_new_string(event));
-	json_object_object_add(request, "button", json_object_new_string(button));
-	json_object_object_add(request, "modifiers",
-		json_object_new_int64(modifiers));
-	const char *payload = json_object_to_json_string_ext(request,
-		JSON_C_TO_STRING_PLAIN);
 	uint16_t response_type = 0;
 	char *response = NULL;
-	int result = exchange(fd, ENGINE_MUX_MOUSE_REQUEST, 401, revision, payload,
-		&response_type, &revision, &response);
-	json_object_put(request);
-	if (result != 0 || response_type != ENGINE_MUX_MOUSE_ACK) {
+	struct json_object *last_ack = NULL;
+	size_t queued = 0;
+	for (size_t offset = 0; offset < action_count; offset += 5) {
+		uint32_t x, y, modifiers;
+		if (parse_mouse_number(actions[offset + 2], UINT32_MAX, &x) != 0 ||
+				parse_mouse_number(actions[offset + 3], UINT32_MAX, &y) != 0 ||
+				parse_mouse_number(actions[offset + 4], 7, &modifiers) != 0) {
+			if (last_ack != NULL) json_object_put(last_ack);
+			errno = EINVAL;
+			return -1;
+		}
+		struct json_object *request = json_object_new_object();
+		if (request == NULL) {
+			if (last_ack != NULL) json_object_put(last_ack);
+			return -1;
+		}
+		json_object_object_add(request, "schema",
+			json_object_new_string("engine-mux/mouse-v1"));
+		json_object_object_add(request, "view_id", json_object_new_int(1));
+		json_object_object_add(request, "x", json_object_new_int64(x));
+		json_object_object_add(request, "y", json_object_new_int64(y));
+		json_object_object_add(request, "event",
+			json_object_new_string(actions[offset]));
+		json_object_object_add(request, "button",
+			json_object_new_string(actions[offset + 1]));
+		json_object_object_add(request, "modifiers",
+			json_object_new_int64(modifiers));
+		const char *payload = json_object_to_json_string_ext(request,
+			JSON_C_TO_STRING_PLAIN);
+		int result = exchange(fd, ENGINE_MUX_MOUSE_REQUEST, 401 + queued,
+			revision, payload, &response_type, &revision, &response);
+		json_object_put(request);
+		if (result != 0 || response_type != ENGINE_MUX_MOUSE_ACK) {
+			free(response);
+			if (last_ack != NULL) json_object_put(last_ack);
+			errno = EPROTO;
+			return -1;
+		}
+		if (last_ack != NULL) json_object_put(last_ack);
+		last_ack = json_tokener_parse(response);
 		free(response);
-		errno = EPROTO;
-		return -1;
+		response = NULL;
+		if (last_ack == NULL) { errno = EPROTO; return -1; }
+		queued++;
+		if (offset + 5 < action_count &&
+				exchange(fd, ENGINE_MUX_SNAPSHOT_REQUEST, 450 + queued,
+				revision, "{}", &response_type, &revision, &response) != 0) {
+			json_object_put(last_ack);
+			free(response);
+			errno = EPROTO;
+			return -1;
+		}
+		if (offset + 5 < action_count) {
+			if (response_type != ENGINE_MUX_SNAPSHOT) {
+				json_object_put(last_ack);
+				free(response);
+				errno = EPROTO;
+				return -1;
+			}
+			free(response);
+			response = NULL;
+		}
 	}
-	struct json_object *ack = json_tokener_parse(response);
-	free(response);
-	if (ack == NULL) { errno = EPROTO; return -1; }
-	usleep(20000);
-	response = NULL;
-	if (exchange(fd, ENGINE_MUX_SNAPSHOT_REQUEST, 402, revision, "{}",
+	if (exchange(fd, ENGINE_MUX_SNAPSHOT_REQUEST, 500 + queued, revision, "{}",
 			&response_type, &revision, &response) != 0 ||
 			response_type != ENGINE_MUX_SNAPSHOT) {
-		json_object_put(ack);
+		json_object_put(last_ack);
 		free(response);
 		errno = EPROTO;
 		return -1;
 	}
 	free(response);
-	printf("%s\n", json_object_to_json_string_ext(ack,
-		JSON_C_TO_STRING_PRETTY));
-	json_object_put(ack);
+	response = NULL;
+	if (return_ui) {
+		struct json_object *request = json_object_new_object();
+		if (request == NULL) { json_object_put(last_ack); return -1; }
+		json_object_object_add(request, "schema",
+			json_object_new_string("engine-mux/ui-request-v1"));
+		json_object_object_add(request, "view_id", json_object_new_int(1));
+		const char *payload = json_object_to_json_string_ext(request,
+			JSON_C_TO_STRING_PLAIN);
+		int result = exchange(fd, ENGINE_MUX_UI_REQUEST, 600 + queued,
+			revision, payload, &response_type, &revision, &response);
+		json_object_put(request);
+		json_object_put(last_ack);
+		if (result != 0 || response_type != ENGINE_MUX_UI_MODEL) {
+			free(response);
+			errno = EPROTO;
+			return -1;
+		}
+		struct json_object *model = json_tokener_parse(response);
+		free(response);
+		if (model == NULL) { errno = EPROTO; return -1; }
+		printf("%s\n", json_object_to_json_string_ext(model,
+			JSON_C_TO_STRING_PRETTY));
+		json_object_put(model);
+	} else if (queued == 1) {
+		printf("%s\n", json_object_to_json_string_ext(last_ack,
+			JSON_C_TO_STRING_PRETTY));
+		json_object_put(last_ack);
+	} else {
+		json_object_put(last_ack);
+		struct json_object *result = json_object_new_object();
+		if (result == NULL) return -1;
+		json_object_object_add(result, "schema",
+			json_object_new_string("engine-mux/mouse-sequence-v1"));
+		json_object_object_add(result, "queued",
+			json_object_new_int64((int64_t)queued));
+		printf("%s\n", json_object_to_json_string_ext(result,
+			JSON_C_TO_STRING_PRETTY));
+		json_object_put(result);
+	}
 	return 0;
 }
 
@@ -831,7 +918,7 @@ static int request_ui(int fd, uint32_t pane_id, char **keys,
 }
 
 static void usage(FILE *stream, const char *program) {
-	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT|input PANE_ID BYTES|keys PANE_ID KEY...|focus-proof PANE_ID|ui PANE_ID [KEY...]|mouse PANE_ID EVENT BUTTON X Y MODIFIERS\n", program);
+	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT|input PANE_ID BYTES|keys PANE_ID KEY...|focus-proof PANE_ID|ui PANE_ID [KEY...]|mouse PANE_ID EVENT BUTTON X Y MODIFIERS|mouse-sequence PANE_ID (EVENT BUTTON X Y MODIFIERS)...|mouse-ui PANE_ID (EVENT BUTTON X Y MODIFIERS)...\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -864,6 +951,10 @@ int main(int argc, char **argv) {
 	bool is_focus_proof = strcmp(command, "focus-proof") == 0;
 	bool is_ui = strcmp(command, "ui") == 0;
 	bool is_mouse = strcmp(command, "mouse") == 0;
+	bool is_mouse_sequence = strcmp(command, "mouse-sequence") == 0;
+	bool is_mouse_ui = strcmp(command, "mouse-ui") == 0;
+	size_t mouse_action_arguments = argc > optind + 2 ?
+		(size_t)(argc - optind - 2) : 0;
 	if ((is_grid && optind + 2 != argc) ||
 			(is_damage && optind + 3 != argc) ||
 			(is_stale_grid && optind + 2 != argc) ||
@@ -873,7 +964,9 @@ int main(int argc, char **argv) {
 			(is_focus_proof && optind + 2 != argc) ||
 			(is_ui && optind + 2 > argc) ||
 			(is_mouse && optind + 7 != argc) ||
-			(!is_grid && !is_damage && !is_stale_grid && !is_scrollback && !is_input && !is_keys && !is_focus_proof && !is_ui && !is_mouse &&
+			((is_mouse_sequence || is_mouse_ui) &&
+				(mouse_action_arguments == 0 || mouse_action_arguments % 5 != 0)) ||
+			(!is_grid && !is_damage && !is_stale_grid && !is_scrollback && !is_input && !is_keys && !is_focus_proof && !is_ui && !is_mouse && !is_mouse_sequence && !is_mouse_ui &&
 			 optind + 1 != argc)) {
 		usage(stderr, argv[0]);
 		return 2;
@@ -892,7 +985,7 @@ int main(int argc, char **argv) {
 		free(owned_socket);
 		return 1;
 	}
-	if (is_grid || is_damage || is_stale_grid || is_scrollback || is_input || is_keys || is_focus_proof || is_ui || is_mouse) {
+	if (is_grid || is_damage || is_stale_grid || is_scrollback || is_input || is_keys || is_focus_proof || is_ui || is_mouse || is_mouse_sequence || is_mouse_ui) {
 		const char *pane_text = argv[optind + 1];
 		if (*pane_text == '%') pane_text++;
 		char *end = NULL;
@@ -911,20 +1004,9 @@ int main(int argc, char **argv) {
 			return 2;
 		}
 		int grid_result;
-		if (is_mouse) {
-			char *x_end = NULL, *y_end = NULL, *modifiers_end = NULL;
-			unsigned long x = strtoul(argv[optind + 4], &x_end, 10);
-			unsigned long y = strtoul(argv[optind + 5], &y_end, 10);
-			unsigned long modifiers = strtoul(argv[optind + 6],
-				&modifiers_end, 10);
-			if (*x_end != '\0' || *y_end != '\0' ||
-					*modifiers_end != '\0' || x > UINT32_MAX ||
-					y > UINT32_MAX || modifiers > 7) {
-				close(fd); free(owned_socket); return 2;
-			}
-			grid_result = request_mouse(fd, (uint32_t)pane_id,
-				argv[optind + 2], argv[optind + 3], (uint32_t)x,
-				(uint32_t)y, (uint32_t)modifiers);
+		if (is_mouse || is_mouse_sequence || is_mouse_ui) {
+			grid_result = request_mouse_actions(fd, (uint32_t)pane_id,
+				&argv[optind + 2], mouse_action_arguments, is_mouse_ui);
 		} else if (is_ui) {
 			grid_result = request_ui(fd, (uint32_t)pane_id,
 				&argv[optind + 2], (size_t)(argc - optind - 2));

@@ -60,6 +60,7 @@ static int engine_mux_send_frame(int, uint16_t, uint64_t, uint64_t,
     const char *, size_t);
 static void engine_mux_client_free(struct engine_mux_client *);
 static void engine_mux_hash_bytes(uint64_t *, const void *, size_t);
+static struct json_object *engine_mux_build_ui_model(struct engine_mux_view *);
 
 static uint64_t
 engine_mux_ui_model_hash(struct json_object *model)
@@ -378,6 +379,7 @@ engine_mux_mouse_dispatch(struct engine_mux_client *client,
 	struct engine_mux_view *view;
 	struct client *tmux_client;
 	struct key_event *event;
+	struct json_object *ui_model;
 	const char *schema, *type, *button_name;
 	u_int view_id, x, y, button, modifiers, encoded_button;
 
@@ -408,6 +410,12 @@ engine_mux_mouse_dispatch(struct engine_mux_client *client,
 	tmux_client->tty.ooy = 0;
 	tmux_client->tty.osx = tmux_client->session->curw->window->sx;
 	tmux_client->tty.osy = tmux_client->session->curw->window->sy;
+	ui_model = engine_mux_build_ui_model(view);
+	if (ui_model == NULL) {
+		*cause = xstrdup("graphical mouse UI state could not be rendered");
+		return (-1);
+	}
+	json_object_put(ui_model);
 	if (modifiers & 1)
 		encoded_button |= MOUSE_MASK_SHIFT;
 	if (modifiers & 2)

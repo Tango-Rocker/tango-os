@@ -35,11 +35,12 @@ The shell retains and composites those rows over the pane grid and consumes
 event-driven UI invalidations; headless contracts exercise live status, menu,
 and command-prompt transitions. Native mouse frames now enter tmux's normal
 SGR classifier with focused-view cell coordinates; the contract proves pane
-hit-testing and wheel-triggered copy mode, and the shell routes motion, buttons,
-modifiers, and vertical scroll through that boundary. Drag selection,
-border/status/menu click proofs, incremental GPU glyph-atlas updates, compound
-presentations, process scopes, leases, games/images, hardware acceptance, and
-legacy cutover remain open.
+hit-testing, wheel-triggered copy mode, drag selection, authoritative border
+resize, ranged status selection, menu opening, and menu-command activation.
+The shell routes motion, buttons, modifiers, and vertical scroll through that
+boundary. Incremental GPU glyph-atlas updates, compound presentations, process
+scopes, leases, games/images, hardware acceptance, and legacy cutover remain
+open.
 
 ## Workstream 1: Integrate The Protocol Into Engine Mux
 

@@ -162,6 +162,8 @@ run_mux() {
 	local history_rows history_start
 	local key_proof=""
 	local mouse_proof=""
+	local drag_buffer_size="" target_window="" border_pane_id=""
+	local border_width="" resized_width=""
 	local restore_proof="" shell_pane_id=""
 	local shell_pid="" overlay_pid="" prompt_pid="" shell_client_name=""
 	local initial_native_revision updated_native_revision stable_revision=""
@@ -296,6 +298,70 @@ run_mux() {
 		die "graphical mouse wheel did not enter tmux copy mode"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		send-keys -X -t "$pane_id" cancel
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" mouse-sequence \
+		"$pane_id" press left 2 2 0 motion left 10 5 0 \
+		release left 10 5 0 >"$fixture/mouse-drag.json"
+	jq -e '.schema == "engine-mux/mouse-sequence-v1" and .queued == 3' \
+		"$fixture/mouse-drag.json" >/dev/null ||
+		die "graphical mouse drag sequence was not kept on one tmux client"
+	drag_buffer_size="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" list-buffers -F '#{buffer_size}' 2>/dev/null | head -n 1)"
+	[[ "$drag_buffer_size" =~ ^[0-9]+$ && "$drag_buffer_size" -gt 0 ]] ||
+		die "graphical mouse drag did not complete a tmux copy-mode selection"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot \
+		>"$fixture/mouse-drag-snapshot.json"
+	jq -e --arg pane "$pane_id" \
+		'.panes[] | select(.pane_id == $pane) | .copy_mode == false' \
+		"$fixture/mouse-drag-snapshot.json" >/dev/null ||
+		die "graphical mouse release did not leave copy mode"
+	target_window="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" new-window -d -P -F '#{window_id}' -t contract -n target)"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		set-option -g 'status-format[0]' \
+		'#[range=window|1]TARGET#[norange default]'
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" mouse "$pane_id" \
+		press left 2 23 0 >/dev/null
+	[[ "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		display-message -p '#{window_index}:#{window_name}')" == "1:target" ]] ||
+		die "graphical status click did not select tmux's ranged window target"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		select-window -t contract:0
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" mouse-ui "$pane_id" \
+		press right 2 23 0 >"$fixture/mouse-menu.json"
+	jq -e '.schema == "engine-mux/ui-model-v1" and .menu.active == true and
+		(.menu.title | contains("1:target")) and .menu.width > 0 and
+		.menu.height > 0' "$fixture/mouse-menu.json" >/dev/null ||
+		die "graphical status right-click did not open tmux's window menu"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		bind-key -n MouseDown3Status display-menu -x 10 -y 5 \
+		-T CLICK-MENU Pick p \
+		'set-option -g @engineos-menu-click accepted'
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" mouse-sequence \
+		"$pane_id" press right 2 23 0 press left 12 3 0 \
+		release left 12 3 0 >"$fixture/mouse-menu-click.json"
+	jq -e '.schema == "engine-mux/mouse-sequence-v1" and .queued == 3' \
+		"$fixture/mouse-menu-click.json" >/dev/null ||
+		die "graphical menu click sequence was not kept on one tmux client"
+	[[ "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		show-option -gv @engineos-menu-click 2>/dev/null || true)" == accepted ]] ||
+		die "graphical menu click did not run tmux's selected menu command"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		kill-window -t "$target_window"
+	border_pane_id="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" split-window -h -d -P -F '#{pane_id}' -t "$pane_id")"
+	border_width="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" display-message -p -t "$pane_id" '#{pane_width}')"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" mouse-sequence \
+		"$pane_id" press left "$border_width" 5 0 \
+		motion left "$((border_width + 5))" 5 0 \
+		release left "$((border_width + 5))" 5 0 \
+		>"$fixture/mouse-border.json"
+	resized_width="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" display-message -p -t "$pane_id" '#{pane_width}')"
+	[[ "$resized_width" -gt "$border_width" ]] ||
+		die "graphical border drag did not resize the authoritative tmux pane"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		kill-pane -t "$border_pane_id"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		set-option -g prefix C-b
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \

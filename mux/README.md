@@ -38,7 +38,10 @@ Mouse frames carry cell coordinates, press/release/motion/wheel state, and
 Shift/Meta/Ctrl modifiers for the focused graphical view. The frontend creates
 the same SGR mouse state as a terminal client and passes it through tmux's
 normal client-key path. Tmux therefore remains authoritative for pane, border,
-status, menu, and copy-mode hit-testing and bindings.
+status, menu, and copy-mode hit-testing and bindings. Persistent mouse
+sequences retain tmux's button and overlay state across frames, with an
+event-loop barrier between actions. The contract proves drag selection, border
+resize, ranged status selection, menu opening, and menu-item activation.
 
 Run a local contract proof:
 
@@ -48,5 +51,5 @@ meson compile -C build/mux
 ./tools/engineos/eos-test mux
 ```
 
-The next migration proof is drag selection plus border, status, and menu click
-interaction through the shell.
+The next migration proof is incremental GPU glyph-atlas damage followed by the
+compound pane-presentation and process-scope boundary.
