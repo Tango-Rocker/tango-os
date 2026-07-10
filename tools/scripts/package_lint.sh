@@ -218,6 +218,14 @@ lint_pkgbuild() {
 			fail "$pkg: source is not pinned to an exact commit"
 			return
 		fi
+		if ! grep -Fq 'git -C "$source_dir" archive' "$pkg_dir/PKGBUILD"; then
+			fail "$pkg: package does not archive the pinned managed checkout"
+			return
+		fi
+		if grep -Eq '^source=.*git\+' "$pkg_dir/PKGBUILD"; then
+			fail "$pkg: package must not perform an unauthenticated private source clone"
+			return
+		fi
 		;;
 	engineos-shell)
       if ! grep -q 'meson install' "$pkg_dir/PKGBUILD"; then

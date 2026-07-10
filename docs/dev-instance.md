@@ -17,6 +17,8 @@ The target dev instance should have:
   GitHub CLI, Git LFS, lazygit, btop, bat, eza, tldr, and local man pages
 - first-deploy logs under `/var/log/engineos/post-first-deploy.log`
 - staged payload assets under `/tmp/engineos-post-first-deploy` during setup
+- managed helper checkouts under `$HOME`, including the pinned dgen source used
+  by the `engineos-dgen` package build
 
 Codex authentication is intentionally manual. After setup, run `codex` once in
 the guest and sign in with the intended account.

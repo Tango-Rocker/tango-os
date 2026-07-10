@@ -3625,6 +3625,8 @@ run_post_first_deploy() {
     die "post-first-deploy setup does not fetch opencode-autonomy"
   grep -F 'agent' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not fetch agent"
+  grep -F 'quake-generator:quake-os-integration' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not fetch the pinned dgen source repository"
   grep -F 'skills' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not fetch skills"
   grep -F 'Tango-Rocker' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||

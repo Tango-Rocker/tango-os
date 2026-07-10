@@ -6,22 +6,44 @@ arch=('any')
 url="https://github.com/Tango-Rocker/quake-os-integration"
 license=('custom:EngineOS-TBD')
 depends=('python' 'python-pydantic')
-makedepends=('git' 'python-build' 'python-installer' 'python-wheel')
+makedepends=('git')
 _commit=0013e58ba8b5ee7436d29b33cd0f7010ae2996e5
 # Immutable commit behind the validated v0.1.0 release tag.
-source=("git+$url.git#commit=$_commit")
-sha256sums=('SKIP')
 
-build() {
-  cd quake-os-integration
-  python -m build --wheel --no-isolation
+prepare() {
+  local source_dir snapshot
+
+  source_dir="${ENGINEOS_DGEN_SOURCE_DIR:-$(cd "$startdir/../../.." && pwd -P)/quake-generator}"
+  [[ -d "$source_dir/.git" ]] || {
+    printf 'engineos-dgen: managed source checkout missing: %s\n' "$source_dir" >&2
+    printf 'engineos-dgen: clone %s.git or set ENGINEOS_DGEN_SOURCE_DIR\n' "$url" >&2
+    return 1
+  }
+  git -C "$source_dir" cat-file -e "$_commit^{commit}" || {
+    printf 'engineos-dgen: pinned commit is unavailable in %s: %s\n' "$source_dir" "$_commit" >&2
+    return 1
+  }
+
+  rm -rf "$srcdir/quake-os-integration"
+  install -d "$srcdir/quake-os-integration"
+  snapshot="$srcdir/quake-os-integration-$_commit.tar"
+  git -C "$source_dir" archive --format=tar --output="$snapshot" "$_commit"
+  bsdtar -xf "$snapshot" -C "$srcdir/quake-os-integration"
+  rm -f "$snapshot"
 }
 
 package() {
-  local _engineos_root
+  local _engineos_root site_packages
   _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
   cd quake-os-integration
-  python -m installer --destdir="$pkgdir" dist/*.whl
+  site_packages="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib", vars={"base": "/usr", "platbase": "/usr"}))')"
+  install -d "$pkgdir$site_packages" "$pkgdir/usr/bin"
+  cp -a src/dgen "$pkgdir$site_packages/dgen"
+  printf '%s\n' \
+    '#!/usr/bin/python' \
+    'from dgen.cli import main' \
+    'raise SystemExit(main())' >"$pkgdir/usr/bin/dgen"
+  chmod 0755 "$pkgdir/usr/bin/dgen"
   install -d "$pkgdir/usr/share/engineos/dgen"
   cp -a catalog "$pkgdir/usr/share/engineos/dgen/catalog"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"

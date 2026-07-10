@@ -89,27 +89,49 @@ check_local_runtime_deps_ready() {
   done < <(pkgbuild_runtime_dependencies "$pkg")
 }
 
+artifact_pkgbase() {
+  local artifact="$1"
+
+  bsdtar -xOf "$artifact" .PKGINFO 2>/dev/null |
+    sed -n 's/^pkgbase = //p' |
+    head -n 1
+}
+
 repo_add_current_artifacts() {
   local artifact
+  local pkgbase
   local name
   local version
   local current_version
+  local repo_tmp
   local artifacts=()
+  local discarded_artifacts=()
   declare -A latest_artifact=()
   declare -A latest_version=()
 
-  while IFS= read -r artifact; do
+  while IFS= read -r -d '' artifact; do
     read -r name version < <(pacman -Qp "$artifact" 2>/dev/null || true)
     [[ -n "${name:-}" && -n "${version:-}" ]] || continue
+    pkgbase="$(artifact_pkgbase "$artifact")"
+    [[ -n "$pkgbase" ]] || pkgbase="$name"
+    if [[ "$pkgbase" == engineos-* ]] && ! engineos_package_known "$pkgbase"; then
+      discarded_artifacts+=("$artifact")
+      continue
+    fi
 
     current_version="${latest_version[$name]:-}"
     if [[ -z "$current_version" ]] || [[ "$(vercmp "$version" "$current_version")" -gt 0 ]]; then
+      if [[ -n "${latest_artifact[$name]:-}" ]]; then
+        discarded_artifacts+=("${latest_artifact[$name]}")
+      fi
       latest_artifact[$name]="$artifact"
       latest_version[$name]="$version"
+    else
+      discarded_artifacts+=("$artifact")
     fi
   done < <(find "$REPO_DIR" -maxdepth 1 -type f \
     \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' -o -name '*.pkg.tar.gz' \) \
-    -print | sort)
+    -print0 | sort -z)
 
   while IFS= read -r name; do
     [[ -n "$name" ]] || continue
@@ -117,7 +139,23 @@ repo_add_current_artifacts() {
   done < <(printf '%s\n' "${!latest_artifact[@]}" | sort)
 
   [[ ${#artifacts[@]} -gt 0 ]] || die "no package artifacts found in $REPO_DIR"
-  repo-add "$REPO_DIR/$REPO_NAME.db.tar.gz" "${artifacts[@]}"
+  repo_tmp="$(mktemp -d "$REPO_DIR/.repo-refresh.XXXXXX")"
+  if ! repo-add "$repo_tmp/$REPO_NAME.db.tar.gz" "${artifacts[@]}"; then
+    rm -rf "$repo_tmp"
+    die "failed to rebuild repository database from current package artifacts"
+  fi
+
+  mv -f "$repo_tmp/$REPO_NAME.db.tar.gz" "$REPO_DIR/$REPO_NAME.db.tar.gz"
+  mv -f "$repo_tmp/$REPO_NAME.files.tar.gz" "$REPO_DIR/$REPO_NAME.files.tar.gz"
+  ln -sfn "$REPO_NAME.db.tar.gz" "$REPO_DIR/$REPO_NAME.db"
+  ln -sfn "$REPO_NAME.files.tar.gz" "$REPO_DIR/$REPO_NAME.files"
+  rm -rf "$repo_tmp"
+  rm -f "$REPO_DIR/$REPO_NAME.db.tar.gz.old" "$REPO_DIR/$REPO_NAME.files.tar.gz.old"
+
+  for artifact in "${discarded_artifacts[@]}"; do
+    printf 'prune package artifact: %s\n' "${artifact##*/}"
+    rm -f "$artifact" "$artifact.sig"
+  done
 }
 
 create_local_dep_pacman_wrapper() {
@@ -209,6 +247,7 @@ have_cmd makepkg || die "makepkg is missing; install base-devel"
 have_cmd repo-add || die "repo-add is missing; install pacman"
 have_cmd pacman || die "pacman is missing"
 have_cmd vercmp || die "vercmp is missing; install pacman"
+have_cmd bsdtar || die "bsdtar is missing; install libarchive"
 
 mkdir -p "$REPO_DIR"
 mkdir -p "$PACKAGE_LOG_DIR"

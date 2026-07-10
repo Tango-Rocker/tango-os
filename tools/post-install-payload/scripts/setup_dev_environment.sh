@@ -383,7 +383,7 @@ install_dev_repos() {
   local home repo_dir owner
   home="$(user_home "$TARGET_USER")"
   [[ -n "$home" ]] || die "cannot find home for user: $TARGET_USER"
-  repo_dir="${ENGINEOS_DEV_REPO_DIR:-$home/dev}"
+  repo_dir="${ENGINEOS_DEV_REPO_DIR:-$home}"
   owner="${ENGINEOS_DEV_REPO_OWNER:-Tango-Rocker}"
 
   as_root install -d -m0755 -o "$TARGET_USER" -g "$TARGET_USER" "$repo_dir"
@@ -391,6 +391,7 @@ install_dev_repos() {
   local repos=(
     codex-extractor:session-extrator
     opencode-autonomy:agent
+    quake-generator:quake-os-integration
     skills:skills
   )
   local entry repo remote_repo dest url upstream
@@ -496,11 +497,11 @@ validate_setup() {
   if "$RUN_DEV_REPOS"; then
     local home repo insight_version
     home="$(user_home "$TARGET_USER")"
-    for repo in codex-extractor opencode-autonomy skills; do
-      if [[ -d "${ENGINEOS_DEV_REPO_DIR:-$home/dev}/$repo/.git" ]]; then
-        log "OK repo: ${ENGINEOS_DEV_REPO_DIR:-$home/dev}/$repo"
+    for repo in codex-extractor opencode-autonomy quake-generator skills; do
+      if [[ -d "${ENGINEOS_DEV_REPO_DIR:-$home}/$repo/.git" ]]; then
+        log "OK repo: ${ENGINEOS_DEV_REPO_DIR:-$home}/$repo"
       else
-        log "FAIL repo missing: ${ENGINEOS_DEV_REPO_DIR:-$home/dev}/$repo"
+        log "FAIL repo missing: ${ENGINEOS_DEV_REPO_DIR:-$home}/$repo"
         failures=$((failures + 1))
       fi
     done
