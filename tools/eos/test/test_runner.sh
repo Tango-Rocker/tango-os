@@ -3594,6 +3594,9 @@ run_post_first_deploy() {
   grep -F 'move-window -s "$source_window_id" -t "$destination_session_id:"' \
       "$payload_dir/scripts/engineos-tmux-window-move" >/dev/null ||
     die "tmux window move helper does not move by stable window and session ids"
+  grep -F '"$TMUX_BIN" choose-tree -N -s' \
+      "$payload_dir/scripts/engineos-tmux-window-move" >/dev/null ||
+    die "tmux window move helper does not use the native multi-session chooser"
   grep -F '"$BRIDGE_BIN" sync' "$payload_dir/scripts/engineos-tmux-window-move" >/dev/null ||
     die "tmux window move helper does not resync EngineOS pane state"
   if command -v tmux >/dev/null 2>&1; then
@@ -3617,6 +3620,15 @@ EOF
     [[ "$(tmux -L "$move_socket" display-message -p -t "$source_window_id" \
       '#{session_name}')" == destination ]] ||
       die "tmux window move helper did not move the selected window"
+    tmux -L "$move_socket" new-window -d -t source: -n automatic
+    source_window_id="$(tmux -L "$move_socket" list-windows -t source \
+      -F '#{window_id} #{window_name}' | awk '$2 == "automatic" { print $1 }')"
+    ENGINEOS_TMUX_CMD="$move_tmux" ENGINEOS_TMUX_PANE_BRIDGE=true \
+      "$payload_dir/scripts/engineos-tmux-window-move" \
+      choose "$source_window_id" ""
+    [[ "$(tmux -L "$move_socket" display-message -p -t "$source_window_id" \
+      '#{session_name}')" == destination ]] ||
+      die "tmux window move helper did not directly use the sole destination"
   fi
   for helper in engineos-tmux-pane-sync engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
     [[ -x "$payload_dir/scripts/$helper" ]] ||

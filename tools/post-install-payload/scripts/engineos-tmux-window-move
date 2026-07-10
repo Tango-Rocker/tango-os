@@ -10,7 +10,7 @@ usage() {
 Usage: engineos-tmux-window-move choose WINDOW_ID PANE_ID [CLIENT_NAME]
        engineos-tmux-window-move apply WINDOW_ID SESSION_ID [CLIENT_NAME]
 
-Open a destination-session menu for a tmux window or apply the selected move.
+Move to the only other session, open a chooser, or apply the selected move.
 HELP
 }
 
@@ -38,11 +38,6 @@ notify_client() {
   return 0
 }
 
-format_literal() {
-  local value="$1"
-  printf '%s\n' "${value//#/##}"
-}
-
 window_info() {
   local window_id="$1"
   "$TMUX_BIN" display-message -p -t "$window_id" \
@@ -56,9 +51,9 @@ choose_session() {
   local info
   local source_window_id source_session_id source_session_name window_name active_pane_id
   local destination_count=0
-  local session_id session_token session_name session_windows command
-  local menu_session_name menu_source_session_name menu_window_name
-  local menu_args=()
+  local destination_session_token=""
+  local session_id session_token session_name session_windows
+  local chooser_pane_id filter template
 
   info="$(window_info "$window_id" 2>/dev/null || true)"
   if [[ -z "$info" ]]; then
@@ -67,28 +62,13 @@ choose_session() {
   fi
   IFS=$'\t' read -r source_window_id source_session_id source_session_name window_name active_pane_id <<<"$info"
   [[ -n "$pane_id" ]] || pane_id="$active_pane_id"
-  menu_source_session_name="$(format_literal "$source_session_name")"
-  menu_window_name="$(format_literal "$window_name")"
-
-  menu_args=(display-menu)
-  if [[ -n "$client" ]]; then
-    menu_args+=(-c "$client")
-  fi
-  menu_args+=(
-    -t "$pane_id"
-    -T "Move ${menu_source_session_name}:${menu_window_name} to"
-    -x W
-    -y W
-  )
 
   while IFS=$'\t' read -r session_id session_name session_windows; do
     [[ -n "$session_id" ]] || continue
     [[ "$session_id" != "$source_session_id" ]] || continue
     destination_count=$((destination_count + 1))
     session_token="${session_id#\$}"
-    menu_session_name="$(format_literal "$session_name")"
-    command="run-shell -b '$SELF apply $source_window_id $session_token $client'"
-    menu_args+=("Session: $menu_session_name ($session_windows windows)" "" "$command")
+    [[ -n "$destination_session_token" ]] || destination_session_token="$session_token"
   done < <("$TMUX_BIN" list-sessions -F $'#{session_id}\t#{session_name}\t#{session_windows}')
 
   if [[ "$destination_count" -eq 0 ]]; then
@@ -97,10 +77,23 @@ choose_session() {
     return 0
   fi
 
-  log_event "window=$source_window_id source=$source_session_id destinations=$destination_count status=menu-open"
-  if ! "$TMUX_BIN" "${menu_args[@]}"; then
-    log_event "window=$source_window_id source=$source_session_id status=menu-failed"
-    notify_client "$client" "Could not open the destination session menu"
+  if [[ "$destination_count" -eq 1 ]]; then
+    log_event "window=$source_window_id source=$source_session_id destinations=1 status=direct"
+    apply_move "$source_window_id" "$destination_session_token" "$client"
+    return
+  fi
+
+  chooser_pane_id="$pane_id"
+  if [[ -n "$client" ]]; then
+    chooser_pane_id="$("$TMUX_BIN" display-message -p -c "$client" '#{pane_id}' 2>/dev/null || true)"
+    [[ -n "$chooser_pane_id" ]] || chooser_pane_id="$pane_id"
+  fi
+  filter="#{&&:#{session_format},#{!=:#{session_id},$source_session_id}}"
+  template="run-shell -b '$SELF apply $source_window_id \"%%\" $client'"
+  log_event "window=$source_window_id source=$source_session_id destinations=$destination_count status=chooser-open"
+  if ! "$TMUX_BIN" choose-tree -N -s -t "$chooser_pane_id" -f "$filter" "$template"; then
+    log_event "window=$source_window_id source=$source_session_id status=chooser-failed"
+    notify_client "$client" "Could not open the destination session chooser"
     return 1
   fi
 }
@@ -118,6 +111,13 @@ apply_move() {
     destination_session_id="\$$destination_session_arg"
   elif [[ "$destination_session_arg" =~ ^\$[0-9]+$ ]]; then
     destination_session_id="$destination_session_arg"
+  elif [[ "$destination_session_arg" == =*:* ]]; then
+    destination_session_id="$("$TMUX_BIN" display-message -p -t "$destination_session_arg" \
+      '#{session_id}' 2>/dev/null || true)"
+    if [[ -z "$destination_session_id" ]]; then
+      notify_client "$client" "Destination session no longer exists"
+      return 1
+    fi
   else
     notify_client "$client" "Invalid destination session ID"
     return 2

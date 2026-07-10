@@ -69,9 +69,11 @@ existing work session before creating the fallback `engineos` session. The
 secondary terminal uses `engineos-side`. Both clients share one tmux server.
 
 Right-clicking a window name in the tmux status bar keeps the standard window
-menu and adds `Move to Session...`. The submenu lists every other session;
-selection moves the clicked stable window ID to the destination's next free
-index and runs a pane-bridge sync.
+menu and adds `Move to Session...`. With one other session, that action moves
+the clicked stable window ID immediately. With multiple destinations, tmux's
+native session chooser opens; double-click a session or select it and press
+Enter. The move uses the destination's next free index and runs a pane-bridge
+sync.
 
 ## Image Preview
 
