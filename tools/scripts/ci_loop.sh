@@ -82,8 +82,8 @@ infer_changed_packages() {
       shell/*)
         add_package engineos-shell
         ;;
-      tools/go/*|packages/engineos-engine-runner/*)
-        add_package engineos-engine-runner
+      tools/game/*)
+        add_package engineos-quakespasm
         ;;
       engines/quakespasm/*|packages/engineos-quakespasm/*)
         add_package engineos-quakespasm
@@ -146,6 +146,76 @@ latest_package_artifact() {
   [[ -n "$best_artifact" ]] && printf '%s\n' "$best_artifact"
 }
 
+pkgbuild_expected_version() {
+  local pkg="$1"
+  (
+    set +u
+    cd "$ROOT/packages/$pkg"
+    # shellcheck disable=SC1091
+    source PKGBUILD
+    if [[ -n "${epoch:-}" ]]; then
+      printf '%s:%s-%s\n' "$epoch" "$pkgver" "$pkgrel"
+    else
+      printf '%s-%s\n' "$pkgver" "$pkgrel"
+    fi
+  )
+}
+
+verify_package_artifact() {
+  local pkg="$1"
+  local artifact="$2"
+  local artifact_name artifact_version expected_version
+  local unit unit_text command archive_path
+
+  read -r artifact_name artifact_version < <(pacman -Qp "$artifact")
+  expected_version="$(pkgbuild_expected_version "$pkg")"
+  [[ "$artifact_name" == "$pkg" ]] ||
+    die "artifact package mismatch: expected=$pkg actual=$artifact_name artifact=$artifact"
+  [[ "$artifact_version" == "$expected_version" ]] ||
+    die "artifact version mismatch: $pkg expected=$expected_version actual=$artifact_version"
+
+  while IFS= read -r unit; do
+    [[ -n "$unit" ]] || continue
+    unit_text="$(bsdtar -xOf "$artifact" "$unit")"
+    while IFS= read -r command; do
+      command="${command#-}"
+      case "$command" in
+        /usr/lib/engineos/*|/usr/bin/eos|/usr/bin/eos-*|/usr/bin/engineos|/usr/bin/engineos-*)
+          archive_path="${command#/}"
+          bsdtar -tf "$artifact" | grep -Fx "$archive_path" >/dev/null ||
+            die "$pkg unit ${unit##*/} references command missing from artifact: $command"
+          ;;
+      esac
+    done < <(printf '%s\n' "$unit_text" | sed -nE 's/^ExecStart(Pre)?=-?([^[:space:]]+).*/\2/p')
+  done < <(bsdtar -tf "$artifact" | grep -E '^usr/lib/systemd/(system|user)/.+\.(service|socket)$' || true)
+}
+
+verify_installed_package() {
+  local pkg="$1"
+  local artifact="$2"
+  local installed_name installed_version artifact_name artifact_version
+  local unit unit_text command
+
+  read -r artifact_name artifact_version < <(pacman -Qp "$artifact")
+  read -r installed_name installed_version < <(pacman -Q "$pkg")
+  [[ "$installed_name" == "$artifact_name" && "$installed_version" == "$artifact_version" ]] ||
+    die "installed package mismatch: $pkg artifact=$artifact_version installed=${installed_version:-missing}"
+
+  while IFS= read -r unit; do
+    [[ -n "$unit" ]] || continue
+    unit_text="$(bsdtar -xOf "$artifact" "$unit")"
+    while IFS= read -r command; do
+      command="${command#-}"
+      case "$command" in
+        /usr/lib/engineos/*|/usr/bin/eos|/usr/bin/eos-*|/usr/bin/engineos|/usr/bin/engineos-*)
+          [[ -x "$command" ]] ||
+            die "$pkg installed unit ${unit##*/} references missing executable: $command"
+          ;;
+      esac
+    done < <(printf '%s\n' "$unit_text" | sed -nE 's/^ExecStart(Pre)?=-?([^[:space:]]+).*/\2/p')
+  done < <(bsdtar -tf "$artifact" | grep -E '^usr/lib/systemd/(system|user)/.+\.(service|socket)$' || true)
+}
+
 install_rebuilt_packages() {
   local pkg artifact
   local artifacts=()
@@ -157,11 +227,18 @@ install_rebuilt_packages() {
     fi
     artifact="$(latest_package_artifact "$pkg")"
     [[ -n "$artifact" ]] || die "no rebuilt artifact found for reinstall: $pkg in $REPO_DIR"
+    verify_package_artifact "$pkg" "$artifact"
     artifacts+=("$artifact")
   done
 
   [[ ${#artifacts[@]} -gt 0 ]] || return 0
   run_or_print sudo -n pacman -U --noconfirm "${artifacts[@]}"
+  if [[ "$DRY_RUN" != true ]]; then
+    for artifact in "${artifacts[@]}"; do
+      pkg="$(pacman -Qp "$artifact" | awk '{print $1}')"
+      verify_installed_package "$pkg" "$artifact"
+    done
+  fi
 }
 
 clean_generated_package_dirs() {

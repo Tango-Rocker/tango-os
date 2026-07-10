@@ -1,0 +1,8 @@
+post_install() {
+  systemctl daemon-reload >/dev/null 2>&1 || true
+}
+
+post_upgrade() {
+  systemctl disable --now engineos-observe-exporter.service >/dev/null 2>&1 || true
+  systemctl daemon-reload >/dev/null 2>&1 || true
+}

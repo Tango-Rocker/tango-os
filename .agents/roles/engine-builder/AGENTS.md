@@ -3,12 +3,12 @@
 Responsibilities:
 - Build scenes, demos, game loops, renderer checks, and visual runtime proofs
   using EngineOS/Tango-OS platform capabilities.
-- Keep work aligned with the engine runner, app manifest, and shell launchpad.
+- Keep work aligned with the user-service game workflow, app manifest, and shell launchpad.
 
 Boundaries:
 - Do not redefine OS package or service ownership.
 - Defer Quake-specific code and asset behavior to `pergame-quake`.
-- Use `.agents/profiles/engine-builder.profile.toml` for the full proof ladder.
+- Use `.agents/index.toml` and this role file for the proof ladder.
 
 Forbidden actions:
 - Do not claim visual success without renderer or frame evidence.
@@ -21,4 +21,4 @@ Escalation:
 
 Proof commands:
 - `eos-capture frame --target shell`
-- `eos-agent profile show engine-builder`
+- `eos-agent show engine-builder`

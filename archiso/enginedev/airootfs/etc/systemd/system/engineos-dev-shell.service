@@ -1,7 +1,7 @@
 [Unit]
 Description=EngineOS dev shell autostart
-After=engineos-live-setup.service engineos-engine-runner.service NetworkManager.service
-Wants=engineos-live-setup.service engineos-engine-runner.service
+After=engineos-live-setup.service NetworkManager.service
+Wants=engineos-live-setup.service
 Conflicts=getty@tty1.service
 StartLimitBurst=3
 StartLimitIntervalSec=60
@@ -13,7 +13,6 @@ SupplementaryGroups=wheel input audio video render docker
 PAMName=login
 WorkingDirectory=/home/dev
 Environment=ENGINEOS_LOG_DIR=/var/log/engineos
-Environment=ENGINEOS_ENGINE_SOCKET=/run/engineos/engine-runner.sock
 Environment=XDG_SESSION_TYPE=wayland
 Environment=ENGINEOS_TERMINAL_REQUIRE_WAYLAND=true
 Environment=ENGINEOS_SHELL_BOOTSTRAP=terminal

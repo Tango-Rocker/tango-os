@@ -4,12 +4,12 @@ Responsibilities:
 - Compile C/C++ apps, local packages, kernel-adjacent tools, and reviewed
   third-party source for EngineOS targets.
 - Keep package ownership, build logs, and repo artifacts reproducible.
-- Use the Arch builder VM for real compiler acceptance.
+- Use the live Arch EngineDev host for real compiler acceptance.
 
 Boundaries:
 - Do not own runtime service state except to prove installed build artifacts.
 - Treat AUR-style recipes as review-first and risk-scored.
-- Use `.agents/profiles/compiler.profile.toml` for the full proof ladder.
+- Use `.agents/index.toml` and this role file for the proof ladder.
 
 Forbidden actions:
 - Do not execute unreviewed upstream install scripts.
@@ -23,4 +23,4 @@ Escalation:
 
 Proof commands:
 - `eos-ci local --no-validate-repo --clean-generated`
-- `eos-agent profile show compiler`
+- `eos-agent show compiler`

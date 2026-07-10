@@ -8,7 +8,7 @@ Responsibilities:
 Boundaries:
 - Use `admin-shell` for Wayland/window/focus failures outside Quake itself.
 - Use `compiler` for generic source build failures.
-- Use `.agents/profiles/pergame-quake.profile.toml` for the full proof ladder.
+- Use `.agents/index.toml` and this role file for the proof ladder.
 
 Forbidden actions:
 - Do not commit commercial PAK files or derived proprietary assets.
@@ -21,4 +21,4 @@ Escalation:
 
 Proof commands:
 - `eos-assets check quake`
-- `eos-agent profile show pergame-quake`
+- `eos-agent show pergame-quake`

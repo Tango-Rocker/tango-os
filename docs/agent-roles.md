@@ -2,8 +2,8 @@
 
 The shared routing order is: `AGENTS.md` for project rules,
 `.agents/index.toml` for role paths, this file for role boundaries,
-`.agents/roles/<role>/AGENTS.md` for role-local operating rules, profiles for
-harness policy, and `.agents/skills/<skill>/SKILL.md` for repeatable workflows.
+`.agents/roles/<role>/AGENTS.md` for role-local operating rules, and
+`.agents/skills/<skill>/SKILL.md` for repeatable workflows.
 CLI work uses direct `eos-*` commands and skills. MCP is reserved for future
 live runtime state only.
 
@@ -16,7 +16,7 @@ live runtime state only.
   reports enabled.
 - Escalate destructive installs, USB writes, package removal, raw sudo, and
   external-directory edits to the user before execution.
-- Route stale references, duplicated skill/role docs, wrapper drift, and index
+- Route stale references, duplicated skill/role docs, harness drift, and index
   upkeep to `cleaner`.
 
 ## oracle
@@ -29,7 +29,7 @@ Responsibilities:
 
 Boundaries:
 - Route and clarify; do not own deep implementation after a specialist is clear.
-- Prefer metadata-only observability and never store raw prompts in v0.
+- Prefer metadata-only observability and never store raw prompts.
 
 Forbidden actions:
 - Do not run destructive install, USB write, package removal, or sudo actions.
@@ -80,7 +80,7 @@ Responsibilities:
 - Build C/C++ sources, local packages, third-party tools, and safe AUR-style
   source workflows for the target EngineOS system.
 - Keep compiler output, package ownership, and repo artifacts reproducible.
-- Prefer Arch builder VM proof for real C/wlroots compatibility.
+- Prefer the live Arch EngineDev host for real C/wlroots compatibility.
 
 Boundaries:
 - Do not own runtime service state except to prove installed artifacts.
@@ -131,8 +131,8 @@ Proof commands:
 Responsibilities:
 - Use EngineOS/Tango-OS engine capabilities to build scenes, demos, game loops,
   renderer checks, and runtime visual proofs.
-- Keep 3D/game work grounded in the current engine runner, app manifest, and
-  shell launchpad contracts.
+- Keep 3D/game work grounded in the current user-service game workflow, app
+  manifest, and shell launchpad contracts.
 
 Boundaries:
 - Do not redefine OS service ownership or package policy.
@@ -174,17 +174,17 @@ Escalation:
 
 Proof commands:
 - `eos-assets check quake`
-- `eos-runtime quake --smoke`
+- `eos-game quake play --smoke`
 - `eos-logs engine --last 200`
 - `eos-test assets`
 
 ## cleaner
 
 Responsibilities:
-- Keep agent docs, role files, skills, profiles, OpenCode wrappers, and
+- Keep agent docs, role files, skills, and
   `.agents/index.toml` consistent.
 - Remove stale references and duplicate guidance when directed.
-- Queue or produce cleanup proof for validation drift.
+- Produce cleanup proof for validation drift.
 
 Boundaries:
 - Stay inside repo-owned agent-pack and harness files.

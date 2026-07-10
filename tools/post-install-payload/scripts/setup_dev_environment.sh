@@ -196,6 +196,9 @@ install_packages() {
     engineos-tmux-plugins
     engineos-cube
     engineos-shell
+    engineos-level-agent
+    engineos-trenchbroom
+    engineos-quake-template
   )
 
   if "$RUN_DOCKER"; then
@@ -306,16 +309,14 @@ configure_docker() {
   fi
 
   if ! have_cmd systemctl; then
-    die "systemctl unavailable; cannot enable Docker and observability services"
+    die "systemctl unavailable; cannot enable Docker"
   fi
 
   as_root systemctl enable docker.service
-  as_root systemctl enable engineos-observe-exporter.service
   if [[ -d /run/systemd/system ]]; then
     as_root systemctl restart docker.service
-    as_root systemctl restart engineos-observe-exporter.service
   else
-    log "systemd is not running; docker and observability services enabled for next boot"
+    log "systemd is not running; Docker is enabled for next boot"
   fi
 }
 
@@ -392,7 +393,7 @@ install_dev_repos() {
     opencode-autonomy:agent
     skills:skills
   )
-  local entry repo remote_repo dest url
+  local entry repo remote_repo dest url upstream
   for entry in "${repos[@]}"; do
     repo="${entry%%:*}"
     remote_repo="${entry#*:}"
@@ -401,11 +402,47 @@ install_dev_repos() {
     if [[ -d "$dest/.git" ]]; then
       log "fetch repo: $dest"
       run_as_user "$TARGET_USER" env HOME="$home" GIT_TERMINAL_PROMPT=0 git -C "$dest" fetch --prune
+      if [[ -z "$(run_as_user "$TARGET_USER" git -C "$dest" status --porcelain)" ]]; then
+        upstream="$(run_as_user "$TARGET_USER" git -C "$dest" \
+          rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+        if [[ -n "$upstream" ]]; then
+          log "fast-forward repo: $dest from $upstream"
+          run_as_user "$TARGET_USER" env HOME="$home" GIT_TERMINAL_PROMPT=0 \
+            git -C "$dest" pull --ff-only
+        else
+          log "repo has no upstream; fetched only: $dest"
+        fi
+      else
+        log "preserve dirty repo after fetch: $dest"
+      fi
     else
       log "clone repo: $url -> $dest"
       run_as_user "$TARGET_USER" env HOME="$home" GIT_TERMINAL_PROMPT=0 git clone "$url" "$dest"
     fi
   done
+}
+
+install_codex_insights() {
+  "$RUN_DEV_REPOS" || return 0
+  have_cmd python || die "python is required to install codex-insights"
+
+  local home venv source_url version actual
+  home="$(user_home "$TARGET_USER")"
+  [[ -n "$home" ]] || die "cannot find home for user: $TARGET_USER"
+  version="0.2.0"
+  venv="$home/.local/share/codex-insights/venv"
+  source_url="git+https://github.com/${ENGINEOS_DEV_REPO_OWNER:-Tango-Rocker}/session-extrator.git@v$version"
+
+  log "install codex-insights $version in isolated user environment"
+  run_as_user "$TARGET_USER" env HOME="$home" python -m venv "$venv"
+  run_as_user "$TARGET_USER" env HOME="$home" \
+    "$venv/bin/python" -m pip install --upgrade "$source_url"
+  run_as_user "$TARGET_USER" install -d -m0755 "$home/.local/bin"
+  run_as_user "$TARGET_USER" ln -sfn \
+    "$venv/bin/codex-insights" "$home/.local/bin/codex-insights"
+  actual="$(run_as_user "$TARGET_USER" "$venv/bin/codex-insights" --version)"
+  [[ "$actual" == "codex-insights $version" ]] ||
+    die "unexpected codex-insights version after install: $actual"
 }
 
 validate_setup() {
@@ -457,7 +494,7 @@ validate_setup() {
   fi
 
   if "$RUN_DEV_REPOS"; then
-    local home repo
+    local home repo insight_version
     home="$(user_home "$TARGET_USER")"
     for repo in codex-extractor opencode-autonomy skills; do
       if [[ -d "${ENGINEOS_DEV_REPO_DIR:-$home/dev}/$repo/.git" ]]; then
@@ -467,6 +504,14 @@ validate_setup() {
         failures=$((failures + 1))
       fi
     done
+    insight_version="$(run_as_user "$TARGET_USER" \
+      "$home/.local/share/codex-insights/venv/bin/codex-insights" --version 2>/dev/null || true)"
+    if [[ "$insight_version" == "codex-insights 0.2.0" ]]; then
+      log "OK command: codex-insights 0.2.0"
+    else
+      log "FAIL codex-insights version: ${insight_version:-missing}"
+      failures=$((failures + 1))
+    fi
   fi
 
   if [[ "$failures" -gt 0 ]]; then
@@ -541,6 +586,7 @@ configure_docker
 configure_dev_shell_autostart
 install_codex
 install_dev_repos
+install_codex_insights
 validate_setup
 
 log "post-first-deploy setup completed"

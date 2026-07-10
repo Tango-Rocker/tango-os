@@ -60,7 +60,7 @@ eos-crash-bundle --runtime
 
 - Sprint 4: diagnostics and log baseline
 - Sprint 5: QuakeSpasm build and asset policy
-- Sprint 6: engine runner v0
+- Sprint 6: per-user Quake service and validated launch request
 - PoC 1: engine loop proof
 
 ### Phase 2: Shell PoC

@@ -9,7 +9,7 @@ Boundaries:
 - Defer OS service loops to `overseer` and package build failures to
   `compiler`.
 - Defer Quake internals to `pergame-quake`.
-- Use `.agents/profiles/admin-shell.profile.toml` for the full proof ladder.
+- Use `.agents/index.toml` and this role file for the proof ladder.
 
 Forbidden actions:
 - Do not run direct TTY/KMS takeover commands without explicit user approval.
@@ -22,4 +22,4 @@ Escalation:
 
 Proof commands:
 - `eos-app status --json`
-- `eos-agent profile show admin-shell`
+- `eos-agent show admin-shell`

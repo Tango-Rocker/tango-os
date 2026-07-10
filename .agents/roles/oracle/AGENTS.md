@@ -7,8 +7,7 @@ Responsibilities:
 
 Boundaries:
 - Use `docs/agent-roles.md` as the canonical role spec.
-- Use `.agents/index.toml` and `.agents/profiles/oracle.profile.toml` for
-  role paths, route triggers, and proof command lists.
+- Use `.agents/index.toml` for role paths, route triggers, and proof commands.
 - Stop routing once a specialist owner is clear.
 
 Forbidden actions:
@@ -22,4 +21,4 @@ Escalation:
 
 Proof commands:
 - `eos-agent route --dry-run "<request>"`
-- `eos-agent profile show oracle`
+- `eos-agent show oracle`

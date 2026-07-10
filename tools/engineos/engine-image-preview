@@ -16,10 +16,6 @@ SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 PREVIEW_PANELS = {"left", "right", "active"}
 WALLPAPER_TARGETS = {"output", "pane"}
 TERMINAL_SLOTS = {"terminal", "terminal-secondary"}
-TMUX_SESSION_SLOTS = {
-    "engineos": "terminal",
-    "engineos-side": "terminal-secondary",
-}
 
 
 def error(message: str, code: int = 1) -> int:
@@ -41,9 +37,8 @@ def shell_slot() -> str | None:
     preview_slot = explicit_preview_slot()
     if preview_slot is not None:
         return preview_slot
-    tmux_slot = tmux_shell_slot()
-    if tmux_slot is not None:
-        return tmux_slot
+    if os.environ.get("TMUX_PANE"):
+        return None
     return explicit_terminal_role()
 
 
@@ -61,13 +56,13 @@ def explicit_terminal_role() -> str | None:
     return None
 
 
-def tmux_session_name() -> str | None:
+def tmux_display(format_string: str) -> str | None:
     pane = os.environ.get("TMUX_PANE")
     if not pane:
         return None
     try:
         result = subprocess.run(
-            ["tmux", "display-message", "-p", "-t", pane, "#{session_name}"],
+            ["tmux", "display-message", "-p", "-t", pane, format_string],
             check=True,
             text=True,
             stdout=subprocess.PIPE,
@@ -76,18 +71,43 @@ def tmux_session_name() -> str | None:
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    name = result.stdout.strip()
-    return name or None
+    value = result.stdout.strip()
+    return value or None
 
 
-def tmux_shell_slot() -> str | None:
-    name = tmux_session_name()
-    if name is None:
+def tmux_pane_identity() -> dict[str, str] | None:
+    value = tmux_display(
+        "#{socket_path}\t#{session_name}\t#{window_id}\t#{window_index}\t#{pane_id}"
+    )
+    if value is None:
         return None
-    slot = TMUX_SESSION_SLOTS.get(name)
-    if slot in TERMINAL_SLOTS:
-        return slot
-    return None
+    fields = value.split("\t")
+    if len(fields) != 5 or not all(fields):
+        return None
+    socket_path, session, window_id, window_index, pane_id = fields
+    return {
+        "socket": socket_path,
+        "session": session,
+        "window_id": window_id,
+        "window_index": window_index,
+        "pane_id": pane_id,
+    }
+
+
+def tmux_client_tty() -> str | None:
+    tty = tmux_display("#{client_tty}")
+    if tty is None or not tty.startswith("/dev/"):
+        return None
+    return tty
+
+
+def add_terminal_context(request: dict[str, object]) -> None:
+    pane = tmux_pane_identity()
+    if pane is not None:
+        request["pane"] = pane
+    client_tty = tmux_client_tty()
+    if client_tty is not None:
+        request["client_tty"] = client_tty
 
 
 def owner_token() -> str:
@@ -294,9 +314,10 @@ def build_request(args: argparse.Namespace) -> tuple[dict[str, object] | None, s
             "fit": "cover",
             "opacity": args.opacity,
         }
-        slot = explicit_preview_slot() or tmux_shell_slot()
+        slot = shell_slot()
         if slot is not None:
             request["slot"] = slot
+        add_terminal_context(request)
         bounds = tmux_bounds()
         if args.target == "pane" and bounds is not None:
             request["bounds"] = bounds
@@ -316,6 +337,7 @@ def build_request(args: argparse.Namespace) -> tuple[dict[str, object] | None, s
     slot = shell_slot()
     if slot is not None:
         request["slot"] = slot
+    add_terminal_context(request)
     bounds = tmux_bounds()
     if bounds is not None:
         if args.quick_view:

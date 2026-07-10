@@ -9,7 +9,7 @@ log_event() {
 
 usage() {
   cat <<'HELP'
-Usage: engineos-tmux-pane-bridge focus [--pane TMUX_PANE]
+Usage: engineos-tmux-pane-bridge focus [--pane TMUX_PANE] [--client-tty /dev/pts/N]
        engineos-tmux-pane-bridge geometry [--pane TMUX_PANE|--all-visible]
        engineos-tmux-pane-bridge sync
 
@@ -54,6 +54,7 @@ visible_panes() {
 
 bridge_focus() {
   local pane="${TMUX_PANE:-}"
+	local client_tty=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --pane)
@@ -61,6 +62,11 @@ bridge_focus() {
         [[ $# -gt 0 ]] || return 2
         pane="$1"
         ;;
+		--client-tty)
+			shift
+			[[ $# -gt 0 ]] || return 2
+			client_tty="$1"
+			;;
       help|--help|-h)
         usage
         return 0
@@ -76,9 +82,19 @@ bridge_focus() {
     pane="$(current_pane || true)"
   fi
   [[ -n "$pane" ]] || return 0
+	if [[ -z "$client_tty" ]]; then
+		client_tty="$(tmux display-message -p -t "$pane" '#{client_tty}' 2>/dev/null || true)"
+	fi
+	if [[ -n "$client_tty" && "$client_tty" != /dev/* ]]; then
+		client_tty=""
+	fi
   local eos_app
   eos_app="$(eos_app_cmd)" || return 0
-  if ! TMUX_PANE="$pane" "$eos_app" pane focus --pane "$pane" >/dev/null 2>&1; then
+	local args=(pane focus --pane "$pane")
+	if [[ -n "$client_tty" ]]; then
+		args+=(--client-tty "$client_tty")
+	fi
+	if ! TMUX_PANE="$pane" "$eos_app" "${args[@]}" >/dev/null 2>&1; then
     log_event "focus failed pane=$pane"
     return 1
   fi

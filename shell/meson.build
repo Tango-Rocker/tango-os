@@ -25,6 +25,7 @@ wayland_scanner_dep = dependency('wayland-scanner', required: true)
 xkbcommon_dep = dependency('xkbcommon', required: true)
 libpng_dep = dependency('libpng', required: true)
 libjpeg_dep = dependency('libjpeg', required: true)
+json_c_dep = dependency('json-c', required: true)
 
 wayland_scanner = find_program(
   wayland_scanner_dep.get_variable(pkgconfig: 'wayland_scanner'),
@@ -49,6 +50,7 @@ executable(
   'engineos-shell',
   [
     'src/engineos-shell.c',
+    'src/engineos-image.c',
     xdg_shell_protocol_header,
     pointer_constraints_protocol_header,
   ],
@@ -59,6 +61,7 @@ executable(
     xkbcommon_dep,
     libpng_dep,
     libjpeg_dep,
+    json_c_dep,
   ],
   install: true,
 )

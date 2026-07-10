@@ -225,20 +225,24 @@ if [[ -d "$LOG_DIR" ]]; then
 fi
 
 if command -v systemctl >/dev/null 2>&1; then
-  for unit in \
-    NetworkManager.service \
-    engineos-live-setup.service \
-    engineos-engine-runner.service \
-    engineos-runtime.service \
-    engineos-shell.service; do
-    write_command "$BUNDLE_DIR/systemctl-$unit.txt" systemctl status "$unit" --no-pager
-  done
+	for unit in \
+		NetworkManager.service \
+		engineos-live-setup.service \
+		engineos-runtime.service \
+		engineos-shell.service; do
+		write_command "$BUNDLE_DIR/systemctl-$unit.txt" systemctl status "$unit" --no-pager
+	done
+	write_command "$BUNDLE_DIR/systemctl-user-engineos-quake.service.txt" \
+		systemctl --user status engineos-quake.service --no-pager
+	write_command "$BUNDLE_DIR/systemctl-user-engineos-level-agent.service.txt" \
+		systemctl --user status engineos-level-agent.service --no-pager
 fi
 
 if command -v journalctl >/dev/null 2>&1; then
   journalctl -b --no-pager >"$BUNDLE_DIR/journal-current-boot.log" 2>/dev/null || true
   journalctl -b -u engineos-shell --no-pager >"$BUNDLE_DIR/journal-engineos-shell.log" 2>/dev/null || true
-  journalctl -b -u engineos-engine-runner --no-pager >"$BUNDLE_DIR/journal-engineos-engine-runner.log" 2>/dev/null || true
+	journalctl --user -b -u engineos-quake --no-pager >"$BUNDLE_DIR/journal-engineos-quake.log" 2>/dev/null || true
+	journalctl --user -b -u engineos-level-agent --no-pager >"$BUNDLE_DIR/journal-engineos-level-agent.log" 2>/dev/null || true
   journalctl -b -u engineos-runtime --no-pager >"$BUNDLE_DIR/journal-engineos-runtime.log" 2>/dev/null || true
 fi
 

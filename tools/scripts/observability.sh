@@ -25,12 +25,9 @@ Usage:
   observability.sh tail [--last N]
   observability.sh export [--out <file>]
   observability.sh purge
-  observability.sh hook zsh|bash
   observability.sh metrics [--format prometheus|json] [--out <file>]
-  observability.sh exporter start|stop|status|serve|once [--host <addr>] [--port <port>]
-  observability.sh tui [--once] [--watch <seconds>]
 
-Metadata-only v0 records hashes and classifications, not raw shell commands,
+Metadata-only v1 records hashes and classifications, not raw shell commands,
 raw route requests, or AI prompt/response bodies.
 HELP
 }
@@ -49,7 +46,7 @@ write_state() {
   ensure_state_dir
   umask 077
   {
-    printf 'schema=engineos-observability-state-v0\n'
+    printf 'schema=engineos-observability-state-v1\n'
     printf 'enabled=%s\n' "$enabled"
     printf 'mode=metadata-only\n'
     printf 'events=%s\n' "$EVENTS_FILE"
@@ -260,7 +257,7 @@ status = os.environ.get("ENGINEOS_OBS_STATUS", "")
 confidence = os.environ.get("ENGINEOS_OBS_CONFIDENCE", "")
 
 event = {
-    "schema": "engineos-observability-v0",
+    "schema": "engineos-observability-v1",
     "ts": now,
     "kind": os.environ.get("ENGINEOS_OBS_KIND", "event"),
     "source": os.environ.get("ENGINEOS_OBS_SOURCE", "engineos"),
@@ -357,22 +354,9 @@ cmd_purge() {
   printf 'observability purged\n'
 }
 
-agent_ledger_dir() {
-  if [[ -n "${ENGINEOS_AGENT_LEDGER_DIR:-}" ]]; then
-    printf '%s\n' "$ENGINEOS_AGENT_LEDGER_DIR"
-  elif [[ -d "${ENGINEOS_ROOT:-}/tools/scripts" ]]; then
-    printf '%s\n' "$ENGINEOS_ROOT/artifacts/agent-ledger"
-  elif [[ -n "${XDG_STATE_HOME:-}" ]]; then
-    printf '%s\n' "$XDG_STATE_HOME/engineos/agent-ledger"
-  else
-    printf '%s\n' "${HOME:-/tmp}/.local/state/engineos/agent-ledger"
-  fi
-}
-
 metrics_python() {
   python3 - <<'PY'
 import collections
-import datetime as dt
 import json
 import os
 import pathlib
@@ -394,15 +378,6 @@ def read_jsonl(path):
     except FileNotFoundError:
         pass
     return items
-
-
-def parse_ts(value):
-    if not value:
-        return None
-    try:
-        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
 
 
 def label(value):
@@ -430,14 +405,7 @@ def state_enabled(path):
 def build_summary():
     state_file = os.environ["ENGINEOS_OBS_STATE_FILE"]
     events_file = os.environ["ENGINEOS_OBS_EVENTS_FILE"]
-    ledger_dir = pathlib.Path(os.environ["ENGINEOS_AGENT_LEDGER_DIR"])
-    queue_file = ledger_dir / "queue.jsonl"
-    ledger_file = ledger_dir / "ledger.jsonl"
-    lock_dir = ledger_dir / "dispatcher.lock"
-
     events = read_jsonl(events_file)
-    queue = read_jsonl(queue_file)
-    ledger = read_jsonl(ledger_file)
 
     obs_counts = collections.Counter()
     sensitive_counts = collections.Counter()
@@ -450,51 +418,13 @@ def build_summary():
         if event.get("sensitive_pattern"):
             sensitive_counts[(kind, source)] += 1
 
-    latest = {}
-    ledger_counts = collections.Counter()
-    for event in ledger:
-        task_id = event.get("task_id", "")
-        role = event.get("role", "none")
-        name = event.get("event", "unknown")
-        state = event.get("state", "unknown")
-        reason = event.get("reason", "none")
-        ledger_counts[(role, name, state, reason)] += 1
-        if task_id:
-            latest[task_id] = event
-
-    task_counts = collections.Counter()
-    oldest = {}
-    now = dt.datetime.now(dt.timezone.utc)
-    for task in queue:
-        task_id = task.get("task_id", "")
-        latest_event = latest.get(task_id, {})
-        role = latest_event.get("role") or task.get("role", "none")
-        state = latest_event.get("state", "queued")
-        reason = latest_event.get("reason") or task.get("reason", "none")
-        priority = task.get("priority", "normal")
-        task_counts[(role, state, reason, priority)] += 1
-
-        created_at = parse_ts(task.get("created_at"))
-        if created_at is not None:
-            age = max(0, int((now - created_at).total_seconds()))
-            key = (role, state)
-            oldest[key] = max(oldest.get(key, 0), age)
-
     return {
-        "schema": "engineos-observability-metrics-v0",
+        "schema": "engineos-observability-metrics-v1",
         "observability": {
             "enabled": state_enabled(state_file),
             "state_file": state_file,
             "events_file": events_file,
             "events_total": len(events),
-        },
-        "agent": {
-            "ledger_dir": str(ledger_dir),
-            "queue_file": str(queue_file),
-            "ledger_file": str(ledger_file),
-            "dispatcher_lock": lock_dir.is_dir(),
-            "queue_total": len(queue),
-            "ledger_events_total": len(ledger),
         },
         "observability_counts": [
             {"kind": k, "source": s, "role": r, "risk": risk, "count": count}
@@ -504,19 +434,6 @@ def build_summary():
             {"kind": k, "source": s, "count": count}
             for (k, s), count in sorted(sensitive_counts.items())
         ],
-        "task_counts": [
-            {"role": r, "state": state, "reason": reason, "priority": priority, "count": count}
-            for (r, state, reason, priority), count in sorted(task_counts.items())
-        ],
-        "oldest_task_age_seconds": [
-            {"role": r, "state": state, "age_seconds": age}
-            for (r, state), age in sorted(oldest.items())
-        ],
-        "ledger_counts": [
-            {"role": r, "event": event, "state": state, "reason": reason, "count": count}
-            for (r, event, state, reason), count in sorted(ledger_counts.items())
-        ],
-        "recent_ledger_events": ledger[-8:],
     }
 
 
@@ -553,48 +470,6 @@ for item in summary["sensitive_counts"]:
         "kind": item["kind"],
         "source": item["source"],
     }))
-lines.extend([
-    "# HELP engineos_agent_tasks_current Current agent tasks by latest state.",
-    "# TYPE engineos_agent_tasks_current gauge",
-])
-for item in summary["task_counts"]:
-    lines.append(metric_line("engineos_agent_tasks_current", item["count"], {
-        "role": item["role"],
-        "state": item["state"],
-        "reason": item["reason"],
-        "priority": item["priority"],
-    }))
-lines.extend([
-    "# HELP engineos_agent_task_oldest_age_seconds Oldest task age by role and state.",
-    "# TYPE engineos_agent_task_oldest_age_seconds gauge",
-])
-for item in summary["oldest_task_age_seconds"]:
-    lines.append(metric_line("engineos_agent_task_oldest_age_seconds", item["age_seconds"], {
-        "role": item["role"],
-        "state": item["state"],
-    }))
-lines.extend([
-    "# HELP engineos_agent_ledger_events_total Agent ledger events by role/event/state/reason.",
-    "# TYPE engineos_agent_ledger_events_total counter",
-])
-for item in summary["ledger_counts"]:
-    lines.append(metric_line("engineos_agent_ledger_events_total", item["count"], {
-        "role": item["role"],
-        "event": item["event"],
-        "state": item["state"],
-        "reason": item["reason"],
-    }))
-lines.extend([
-    "# HELP engineos_agent_dispatcher_lock Dispatcher lock held flag.",
-    "# TYPE engineos_agent_dispatcher_lock gauge",
-    metric_line("engineos_agent_dispatcher_lock", 1 if summary["agent"]["dispatcher_lock"] else 0),
-    "# HELP engineos_agent_queue_records_total Total queue records in the durable queue JSONL.",
-    "# TYPE engineos_agent_queue_records_total gauge",
-    metric_line("engineos_agent_queue_records_total", summary["agent"]["queue_total"]),
-    "# HELP engineos_agent_ledger_records_total Total ledger records in the durable ledger JSONL.",
-    "# TYPE engineos_agent_ledger_records_total gauge",
-    metric_line("engineos_agent_ledger_records_total", summary["agent"]["ledger_events_total"]),
-])
 print("\n".join(lines))
 PY
 }
@@ -625,360 +500,19 @@ cmd_metrics() {
     *) die "--format expects prometheus or json" ;;
   esac
 
-  local ledger_dir
-  ledger_dir="$(agent_ledger_dir)"
-  if [[ -n "$out" ]]; then
+	if [[ -n "$out" ]]; then
     install -d -m 0700 "$(dirname "$out")"
     ENGINEOS_OBS_STATE_FILE="$STATE_FILE" \
       ENGINEOS_OBS_EVENTS_FILE="$EVENTS_FILE" \
-      ENGINEOS_AGENT_LEDGER_DIR="$ledger_dir" \
-      ENGINEOS_OBS_METRICS_FORMAT="$format" \
+		  ENGINEOS_OBS_METRICS_FORMAT="$format" \
       metrics_python >"$out"
     printf '%s\n' "$out"
   else
     ENGINEOS_OBS_STATE_FILE="$STATE_FILE" \
       ENGINEOS_OBS_EVENTS_FILE="$EVENTS_FILE" \
-      ENGINEOS_AGENT_LEDGER_DIR="$ledger_dir" \
-      ENGINEOS_OBS_METRICS_FORMAT="$format" \
+		  ENGINEOS_OBS_METRICS_FORMAT="$format" \
       metrics_python
   fi
-}
-
-exporter_pid_file() {
-  printf '%s\n' "$STATE_DIR/observability-exporter.pid"
-}
-
-read_exporter_pid() {
-  local pid_file="$1"
-  local pid=""
-  [[ -r "$pid_file" ]] || return 1
-  pid="$(sed -n '1p' "$pid_file" 2>/dev/null || true)"
-  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  printf '%s\n' "$pid"
-}
-
-exporter_health_host() {
-  local host="$1"
-  case "$host" in
-    0.0.0.0|"")
-      printf '127.0.0.1\n'
-      ;;
-    ::)
-      printf '::1\n'
-      ;;
-    *)
-      printf '%s\n' "$host"
-      ;;
-  esac
-}
-
-exporter_health_check() {
-  local host="$1"
-  local port="$2"
-  ENGINEOS_OBSERVABILITY_HEALTH_HOST="$(exporter_health_host "$host")" \
-    ENGINEOS_OBSERVABILITY_HEALTH_PORT="$port" \
-    python3 - <<'PY'
-import http.client
-import os
-import sys
-
-host = os.environ["ENGINEOS_OBSERVABILITY_HEALTH_HOST"]
-port = int(os.environ["ENGINEOS_OBSERVABILITY_HEALTH_PORT"])
-conn = None
-
-try:
-    conn = http.client.HTTPConnection(host, port, timeout=0.2)
-    conn.request("GET", "/healthz")
-    response = conn.getresponse()
-    body = response.read()
-except OSError:
-    sys.exit(1)
-finally:
-    try:
-        conn.close()
-    except Exception:
-        pass
-
-if response.status == 200 and body == b"ok\n":
-    sys.exit(0)
-sys.exit(1)
-PY
-}
-
-cmd_exporter() {
-  local action="${1:-status}"
-  shift || true
-  local host="127.0.0.1"
-  local port="9109"
-  local pid_file
-  local log_file
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --host)
-        shift
-        host="${1:-}"
-        ;;
-      --port)
-        shift
-        port="${1:-}"
-        [[ "$port" =~ ^[0-9]+$ ]] || die "--port requires an integer"
-        ;;
-      *)
-        die "unknown exporter option: $1"
-        ;;
-    esac
-    shift
-  done
-
-  ensure_state_dir
-  pid_file="$(exporter_pid_file)"
-  log_file="$STATE_DIR/observability-exporter.log"
-
-  case "$action" in
-    once)
-      cmd_metrics --format prometheus
-      ;;
-    serve)
-      ENGINEOS_OBSERVABILITY_SCRIPT="$0" \
-        ENGINEOS_OBSERVABILITY_EXPORTER_HOST="$host" \
-        ENGINEOS_OBSERVABILITY_EXPORTER_PORT="$port" \
-        python3 - <<'PY'
-import http.server
-import os
-import subprocess
-
-script = os.environ["ENGINEOS_OBSERVABILITY_SCRIPT"]
-host = os.environ.get("ENGINEOS_OBSERVABILITY_EXPORTER_HOST", "127.0.0.1")
-port = int(os.environ.get("ENGINEOS_OBSERVABILITY_EXPORTER_PORT", "9109"))
-
-
-class Handler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/healthz":
-            payload = b"ok\n"
-            self.send_response(200)
-            self.send_header("content-type", "text/plain; charset=utf-8")
-            self.send_header("content-length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-            return
-        if self.path != "/metrics":
-            self.send_error(404)
-            return
-        result = subprocess.run([script, "metrics"], check=False, text=True, capture_output=True)
-        payload = result.stdout.encode("utf-8", errors="replace")
-        self.send_response(200 if result.returncode == 0 else 500)
-        self.send_header("content-type", "text/plain; version=0.0.4; charset=utf-8")
-        self.send_header("content-length", str(len(payload)))
-        self.end_headers()
-        self.wfile.write(payload)
-
-    def log_message(self, fmt, *args):
-        return
-
-
-with http.server.ThreadingHTTPServer((host, port), Handler) as server:
-    print(f"eos-observe exporter listening on {host}:{port}", flush=True)
-    server.serve_forever()
-PY
-      ;;
-    start)
-      local pid
-      if pid="$(read_exporter_pid "$pid_file")" && kill -0 "$pid" >/dev/null 2>&1; then
-        printf 'observability exporter already running pid=%s\n' "$pid"
-        return 0
-      fi
-      nohup "$0" exporter serve --host "$host" --port "$port" >"$log_file" 2>&1 &
-      pid="$!"
-      printf '%s\n' "$pid" >"$pid_file"
-      for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-        if ! kill -0 "$pid" >/dev/null 2>&1; then
-          rm -f "$pid_file"
-          die "observability exporter failed to start; see log: $log_file"
-        fi
-        if exporter_health_check "$host" "$port"; then
-          printf 'observability exporter started pid=%s url=http://%s:%s/metrics\n' "$pid" "$host" "$port"
-          return 0
-        fi
-        sleep 0.1
-      done
-      kill "$pid" >/dev/null 2>&1 || true
-      rm -f "$pid_file"
-      die "observability exporter did not become healthy; see log: $log_file"
-      ;;
-    stop)
-      local pid
-      if pid="$(read_exporter_pid "$pid_file")" && kill -0 "$pid" >/dev/null 2>&1; then
-        kill "$pid" || die "observability exporter stop failed for pid=$pid"
-        for _ in 1 2 3 4 5 6 7 8 9 10; do
-          if ! kill -0 "$pid" >/dev/null 2>&1; then
-            rm -f "$pid_file"
-            printf 'observability exporter stopped\n'
-            return 0
-          fi
-          sleep 0.1
-        done
-        die "observability exporter stop requested but pid is still running: $pid"
-      else
-        rm -f "$pid_file"
-        printf 'observability exporter not running\n'
-      fi
-      ;;
-    status)
-      local pid
-      if pid="$(read_exporter_pid "$pid_file")" && kill -0 "$pid" >/dev/null 2>&1; then
-        printf 'observability exporter: running pid=%s\n' "$pid"
-      else
-        printf 'observability exporter: stopped\n'
-      fi
-      printf 'pid: %s\n' "$pid_file"
-      printf 'log: %s\n' "$log_file"
-      ;;
-    *)
-      die "exporter expects start, stop, status, serve, or once"
-      ;;
-  esac
-}
-
-render_tui_once() {
-  local json
-  json="$(cmd_metrics --format json)"
-  ENGINEOS_OBS_TUI_JSON="$json" python3 - <<'PY'
-import json
-import os
-from collections import defaultdict
-
-data = json.loads(os.environ["ENGINEOS_OBS_TUI_JSON"])
-obs = data["observability"]
-agent = data["agent"]
-
-print("EngineOS Observability")
-print("======================")
-print(f"observability: {'enabled' if obs['enabled'] else 'disabled'}  events={obs['events_total']}")
-print(f"events file: {obs['events_file']}")
-print(f"agent ledger: {agent['ledger_dir']}")
-print(f"queue records={agent['queue_total']}  ledger events={agent['ledger_events_total']}  dispatcher_lock={'held' if agent['dispatcher_lock'] else 'free'}")
-print()
-
-print("Agent Tasks")
-print("-----------")
-if data["task_counts"]:
-    for item in data["task_counts"]:
-        print(f"{item['role']:<18} {item['state']:<10} {item['priority']:<7} {item['count']:>4}  reason={item['reason']}")
-else:
-    print("no agent tasks")
-print()
-
-print("Observability Events")
-print("--------------------")
-if data["observability_counts"]:
-    for item in data["observability_counts"]:
-        print(f"{item['kind']:<22} {item['source']:<12} role={item['role']:<16} risk={item['risk']:<8} count={item['count']}")
-else:
-    print("no observability events")
-print()
-
-print("Recent Ledger")
-print("-------------")
-for event in data["recent_ledger_events"]:
-    print(f"{event.get('ts',''):<20} {event.get('role','none'):<16} {event.get('event',''):<16} {event.get('state',''):<10} reason={event.get('reason','none')}")
-if not data["recent_ledger_events"]:
-    print("no ledger events")
-PY
-}
-
-cmd_tui() {
-  local once=false
-  local watch="2"
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --once)
-        once=true
-        ;;
-      --watch)
-        shift
-        watch="${1:-}"
-        [[ "$watch" =~ ^[0-9]+$ ]] || die "--watch requires an integer"
-        ;;
-      *)
-        die "unknown tui option: $1"
-        ;;
-    esac
-    shift
-  done
-
-  if [[ "$once" == true ]]; then
-    render_tui_once
-    return 0
-  fi
-
-  while true; do
-    printf '\033[H\033[2J'
-    render_tui_once
-    printf '\nrefresh=%ss; Ctrl-C to exit\n' "$watch"
-    sleep "$watch"
-  done
-}
-
-emit_zsh_hook() {
-  cat <<'HOOK'
-if [[ -z "${ENGINEOS_OBSERVABILITY_ZSH_HOOK:-}" ]] && command -v eos-observe >/dev/null 2>&1; then
-  export ENGINEOS_OBSERVABILITY_ZSH_HOOK=1
-  autoload -Uz add-zsh-hook
-  __engineos_observability_last_command=""
-  __engineos_observability_preexec() {
-    __engineos_observability_last_command="$1"
-  }
-  __engineos_observability_precmd() {
-    local status="$?"
-    [[ -n "$__engineos_observability_last_command" ]] || return 0
-    eos-observe record --kind shell-command --source shell --shell zsh --status "$status" --cwd "$PWD" --command "$__engineos_observability_last_command" >/dev/null 2>&1 || true
-    __engineos_observability_last_command=""
-  }
-  add-zsh-hook preexec __engineos_observability_preexec
-  add-zsh-hook precmd __engineos_observability_precmd
-fi
-HOOK
-}
-
-emit_bash_hook() {
-  cat <<'HOOK'
-if [[ -z "${ENGINEOS_OBSERVABILITY_BASH_HOOK:-}" ]] && command -v eos-observe >/dev/null 2>&1; then
-  export ENGINEOS_OBSERVABILITY_BASH_HOOK=1
-  __engineos_observability_last_command=""
-  __engineos_observability_debug() {
-    local cmd="${BASH_COMMAND:-}"
-    case "$cmd" in
-      __engineos_observability_*|PROMPT_COMMAND=*|trap\ *) return 0 ;;
-    esac
-    __engineos_observability_last_command="$cmd"
-  }
-  __engineos_observability_prompt() {
-    local status="$?"
-    [[ -n "$__engineos_observability_last_command" ]] || return 0
-    eos-observe record --kind shell-command --source shell --shell bash --status "$status" --cwd "$PWD" --command "$__engineos_observability_last_command" >/dev/null 2>&1 || true
-    __engineos_observability_last_command=""
-  }
-  trap '__engineos_observability_debug' DEBUG
-  PROMPT_COMMAND="__engineos_observability_prompt${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
-fi
-HOOK
-}
-
-cmd_hook() {
-  local shell_name="${1:-}"
-  case "$shell_name" in
-    zsh)
-      emit_zsh_hook
-      ;;
-    bash)
-      emit_bash_hook
-      ;;
-    *)
-      die "hook expects zsh or bash"
-      ;;
-  esac
 }
 
 cmd="${1:-status}"
@@ -1009,17 +543,8 @@ case "$cmd" in
   purge)
     cmd_purge "$@"
     ;;
-  hook)
-    cmd_hook "$@"
-    ;;
   metrics)
     cmd_metrics "$@"
-    ;;
-  exporter)
-    cmd_exporter "$@"
-    ;;
-  tui)
-    cmd_tui "$@"
     ;;
   help|--help|-h)
     usage

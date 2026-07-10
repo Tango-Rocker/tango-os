@@ -1,0 +1,12 @@
+[Unit]
+Description=EngineOS Quake
+After=graphical-session.target
+
+[Service]
+Type=simple
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/bin
+ExecStart=/usr/lib/engineos/game/engineos-quake-service
+Restart=no
+
+[Install]
+WantedBy=default.target

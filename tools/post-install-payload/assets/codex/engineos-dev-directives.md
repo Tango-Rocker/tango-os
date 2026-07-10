@@ -18,13 +18,16 @@ Default workflow:
    into Docker unless that becomes an explicit proof.
 6. Keep commercial Quake assets out of the repo.
 7. The repo-owned agent harness lives in `.codex/`, `.agents/index.toml`,
-   `.agents/roles/`, `.agents/skills/`, `tools/scripts/agent_metadata.sh`, and
-   `tools/hooks/`; validate it with `eos-source-test agent`.
+	`.agents/roles/`, `.agents/skills/`, `tools/scripts/agent_router.py`, and
+	`tools/scripts/agent_hygiene.py`; validate it with `eos-source-test agent`.
 8. For finished work that should deploy automatically on publish, install the
    repo hook with `tools/hooks/install_git_push_deploy_hook.sh`. It writes
-   `.git/hooks/pre-push` and runs the configured local deploy command for pushed
-   branch refs. Do not configure it to call ISO, VM, or builder-handoff paths
-   unless the user explicitly re-enables the legacy image lab.
+	`.git/hooks/pre-push` and derives the package build/install set from pushed
+	commits. The hook rejects relevant dirty files and does not call ISO, VM, or
+	builder-handoff paths.
+9. Session analysis uses pinned `codex-insights 0.2.0` with
+   `gpt-5.6-luna` at medium reasoning. The first-deploy setup installs it in an
+   isolated user environment; verify it with `codex-insights --version`.
 
 Codex CLI authentication is intentionally not automated. Run `codex` once after
 deploy and authenticate with the intended ChatGPT or API-key account.

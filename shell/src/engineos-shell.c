@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
 #include <ctype.h>
@@ -5,8 +6,6 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <limits.h>
-#include <png.h>
-#include <setjmp.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -16,14 +15,13 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
-#include <drm_fourcc.h>
-#include <jpeglib.h>
+#include <json-c/json.h>
 #include <wayland-server-core.h>
-#include <wlr/interfaces/wlr_buffer.h>
 #include <wlr/backend.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
@@ -48,6 +46,8 @@
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
+
+#include "engineos-image.h"
 
 #ifndef XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION
 #define XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION 4
@@ -126,11 +126,20 @@ struct engineos_pane_binding {
 	char *command_label;
 	struct engineos_layout_request geometry;
 	struct engineos_shell_view *view;
+	enum engineos_surface_role terminal_role;
 	bool focused;
 	int64_t last_update_msec;
 	int64_t launch_deadline_msec;
 	int64_t render_until_msec;
 	bool timeout_logged;
+};
+
+struct engineos_terminal_client {
+	struct wl_list link;
+	char *tty;
+	char *focused_pane_key;
+	enum engineos_surface_role role;
+	int64_t last_update_msec;
 };
 
 struct engineos_preview_bounds {
@@ -182,6 +191,7 @@ struct engineos_shell_server {
 	struct wl_list pointers;
 	struct wl_list launches;
 	struct wl_list pane_bindings;
+	struct wl_list terminal_clients;
 	struct wl_listener new_output;
 	struct wl_listener new_input;
 	struct wl_listener new_xdg_surface;
@@ -310,12 +320,6 @@ struct engineos_shell_view {
 	bool minimized;
 };
 
-struct engineos_pixel_buffer {
-	struct wlr_buffer base;
-	unsigned char *data;
-	size_t stride;
-	uint32_t format;
-};
 
 static const char *view_title(struct engineos_shell_view *view);
 static const char *view_app_id(struct engineos_shell_view *view);
@@ -360,8 +364,6 @@ static void hide_image_preview(struct engineos_shell_server *server,
 	const char *reason);
 static void launch_or_activate_slot(struct engineos_shell_server *server,
 	enum engineos_surface_role role, const char *reason);
-static enum engineos_surface_role terminal_role_for_pane_session(
-	const char *session);
 static void write_shell_state(struct engineos_shell_server *server,
 	const char *reason);
 static bool init_preview_ipc(struct engineos_shell_server *server);
@@ -1231,6 +1233,76 @@ static char *build_pane_binding_key(const char *socket,
 	return key;
 }
 
+static struct engineos_terminal_client *find_terminal_client_by_tty(
+		struct engineos_shell_server *server, const char *tty) {
+	if (server == NULL || tty == NULL || tty[0] == '\0') {
+		return NULL;
+	}
+	struct engineos_terminal_client *client;
+	wl_list_for_each(client, &server->terminal_clients, link) {
+		if (client->tty != NULL && strcmp(client->tty, tty) == 0) {
+			return client;
+		}
+	}
+	return NULL;
+}
+
+static struct engineos_terminal_client *find_terminal_client_by_pane_key(
+		struct engineos_shell_server *server, const char *key) {
+	struct engineos_terminal_client *selected = NULL;
+	if (server == NULL || key == NULL || key[0] == '\0') {
+		return NULL;
+	}
+	struct engineos_terminal_client *client;
+	wl_list_for_each(client, &server->terminal_clients, link) {
+		if (client->focused_pane_key == NULL ||
+				strcmp(client->focused_pane_key, key) != 0) {
+			continue;
+		}
+		if (selected == NULL ||
+				client->last_update_msec > selected->last_update_msec) {
+			selected = client;
+		}
+	}
+	return selected;
+}
+
+static struct engineos_terminal_client *register_terminal_client(
+		struct engineos_shell_server *server, const char *tty,
+		enum engineos_surface_role role) {
+	if (server == NULL || tty == NULL || strncmp(tty, "/dev/", 5) != 0 ||
+			!is_terminal_role(role)) {
+		return NULL;
+	}
+	struct engineos_terminal_client *client =
+		find_terminal_client_by_tty(server, tty);
+	if (client == NULL) {
+		client = calloc(1, sizeof(*client));
+		if (client == NULL) {
+			return NULL;
+		}
+		client->tty = strdup(tty);
+		if (client->tty == NULL) {
+			free(client);
+			return NULL;
+		}
+		wl_list_insert(&server->terminal_clients, &client->link);
+	}
+	client->role = role;
+	client->last_update_msec = monotonic_msec();
+	return client;
+}
+
+static void free_terminal_client(struct engineos_terminal_client *client) {
+	if (client == NULL) {
+		return;
+	}
+	wl_list_remove(&client->link);
+	free(client->tty);
+	free(client->focused_pane_key);
+	free(client);
+}
+
 static struct engineos_pane_binding *find_pane_binding_by_key(
 		struct engineos_shell_server *server, const char *key) {
 	if (server == NULL || key == NULL || key[0] == '\0') {
@@ -1243,6 +1315,105 @@ static struct engineos_pane_binding *find_pane_binding_by_key(
 		}
 	}
 	return NULL;
+}
+
+static struct engineos_pane_binding *find_pending_pane_binding_by_token(
+		struct engineos_shell_server *server, const char *token) {
+	if (server == NULL || token == NULL || token[0] == '\0') {
+		return NULL;
+	}
+	int64_t now = monotonic_msec();
+	struct engineos_pane_binding *binding;
+	wl_list_for_each(binding, &server->pane_bindings, link) {
+		if (binding->token != NULL && strcmp(binding->token, token) == 0 &&
+				binding->launch_deadline_msec > now) {
+			return binding;
+		}
+	}
+	return NULL;
+}
+
+static bool has_pending_pane_launch(struct engineos_shell_server *server) {
+	int64_t now = monotonic_msec();
+	struct engineos_pane_binding *binding;
+	wl_list_for_each(binding, &server->pane_bindings, link) {
+		if (binding->token != NULL && binding->launch_deadline_msec > now) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool view_launch_token(struct engineos_shell_view *view,
+		char *token, size_t token_size) {
+	if (view == NULL || view->xdg_surface == NULL ||
+			view->xdg_surface->surface == NULL ||
+			view->xdg_surface->surface->resource == NULL || token_size == 0) {
+		return false;
+	}
+	struct wl_client *client =
+		wl_resource_get_client(view->xdg_surface->surface->resource);
+	if (client == NULL) {
+		return false;
+	}
+	pid_t pid = 0;
+	uid_t uid = 0;
+	gid_t gid = 0;
+	wl_client_get_credentials(client, &pid, &uid, &gid);
+	if (pid <= 0 || uid != getuid()) {
+		return false;
+	}
+
+	char path[64];
+	snprintf(path, sizeof(path), "/proc/%ld/environ", (long)pid);
+	int fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
+		return false;
+	}
+	const size_t max_bytes = 1024 * 1024;
+	char *environment = malloc(max_bytes + 1);
+	if (environment == NULL) {
+		close(fd);
+		return false;
+	}
+	size_t used = 0;
+	while (used < max_bytes) {
+		ssize_t count = read(fd, environment + used, max_bytes - used);
+		if (count < 0 && errno == EINTR) {
+			continue;
+		}
+		if (count <= 0) {
+			break;
+		}
+		used += (size_t)count;
+	}
+	close(fd);
+	environment[used] = '\0';
+
+	const char prefix[] = "ENGINEOS_PANE_LAUNCH_TOKEN=";
+	bool found = false;
+	for (size_t offset = 0; offset < used;) {
+		char *entry = environment + offset;
+		size_t remaining = used - offset;
+		size_t length = strnlen(entry, remaining);
+		if (length == remaining) {
+			break;
+		}
+		if (length > sizeof(prefix) - 1 &&
+				strncmp(entry, prefix, sizeof(prefix) - 1) == 0) {
+			const char *value = entry + sizeof(prefix) - 1;
+			size_t value_length = length - (sizeof(prefix) - 1);
+			if (value_length > 0 && value_length < token_size) {
+				memcpy(token, value, value_length);
+				token[value_length] = '\0';
+				found = true;
+			}
+			break;
+		}
+		offset += length + 1;
+	}
+	free(environment);
+	return found;
 }
 
 static struct engineos_pane_binding *pane_binding_for_view(
@@ -1268,7 +1439,7 @@ static void pane_binding_schedule_timer(struct engineos_shell_server *server) {
 	int64_t next = 0;
 	struct engineos_pane_binding *binding;
 	wl_list_for_each(binding, &server->pane_bindings, link) {
-		if (binding->view == NULL && binding->launch_deadline_msec > 0 &&
+		if (binding->token != NULL && binding->launch_deadline_msec > 0 &&
 				(next == 0 || binding->launch_deadline_msec < next)) {
 			next = binding->launch_deadline_msec;
 		}
@@ -1340,6 +1511,7 @@ static struct engineos_pane_binding *ensure_pane_binding(
 		return NULL;
 	}
 	wl_list_init(&binding->link);
+	binding->terminal_role = ENGINEOS_SURFACE_UNKNOWN;
 	binding->key = key;
 	if (!update_pane_binding_identity(binding, socket, session,
 				window_id, window_index, pane_id)) {
@@ -1369,17 +1541,22 @@ static bool prune_expired_pane_bindings(struct engineos_shell_server *server,
 	struct engineos_pane_binding *binding;
 	struct engineos_pane_binding *tmp;
 	wl_list_for_each_safe(binding, tmp, &server->pane_bindings, link) {
-		if (binding->view != NULL || binding->launch_deadline_msec <= 0 ||
+		if (binding->token == NULL || binding->launch_deadline_msec <= 0 ||
 				binding->launch_deadline_msec > now) {
 			continue;
 		}
 		wlr_log(WLR_ERROR,
-			"pane launch timeout key=%s token=%s command=%s reason=%s",
+			"pane launch timeout key=%s command=%s previous_view=%u reason=%s",
 			binding->key != NULL ? binding->key : "(missing)",
-			binding->token != NULL ? binding->token : "(missing)",
 			binding->command_label != NULL ? binding->command_label : "(unknown)",
+			binding->view != NULL ? binding->view->view_id : 0,
 			reason != NULL ? reason : "unspecified");
-		free_pane_binding(binding);
+		free(binding->token);
+		binding->token = NULL;
+		binding->launch_deadline_msec = 0;
+		if (binding->view == NULL) {
+			free_pane_binding(binding);
+		}
 		changed = true;
 	}
 	return changed;
@@ -1422,47 +1599,46 @@ static void pane_binding_set_focused(struct engineos_shell_server *server,
 	pane_binding_schedule_timer(server);
 }
 
-static struct engineos_pane_binding *oldest_pending_pane_binding(
-		struct engineos_shell_server *server) {
-	struct engineos_pane_binding *selected = NULL;
-	int64_t now = monotonic_msec();
-	struct engineos_pane_binding *binding;
-	wl_list_for_each(binding, &server->pane_bindings, link) {
-		if (binding->view != NULL || binding->token == NULL ||
-				binding->launch_deadline_msec <= 0 ||
-				binding->launch_deadline_msec <= now) {
-			continue;
-		}
-		if (selected == NULL ||
-				binding->last_update_msec < selected->last_update_msec) {
-			selected = binding;
-		}
-	}
-	return selected;
-}
-
 static bool bind_view_to_pending_pane(struct engineos_shell_view *view) {
 	if (view == NULL || view->server == NULL || is_launchpad_role(view->role)) {
 		return false;
 	}
 	prune_expired_pane_bindings(view->server, "view-map");
+	char token[128] = {0};
+	if (!view_launch_token(view, token, sizeof(token))) {
+		if (has_pending_pane_launch(view->server)) {
+			wlr_log(WLR_ERROR,
+				"pane binding rejected view_id=%u title=%s app_id=%s reason=missing-launch-token",
+				view->view_id, view_title(view), view_app_id(view));
+		}
+		return false;
+	}
 	struct engineos_pane_binding *binding =
-		oldest_pending_pane_binding(view->server);
+		find_pending_pane_binding_by_token(view->server, token);
 	if (binding == NULL) {
+		wlr_log(WLR_ERROR,
+			"pane binding rejected view_id=%u title=%s app_id=%s reason=unknown-or-stale-token",
+			view->view_id, view_title(view), view_app_id(view));
 		return false;
 	}
 
+	struct engineos_shell_view *old_view = binding->view;
 	binding->view = view;
+	free(binding->token);
+	binding->token = NULL;
 	binding->launch_deadline_msec = 0;
 	binding->render_until_msec = 0;
 	binding->last_update_msec = monotonic_msec();
 	wlr_log(WLR_INFO,
-		"pane binding mapped key=%s token=%s view_id=%u title=%s app_id=%s command=%s focused=%s",
+		"pane binding mapped key=%s view_id=%u replaced_view_id=%u title=%s app_id=%s command=%s focused=%s",
 		binding->key != NULL ? binding->key : "(missing)",
-		binding->token != NULL ? binding->token : "(missing)",
-		view->view_id, view_title(view), view_app_id(view),
+		view->view_id, old_view != NULL ? old_view->view_id : 0,
+		view_title(view), view_app_id(view),
 		binding->command_label != NULL ? binding->command_label : "(unknown)",
 		binding->focused ? "true" : "false");
+	if (old_view != NULL && old_view != view && old_view->mapped) {
+		apply_view_layout(old_view);
+	}
 	return true;
 }
 
@@ -1480,13 +1656,12 @@ static bool remove_pane_binding_for_view(struct engineos_shell_view *view,
 		view != NULL ? view_title(view) : "(none)",
 		view != NULL ? view_app_id(view) : "(none)");
 	bool was_focused = binding->focused;
-	char session[128] = {0};
-	if (binding->session != NULL) {
-		snprintf(session, sizeof(session), "%s", binding->session);
-	}
+	enum engineos_surface_role terminal_role = binding->terminal_role;
 	free_pane_binding(binding);
 	if (was_focused && view != NULL && view->server != NULL) {
-		set_active_slot(view->server, terminal_role_for_pane_session(session),
+		set_active_slot(view->server,
+			is_terminal_role(terminal_role) ? terminal_role :
+				ENGINEOS_SURFACE_TERMINAL,
 			reason != NULL ? reason : "pane-view-unmapped");
 	}
 	return true;
@@ -1509,7 +1684,10 @@ static bool compute_view_geometry(struct engineos_shell_view *view,
 				pane_geometry_request_valid(&binding->geometry)) {
 			request = binding->geometry;
 			struct engineos_view_geometry output_geometry = {0};
-			output_geometry_for_role(view->server, ENGINEOS_SURFACE_TERMINAL,
+			enum engineos_surface_role terminal_role =
+				is_terminal_role(binding->terminal_role) ?
+					binding->terminal_role : ENGINEOS_SURFACE_TERMINAL;
+			output_geometry_for_role(view->server, terminal_role,
 				&output_geometry.x, &output_geometry.y,
 				&output_geometry.width, &output_geometry.height);
 			if (apply_pane_geometry(&request, &output_geometry, geometry)) {
@@ -1759,12 +1937,12 @@ static void write_pane_binding_json(FILE *file,
 	json_write_string(file, binding->window_index);
 	fprintf(file, ", \"pane_id\": ");
 	json_write_string(file, binding->pane_id);
-	fprintf(file, ", \"token\": ");
-	json_write_string(file, binding->token);
 	fprintf(file, ", \"command_label\": ");
 	json_write_string(file, binding->command_label);
 	fprintf(file, ", \"pending\": %s",
-		binding->view == NULL && binding->token != NULL ? "true" : "false");
+		binding->token != NULL ? "true" : "false");
+	fprintf(file, ", \"terminal_slot\": ");
+	json_write_string(file, surface_role_name(binding->terminal_role));
 	fprintf(file, ", \"focused\": %s", binding->focused ? "true" : "false");
 	fprintf(file, ", \"view_id\": ");
 	if (binding->view != NULL && binding->view->mapped) {
@@ -1827,408 +2005,93 @@ static bool mkdir_p(const char *path, mode_t mode) {
 	return ok;
 }
 
-static void pixel_buffer_destroy(struct wlr_buffer *wlr_buffer) {
-	struct engineos_pixel_buffer *buffer =
-		wl_container_of(wlr_buffer, buffer, base);
-	free(buffer->data);
-	wlr_buffer_finish(&buffer->base);
-	free(buffer);
-}
-
-static bool pixel_buffer_begin_data_ptr_access(struct wlr_buffer *wlr_buffer,
-		uint32_t flags, void **data, uint32_t *format, size_t *stride) {
-	struct engineos_pixel_buffer *buffer =
-		wl_container_of(wlr_buffer, buffer, base);
-	if ((flags & WLR_BUFFER_DATA_PTR_ACCESS_READ) == 0) {
-		return false;
-	}
-	*data = buffer->data;
-	*format = buffer->format;
-	*stride = buffer->stride;
-	return true;
-}
-
-static void pixel_buffer_end_data_ptr_access(struct wlr_buffer *wlr_buffer) {
-	(void)wlr_buffer;
-}
-
-static const struct wlr_buffer_impl pixel_buffer_impl = {
-	.destroy = pixel_buffer_destroy,
-	.begin_data_ptr_access = pixel_buffer_begin_data_ptr_access,
-	.end_data_ptr_access = pixel_buffer_end_data_ptr_access,
-};
-
-static struct wlr_buffer *create_pixel_buffer_from_rgba(
-		const unsigned char *source, int width, int height, size_t source_stride) {
-	struct engineos_pixel_buffer *buffer = calloc(1, sizeof(*buffer));
-	if (buffer == NULL) {
-		return NULL;
-	}
-	buffer->format = DRM_FORMAT_ABGR8888;
-	buffer->stride = (size_t)width * 4;
-	size_t data_size = buffer->stride * (size_t)height;
-	buffer->data = malloc(data_size);
-	if (buffer->data == NULL) {
-		free(buffer);
-		return NULL;
-	}
-
-	for (int y = 0; y < height; y++) {
-		const unsigned char *src = source + (size_t)y * source_stride;
-		unsigned char *dst = buffer->data + (size_t)y * buffer->stride;
-		memcpy(dst, src, buffer->stride);
-	}
-
-	wlr_buffer_init(&buffer->base, &pixel_buffer_impl, width, height);
-	return &buffer->base;
-}
-
-static bool image_dimensions_allowed(int width, int height,
-		char *error, size_t error_size) {
-	if (width <= 0 || height <= 0) {
-		snprintf(error, error_size, "image dimensions are invalid");
-		return false;
-	}
-	if (width > 4096 || height > 4096 ||
-			(int64_t)width * (int64_t)height > 16777216) {
-		snprintf(error, error_size, "image dimensions too large: %dx%d",
-			width, height);
-		return false;
-	}
-	return true;
-}
-
-static struct wlr_buffer *decode_png_preview(FILE *file,
-		int *image_width, int *image_height, char *error, size_t error_size) {
-	unsigned char signature[8];
-	if (fread(signature, 1, sizeof(signature), file) != sizeof(signature) ||
-			png_sig_cmp(signature, 0, sizeof(signature)) != 0) {
-		snprintf(error, error_size, "not a PNG image");
-		return NULL;
-	}
-
-	png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING,
-		NULL, NULL, NULL);
-	if (png == NULL) {
-		snprintf(error, error_size, "failed to initialize PNG decoder");
-		return NULL;
-	}
-	png_infop info = png_create_info_struct(png);
-	if (info == NULL) {
-		png_destroy_read_struct(&png, NULL, NULL);
-		snprintf(error, error_size, "failed to initialize PNG info");
-		return NULL;
-	}
-	if (setjmp(png_jmpbuf(png))) {
-		png_destroy_read_struct(&png, &info, NULL);
-		snprintf(error, error_size, "PNG decode failed");
-		return NULL;
-	}
-
-	png_init_io(png, file);
-	png_set_sig_bytes(png, sizeof(signature));
-	png_read_info(png, info);
-
-	png_uint_32 width = png_get_image_width(png, info);
-	png_uint_32 height = png_get_image_height(png, info);
-	int bit_depth = png_get_bit_depth(png, info);
-	int color_type = png_get_color_type(png, info);
-	if (width > INT_MAX || height > INT_MAX ||
-			!image_dimensions_allowed((int)width, (int)height,
-				error, error_size)) {
-		png_destroy_read_struct(&png, &info, NULL);
-		return NULL;
-	}
-
-	if (bit_depth == 16) {
-		png_set_strip_16(png);
-	}
-	if (color_type == PNG_COLOR_TYPE_PALETTE) {
-		png_set_palette_to_rgb(png);
-	}
-	if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8) {
-		png_set_expand_gray_1_2_4_to_8(png);
-	}
-	if (png_get_valid(png, info, PNG_INFO_tRNS)) {
-		png_set_tRNS_to_alpha(png);
-	}
-	if (color_type == PNG_COLOR_TYPE_GRAY ||
-			color_type == PNG_COLOR_TYPE_GRAY_ALPHA) {
-		png_set_gray_to_rgb(png);
-	}
-	if ((color_type & PNG_COLOR_MASK_ALPHA) == 0 &&
-			!png_get_valid(png, info, PNG_INFO_tRNS)) {
-		png_set_filler(png, 0xff, PNG_FILLER_AFTER);
-	}
-
-	png_read_update_info(png, info);
-	size_t stride = png_get_rowbytes(png, info);
-	if (stride != (size_t)width * 4) {
-		png_destroy_read_struct(&png, &info, NULL);
-		snprintf(error, error_size, "PNG decoder did not produce RGBA pixels");
-		return NULL;
-	}
-
-	unsigned char *pixels = malloc(stride * (size_t)height);
-	png_bytep *rows = calloc((size_t)height, sizeof(*rows));
-	if (pixels == NULL || rows == NULL) {
-		free(pixels);
-		free(rows);
-		png_destroy_read_struct(&png, &info, NULL);
-		snprintf(error, error_size, "failed to allocate PNG pixels");
-		return NULL;
-	}
-	for (png_uint_32 y = 0; y < height; y++) {
-		rows[y] = pixels + (size_t)y * stride;
-	}
-	png_read_image(png, rows);
-	png_read_end(png, NULL);
-	free(rows);
-	png_destroy_read_struct(&png, &info, NULL);
-
-	struct wlr_buffer *buffer =
-		create_pixel_buffer_from_rgba(pixels, (int)width, (int)height, stride);
-	free(pixels);
-	if (buffer == NULL) {
-		snprintf(error, error_size, "failed to allocate image buffer");
-		return NULL;
-	}
-	*image_width = (int)width;
-	*image_height = (int)height;
-	return buffer;
-}
-
-struct engineos_jpeg_error {
-	struct jpeg_error_mgr pub;
-	jmp_buf jump;
-};
-
-static void jpeg_error_exit(j_common_ptr cinfo) {
-	struct engineos_jpeg_error *error =
-		(struct engineos_jpeg_error *)cinfo->err;
-	longjmp(error->jump, 1);
-}
-
-static struct wlr_buffer *decode_jpeg_preview(FILE *file,
-		int *image_width, int *image_height, char *error, size_t error_size) {
-	struct jpeg_decompress_struct cinfo = {0};
-	struct engineos_jpeg_error jpeg_error = {0};
-	cinfo.err = jpeg_std_error(&jpeg_error.pub);
-	jpeg_error.pub.error_exit = jpeg_error_exit;
-	if (setjmp(jpeg_error.jump)) {
-		jpeg_destroy_decompress(&cinfo);
-		snprintf(error, error_size, "JPEG decode failed");
-		return NULL;
-	}
-
-	jpeg_create_decompress(&cinfo);
-	jpeg_stdio_src(&cinfo, file);
-	jpeg_read_header(&cinfo, TRUE);
-	cinfo.out_color_space = JCS_RGB;
-	jpeg_start_decompress(&cinfo);
-
-	if (cinfo.output_width > INT_MAX || cinfo.output_height > INT_MAX ||
-			!image_dimensions_allowed((int)cinfo.output_width,
-				(int)cinfo.output_height, error, error_size)) {
-		jpeg_destroy_decompress(&cinfo);
-		return NULL;
-	}
-
-	int width = (int)cinfo.output_width;
-	int height = (int)cinfo.output_height;
-	size_t stride = (size_t)width * 4;
-	unsigned char *pixels = malloc(stride * (size_t)height);
-	JSAMPARRAY scanline = (*cinfo.mem->alloc_sarray)((j_common_ptr)&cinfo,
-		JPOOL_IMAGE, (JDIMENSION)width * 3, 1);
-	if (pixels == NULL || scanline == NULL) {
-		free(pixels);
-		jpeg_destroy_decompress(&cinfo);
-		snprintf(error, error_size, "failed to allocate JPEG pixels");
-		return NULL;
-	}
-
-	while (cinfo.output_scanline < cinfo.output_height) {
-		JDIMENSION y = cinfo.output_scanline;
-		jpeg_read_scanlines(&cinfo, scanline, 1);
-		unsigned char *dst = pixels + (size_t)y * stride;
-		for (int x = 0; x < width; x++) {
-			dst[(size_t)x * 4 + 0] = scanline[0][(size_t)x * 3 + 0];
-			dst[(size_t)x * 4 + 1] = scanline[0][(size_t)x * 3 + 1];
-			dst[(size_t)x * 4 + 2] = scanline[0][(size_t)x * 3 + 2];
-			dst[(size_t)x * 4 + 3] = 255;
-		}
-	}
-	jpeg_finish_decompress(&cinfo);
-	jpeg_destroy_decompress(&cinfo);
-
-	struct wlr_buffer *buffer =
-		create_pixel_buffer_from_rgba(pixels, width, height, stride);
-	free(pixels);
-	if (buffer == NULL) {
-		snprintf(error, error_size, "failed to allocate image buffer");
-		return NULL;
-	}
-	*image_width = width;
-	*image_height = height;
-	return buffer;
-}
-
-static struct wlr_buffer *decode_image_preview(const char *path,
-		int *image_width, int *image_height, char *error, size_t error_size) {
-	FILE *file = fopen(path, "rb");
-	if (file == NULL) {
-		snprintf(error, error_size, "failed to open image: %s",
-			strerror(errno));
-		return NULL;
-	}
-
-	unsigned char signature[8] = {0};
-	if (fread(signature, 1, sizeof(signature), file) != sizeof(signature)) {
-		fclose(file);
-		snprintf(error, error_size, "image file is too short");
-		return NULL;
-	}
-	rewind(file);
-
-	struct wlr_buffer *buffer = NULL;
-	if (png_sig_cmp(signature, 0, sizeof(signature)) == 0) {
-		buffer = decode_png_preview(file, image_width, image_height,
-			error, error_size);
-	} else if (signature[0] == 0xff && signature[1] == 0xd8 &&
-			signature[2] == 0xff) {
-		buffer = decode_jpeg_preview(file, image_width, image_height,
-			error, error_size);
-	} else {
-		snprintf(error, error_size, "unsupported image type");
-	}
-	fclose(file);
-	return buffer;
-}
-
-static bool json_extract_string(const char *json, const char *key,
+static bool json_extract_string(struct json_object *json, const char *key,
 		char *out, size_t out_size) {
-	char pattern[64];
-	snprintf(pattern, sizeof(pattern), "\"%s\"", key);
-	const char *pos = strstr(json, pattern);
-	if (pos == NULL) {
+	struct json_object *value = NULL;
+	if (json == NULL || key == NULL ||
+			!json_object_object_get_ex(json, key, &value) ||
+			!json_object_is_type(value, json_type_string)) {
 		return false;
 	}
-	pos = strchr(pos + strlen(pattern), ':');
-	if (pos == NULL) {
+	const char *text = json_object_get_string(value);
+	if (text == NULL || strlen(text) >= out_size) {
 		return false;
 	}
-	pos++;
-	while (*pos == ' ' || *pos == '\t' || *pos == '\r' || *pos == '\n') {
-		pos++;
-	}
-	if (*pos != '"') {
-		return false;
-	}
-	pos++;
-
-	size_t used = 0;
-	while (*pos != '\0' && *pos != '"') {
-		char c = *pos++;
-		if (c == '\\') {
-			c = *pos++;
-			switch (c) {
-			case '"':
-			case '\\':
-			case '/':
-				break;
-			case 'n':
-				c = '\n';
-				break;
-			case 'r':
-				c = '\r';
-				break;
-			case 't':
-				c = '\t';
-				break;
-			default:
-				return false;
-			}
-		}
-		if (used + 1 >= out_size) {
-			return false;
-		}
-		out[used++] = c;
-	}
-	if (*pos != '"') {
-		return false;
-	}
-	out[used] = '\0';
+	snprintf(out, out_size, "%s", text);
 	return true;
 }
 
-static bool json_extract_int(const char *json, const char *key, int *out) {
-	char pattern[64];
-	snprintf(pattern, sizeof(pattern), "\"%s\"", key);
-	const char *pos = strstr(json, pattern);
-	if (pos == NULL) {
+static bool json_extract_int(struct json_object *json, const char *key,
+		int *out) {
+	struct json_object *value = NULL;
+	if (json == NULL || key == NULL ||
+			!json_object_object_get_ex(json, key, &value) ||
+			!json_object_is_type(value, json_type_int)) {
 		return false;
 	}
-	pos = strchr(pos + strlen(pattern), ':');
-	if (pos == NULL) {
-		return false;
-	}
-	pos++;
-	while (*pos == ' ' || *pos == '\t' || *pos == '\r' || *pos == '\n') {
-		pos++;
-	}
-
-	errno = 0;
-	char *end = NULL;
-	long parsed = strtol(pos, &end, 10);
-	if (errno != 0 || end == pos || parsed < 0 || parsed > INT_MAX) {
+	int64_t parsed = json_object_get_int64(value);
+	if (parsed < 0 || parsed > INT_MAX) {
 		return false;
 	}
 	*out = (int)parsed;
 	return true;
 }
 
-static bool request_pane_identity(const char *json, char *socket,
+static bool request_pane_identity(struct json_object *json, char *socket,
 		size_t socket_size, char *session, size_t session_size,
 		char *window_id, size_t window_id_size,
 		char *window_index, size_t window_index_size,
 		char *pane_id, size_t pane_id_size) {
-	return json_extract_string(json, "socket", socket, socket_size) &&
-		json_extract_string(json, "session", session, session_size) &&
-		json_extract_string(json, "window_id", window_id, window_id_size) &&
-		json_extract_string(json, "window_index", window_index,
+	struct json_object *pane = NULL;
+	if (json == NULL || !json_object_object_get_ex(json, "pane", &pane) ||
+			!json_object_is_type(pane, json_type_object)) {
+		return false;
+	}
+	return json_extract_string(pane, "socket", socket, socket_size) &&
+		json_extract_string(pane, "session", session, session_size) &&
+		json_extract_string(pane, "window_id", window_id, window_id_size) &&
+		json_extract_string(pane, "window_index", window_index,
 			window_index_size) &&
-		json_extract_string(json, "pane_id", pane_id, pane_id_size);
+		json_extract_string(pane, "pane_id", pane_id, pane_id_size);
 }
 
-static bool request_pane_geometry(const char *json,
+static bool request_pane_geometry(struct json_object *json,
 		struct engineos_layout_request *geometry) {
+	struct json_object *value = NULL;
+	if (json == NULL || !json_object_object_get_ex(json, "geometry", &value) ||
+			!json_object_is_type(value, json_type_object)) {
+		return false;
+	}
 	memset(geometry, 0, sizeof(*geometry));
 	geometry->pane = true;
 	snprintf(geometry->source, sizeof(geometry->source), "%s", "tmux-ipc");
-	if (!json_extract_int(json, "pane_left", &geometry->pane_left) ||
-			!json_extract_int(json, "pane_top", &geometry->pane_top) ||
-			!json_extract_int(json, "pane_width", &geometry->pane_width) ||
-			!json_extract_int(json, "pane_height", &geometry->pane_height) ||
-			!json_extract_int(json, "window_width", &geometry->window_width) ||
-			!json_extract_int(json, "window_height", &geometry->window_height)) {
+	if (!json_extract_int(value, "pane_left", &geometry->pane_left) ||
+			!json_extract_int(value, "pane_top", &geometry->pane_top) ||
+			!json_extract_int(value, "pane_width", &geometry->pane_width) ||
+			!json_extract_int(value, "pane_height", &geometry->pane_height) ||
+			!json_extract_int(value, "window_width", &geometry->window_width) ||
+			!json_extract_int(value, "window_height", &geometry->window_height)) {
 		return false;
 	}
-	json_extract_int(json, "cell_width", &geometry->cell_width);
-	json_extract_int(json, "cell_height", &geometry->cell_height);
+	json_extract_int(value, "cell_width", &geometry->cell_width);
+	json_extract_int(value, "cell_height", &geometry->cell_height);
 	return pane_geometry_request_valid(geometry);
 }
 
-static bool request_preview_bounds(const char *json,
+static bool request_preview_bounds(struct json_object *json,
 		struct engineos_preview_bounds *bounds) {
 	memset(bounds, 0, sizeof(*bounds));
-	if (!json_extract_int(json, "x", &bounds->x) ||
-			!json_extract_int(json, "y", &bounds->y) ||
-			!json_extract_int(json, "width", &bounds->width) ||
-			!json_extract_int(json, "height", &bounds->height)) {
+	struct json_object *value = NULL;
+	if (json == NULL || !json_object_object_get_ex(json, "bounds", &value) ||
+			!json_object_is_type(value, json_type_object) ||
+			!json_extract_int(value, "x", &bounds->x) ||
+			!json_extract_int(value, "y", &bounds->y) ||
+			!json_extract_int(value, "width", &bounds->width) ||
+			!json_extract_int(value, "height", &bounds->height)) {
 		return false;
 	}
-	json_extract_int(json, "window_width", &bounds->window_width);
-	json_extract_int(json, "window_height", &bounds->window_height);
+	json_extract_int(value, "window_width", &bounds->window_width);
+	json_extract_int(value, "window_height", &bounds->window_height);
 	if (bounds->width <= 0 || bounds->height <= 0) {
 		return false;
 	}
@@ -2236,7 +2099,7 @@ static bool request_preview_bounds(const char *json,
 	return true;
 }
 
-static int request_opacity_percent(const char *json, int fallback) {
+static int request_opacity_percent(struct json_object *json, int fallback) {
 	int value = fallback;
 	if (!json_extract_int(json, "opacity", &value)) {
 		return fallback;
@@ -2289,6 +2152,55 @@ static enum engineos_surface_role parse_surface_role(const char *value) {
 	}
 	if (strcmp(value, "engine") == 0) {
 		return ENGINEOS_SURFACE_ENGINE;
+	}
+	return ENGINEOS_SURFACE_UNKNOWN;
+}
+
+static char *request_pane_key(struct json_object *request) {
+	char socket[PATH_MAX] = {0};
+	char session[128] = {0};
+	char pane_id[64] = {0};
+	struct json_object *pane = NULL;
+	if (request == NULL ||
+			!json_object_object_get_ex(request, "pane", &pane) ||
+			!json_object_is_type(pane, json_type_object) ||
+			!json_extract_string(pane, "socket", socket, sizeof(socket)) ||
+			!json_extract_string(pane, "session", session, sizeof(session)) ||
+			!json_extract_string(pane, "pane_id", pane_id, sizeof(pane_id))) {
+		return NULL;
+	}
+	return build_pane_binding_key(socket, session, pane_id);
+}
+
+static enum engineos_surface_role terminal_role_for_request(
+		struct engineos_shell_server *server, struct json_object *request,
+		const char *legacy_slot, bool update_focus) {
+	char client_tty[PATH_MAX] = {0};
+	json_extract_string(request, "client_tty", client_tty,
+		sizeof(client_tty));
+	char *key = request_pane_key(request);
+	bool has_pane_identity = key != NULL;
+	struct engineos_terminal_client *client = NULL;
+	if (client_tty[0] != '\0') {
+		client = find_terminal_client_by_tty(server, client_tty);
+	}
+	if (client == NULL && key != NULL) {
+		client = find_terminal_client_by_pane_key(server, key);
+	}
+	if (client != NULL) {
+		if (update_focus && key != NULL) {
+			replace_string(&client->focused_pane_key, key);
+			client->last_update_msec = monotonic_msec();
+		}
+		enum engineos_surface_role role = client->role;
+		free(key);
+		return role;
+	}
+	free(key);
+
+	/* Requests without pane identity retain the explicit slot compatibility path. */
+	if (!has_pane_identity) {
+		return parse_surface_role(legacy_slot);
 	}
 	return ENGINEOS_SURFACE_UNKNOWN;
 }
@@ -2414,7 +2326,7 @@ static bool show_image_preview(struct engineos_shell_server *server,
 	int image_width = 0;
 	int image_height = 0;
 	struct wlr_buffer *buffer =
-		decode_image_preview(path, &image_width, &image_height, error, error_size);
+		engineos_image_decode(path, &image_width, &image_height, error, error_size);
 	if (buffer == NULL) {
 		return false;
 	}
@@ -2510,7 +2422,7 @@ static bool show_wallpaper(struct engineos_shell_server *server,
 	int image_width = 0;
 	int image_height = 0;
 	struct wlr_buffer *buffer =
-		decode_image_preview(path, &image_width, &image_height, error, error_size);
+		engineos_image_decode(path, &image_width, &image_height, error, error_size);
 	if (buffer == NULL) {
 		return false;
 	}
@@ -2579,8 +2491,8 @@ static void preview_write_response(int client_fd, const char *status,
 		const char *error) {
 	char response[1024];
 	if (strcmp(status, "ok") == 0) {
-		snprintf(response, sizeof(response),
-			"{\"version\":1,\"status\":\"ok\",\"capabilities\":[\"ping\",\"show\",\"hide\",\"wallpaper\",\"hide-wallpaper\",\"launch\",\"windows\",\"focus-window\",\"relayout-windows\",\"pane-launch\",\"pane-focus\",\"pane-geometry\",\"pane-unbind\",\"pane-list\",\"png\",\"jpeg\",\"contain\",\"cover\",\"opacity\"]}\n");
+		 snprintf(response, sizeof(response),
+			"{\"version\":1,\"status\":\"ok\",\"capabilities\":[\"ping\",\"show\",\"hide\",\"wallpaper\",\"hide-wallpaper\",\"launch\",\"windows\",\"focus-window\",\"relayout-windows\",\"terminal-register\",\"pane-launch\",\"pane-focus\",\"pane-geometry\",\"pane-unbind\",\"pane-list\",\"png\",\"jpeg\",\"contain\",\"cover\",\"opacity\"]}\n");
 	} else {
 		char escaped[768];
 		size_t used = 0;
@@ -2630,16 +2542,8 @@ static void preview_write_pane_list_response(
 	}
 }
 
-static enum engineos_surface_role terminal_role_for_pane_session(
-		const char *session) {
-	if (session != NULL && strcmp(session, "engineos-side") == 0) {
-		return ENGINEOS_SURFACE_TERMINAL_SECONDARY;
-	}
-	return ENGINEOS_SURFACE_TERMINAL;
-}
-
-static void handle_preview_request(struct engineos_shell_server *server,
-		int client_fd, const char *request) {
+static void handle_preview_request_json(struct engineos_shell_server *server,
+		int client_fd, struct json_object *request) {
 	char op[32] = {0};
 	if (!json_extract_string(request, "op", op, sizeof(op))) {
 		preview_write_response(client_fd, "error", "missing op");
@@ -2647,6 +2551,29 @@ static void handle_preview_request(struct engineos_shell_server *server,
 	}
 
 	if (strcmp(op, "ping") == 0) {
+		preview_write_response(client_fd, "ok", NULL);
+		return;
+	}
+	if (strcmp(op, "terminal-register") == 0) {
+		char slot[64] = {0};
+		char tty[PATH_MAX] = {0};
+		if (!json_extract_string(request, "slot", slot, sizeof(slot)) ||
+				!json_extract_string(request, "tty", tty, sizeof(tty))) {
+			preview_write_response(client_fd, "error",
+				"terminal registration requires slot and tty");
+			return;
+		}
+		enum engineos_surface_role role = parse_surface_role(slot);
+		struct engineos_terminal_client *client =
+			register_terminal_client(server, tty, role);
+		if (client == NULL) {
+			preview_write_response(client_fd, "error",
+				"invalid terminal registration");
+			return;
+		}
+		wlr_log(WLR_INFO, "terminal registered tty=%s slot=%s",
+			tty, surface_role_name(role));
+		write_shell_state(server, "ipc-terminal-register");
 		preview_write_response(client_fd, "ok", NULL);
 		return;
 	}
@@ -2720,6 +2647,13 @@ static void handle_preview_request(struct engineos_shell_server *server,
 				preview_write_response(client_fd, "error", "invalid pane geometry");
 				return;
 			}
+			enum engineos_surface_role terminal_role =
+				terminal_role_for_request(server, request, NULL, true);
+			if (!is_terminal_role(terminal_role)) {
+				preview_write_response(client_fd, "error",
+					"pane is not owned by a registered terminal");
+				return;
+			}
 			struct engineos_pane_binding *binding =
 				ensure_pane_binding(server, socket, session, window_id,
 					window_index, pane_id);
@@ -2727,8 +2661,12 @@ static void handle_preview_request(struct engineos_shell_server *server,
 				preview_write_response(client_fd, "error", "could not allocate pane binding");
 				return;
 			}
-			struct engineos_shell_view *old_view = binding->view;
-			binding->view = NULL;
+			struct engineos_pane_binding *token_owner =
+				find_pending_pane_binding_by_token(server, token);
+			if (token_owner != NULL && token_owner != binding) {
+				preview_write_response(client_fd, "error", "duplicate launch token");
+				return;
+			}
 			update_pane_binding_geometry(binding, &geometry);
 			if (!replace_string(&binding->token, token) ||
 					!replace_string(&binding->command_label,
@@ -2738,21 +2676,20 @@ static void handle_preview_request(struct engineos_shell_server *server,
 			}
 			binding->launch_deadline_msec =
 				monotonic_msec() + ENGINEOS_PANE_LAUNCH_TIMEOUT_MS;
+			binding->terminal_role = terminal_role;
 			binding->timeout_logged = false;
 			pane_binding_set_focused(server, binding);
-			if (old_view != NULL && old_view->mapped) {
-				apply_view_layout(old_view);
-			}
-			set_active_slot(server, terminal_role_for_pane_session(session),
+			set_active_slot(server, terminal_role,
 				"ipc-pane-launch");
 			relayout_shell_views(server, "ipc-pane-launch");
 			write_shell_state(server, "ipc-pane-launch");
 			pane_binding_schedule_timer(server);
 			wlr_log(WLR_INFO,
-				"pane launch registered key=%s token=%s command=%s bounds=%d,%d %dx%d window=%dx%d",
+				"pane launch registered key=%s command=%s terminal_slot=%s previous_view=%u bounds=%d,%d %dx%d window=%dx%d",
 				binding->key != NULL ? binding->key : "(missing)",
-				token,
 				binding->command_label != NULL ? binding->command_label : "(unknown)",
+				surface_role_name(terminal_role),
+				binding->view != NULL ? binding->view->view_id : 0,
 				geometry.pane_left, geometry.pane_top,
 				geometry.pane_width, geometry.pane_height,
 				geometry.window_width, geometry.window_height);
@@ -2780,13 +2717,24 @@ static void handle_preview_request(struct engineos_shell_server *server,
 			}
 			struct engineos_pane_binding *binding =
 				find_pane_binding_by_key(server, key);
+			enum engineos_surface_role terminal_role =
+				terminal_role_for_request(server, request, NULL, true);
+			if (!is_terminal_role(terminal_role) && binding != NULL) {
+				terminal_role = binding->terminal_role;
+			}
+			if (!is_terminal_role(terminal_role)) {
+				free(key);
+				preview_write_response(client_fd, "error",
+					"pane focus has no registered terminal owner");
+				return;
+			}
 			if (binding != NULL) {
+				binding->terminal_role = terminal_role;
 				pane_binding_set_focused(server, binding);
 				if (binding->view != NULL && binding->view->mapped) {
 					activate_view(binding->view, "ipc-pane-focus");
 				} else {
-					set_active_slot(server,
-						terminal_role_for_pane_session(session),
+					set_active_slot(server, terminal_role,
 						"ipc-pane-focus-pending");
 					write_shell_state(server, "ipc-pane-focus-pending");
 				}
@@ -2803,7 +2751,7 @@ static void handle_preview_request(struct engineos_shell_server *server,
 					server->focused_view = NULL;
 					wlr_seat_keyboard_notify_clear_focus(server->seat);
 				}
-				set_active_slot(server, terminal_role_for_pane_session(session),
+				set_active_slot(server, terminal_role,
 					"ipc-pane-focus-unbound");
 				relayout_shell_views(server, "ipc-pane-focus-unbound");
 				write_shell_state(server, "ipc-pane-focus-unbound");
@@ -2843,6 +2791,11 @@ static void handle_preview_request(struct engineos_shell_server *server,
 				update_pane_binding_identity(binding, socket, session,
 					window_id, window_index, pane_id);
 				update_pane_binding_geometry(binding, &geometry);
+				enum engineos_surface_role terminal_role =
+					terminal_role_for_request(server, request, NULL, false);
+				if (is_terminal_role(terminal_role)) {
+					binding->terminal_role = terminal_role;
+				}
 				relayout_shell_views(server, "ipc-pane-geometry");
 				write_shell_state(server, "ipc-pane-geometry");
 				wlr_log(WLR_INFO,
@@ -2885,12 +2838,15 @@ static void handle_preview_request(struct engineos_shell_server *server,
 			}
 			struct engineos_shell_view *old_view = binding->view;
 			bool was_focused = binding->focused;
+			enum engineos_surface_role terminal_role = binding->terminal_role;
 			free_pane_binding(binding);
 			if (old_view != NULL && old_view->mapped) {
 				apply_view_layout(old_view);
 			}
 			if (was_focused) {
-				set_active_slot(server, terminal_role_for_pane_session(session),
+				set_active_slot(server,
+					is_terminal_role(terminal_role) ? terminal_role :
+						ENGINEOS_SURFACE_TERMINAL,
 					"ipc-pane-unbind");
 			}
 			relayout_shell_views(server, "ipc-pane-unbind");
@@ -2935,6 +2891,20 @@ static void handle_preview_request(struct engineos_shell_server *server,
 		}
 		char slot[64] = {0};
 		json_extract_string(request, "slot", slot, sizeof(slot));
+		enum engineos_surface_role terminal_role =
+			terminal_role_for_request(server, request, slot, false);
+		char *wallpaper_pane_key = request_pane_key(request);
+		if (wallpaper_pane_key != NULL && !is_terminal_role(terminal_role)) {
+			free(wallpaper_pane_key);
+			preview_write_response(client_fd, "error",
+				"wallpaper pane has no registered terminal owner");
+			return;
+		}
+		free(wallpaper_pane_key);
+		if (is_terminal_role(terminal_role)) {
+			snprintf(slot, sizeof(slot), "%s",
+				surface_role_name(terminal_role));
+		}
 		char mode[32] = {0};
 		json_extract_string(request, "mode", mode, sizeof(mode));
 		struct engineos_preview_bounds bounds = {0};
@@ -2964,6 +2934,19 @@ static void handle_preview_request(struct engineos_shell_server *server,
 	}
 	char slot[64] = {0};
 	json_extract_string(request, "slot", slot, sizeof(slot));
+	enum engineos_surface_role terminal_role =
+		terminal_role_for_request(server, request, slot, false);
+	char *preview_pane_key = request_pane_key(request);
+	if (preview_pane_key != NULL && !is_terminal_role(terminal_role)) {
+		free(preview_pane_key);
+		preview_write_response(client_fd, "error",
+			"preview pane has no registered terminal owner");
+		return;
+	}
+	free(preview_pane_key);
+	if (is_terminal_role(terminal_role)) {
+		snprintf(slot, sizeof(slot), "%s", surface_role_name(terminal_role));
+	}
 	char owner[128] = {0};
 	json_extract_string(request, "owner", owner, sizeof(owner));
 	struct engineos_preview_bounds bounds = {0};
@@ -2979,6 +2962,23 @@ static void handle_preview_request(struct engineos_shell_server *server,
 	preview_write_response(client_fd, "ok", NULL);
 }
 
+static void handle_preview_request(struct engineos_shell_server *server,
+		int client_fd, const char *request_text) {
+	enum json_tokener_error parse_error = json_tokener_success;
+	struct json_object *request =
+		json_tokener_parse_verbose(request_text, &parse_error);
+	if (request == NULL || parse_error != json_tokener_success ||
+			!json_object_is_type(request, json_type_object)) {
+		preview_write_response(client_fd, "error", "invalid json request");
+		if (request != NULL) {
+			json_object_put(request);
+		}
+		return;
+	}
+	handle_preview_request_json(server, client_fd, request);
+	json_object_put(request);
+}
+
 static int preview_socket_event(int fd, uint32_t mask, void *data) {
 	struct engineos_shell_server *server = data;
 	if ((mask & WL_EVENT_READABLE) == 0) {
@@ -2987,7 +2987,8 @@ static int preview_socket_event(int fd, uint32_t mask, void *data) {
 
 	struct sockaddr_un addr;
 	socklen_t addr_len = sizeof(addr);
-	int client_fd = accept(fd, (struct sockaddr *)&addr, &addr_len);
+	int client_fd = accept4(fd, (struct sockaddr *)&addr, &addr_len,
+		SOCK_CLOEXEC);
 	if (client_fd < 0) {
 		if (errno != EAGAIN && errno != EWOULDBLOCK) {
 			wlr_log(WLR_ERROR, "preview ipc accept failed: %s",
@@ -2995,15 +2996,50 @@ static int preview_socket_event(int fd, uint32_t mask, void *data) {
 		}
 		return 0;
 	}
+	struct ucred credentials = {0};
+	socklen_t credentials_len = sizeof(credentials);
+	if (getsockopt(client_fd, SOL_SOCKET, SO_PEERCRED, &credentials,
+			&credentials_len) < 0 || credentials.uid != getuid()) {
+		preview_write_response(client_fd, "error", "unauthorized ipc peer");
+		close(client_fd);
+		return 0;
+	}
+	struct timeval timeout = {.tv_sec = 0, .tv_usec = 250000};
+	setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
 	char request[8192];
-	ssize_t nread = read(client_fd, request, sizeof(request) - 1);
-	if (nread <= 0) {
+	size_t used = 0;
+	bool complete = false;
+	while (used < sizeof(request) - 1) {
+		ssize_t count = read(client_fd, request + used,
+			sizeof(request) - 1 - used);
+		if (count < 0 && errno == EINTR) {
+			continue;
+		}
+		if (count <= 0) {
+			break;
+		}
+		char *newline = memchr(request + used, '\n', (size_t)count);
+		used += (size_t)count;
+		if (newline != NULL) {
+			used = (size_t)(newline - request);
+			complete = true;
+			break;
+		}
+	}
+	if (used == 0) {
 		preview_write_response(client_fd, "error", "empty request");
 		close(client_fd);
 		return 0;
 	}
-	request[nread] = '\0';
+	if (!complete) {
+		preview_write_response(client_fd, "error",
+			used >= sizeof(request) - 1 ? "request too large" :
+				"request must end with newline");
+		close(client_fd);
+		return 0;
+	}
+	request[used] = '\0';
 	handle_preview_request(server, client_fd, request);
 	close(client_fd);
 	return 0;
@@ -3037,8 +3073,13 @@ static bool init_preview_ipc(struct engineos_shell_server *server) {
 	if (server->preview_socket_path == NULL) {
 		return false;
 	}
-	if (!mkdir_p(server->state_dir, 0775)) {
+	if (!mkdir_p(server->state_dir, 0700)) {
 		wlr_log(WLR_ERROR, "failed to create preview ipc dir %s: %s",
+			server->state_dir, strerror(errno));
+		return false;
+	}
+	if (chmod(server->state_dir, 0700) < 0) {
+		wlr_log(WLR_ERROR, "failed to restrict preview ipc dir %s: %s",
 			server->state_dir, strerror(errno));
 		return false;
 	}
@@ -3074,7 +3115,13 @@ static bool init_preview_ipc(struct engineos_shell_server *server) {
 		unlink(server->preview_socket_path);
 		return false;
 	}
-	chmod(server->preview_socket_path, 0660);
+	if (chmod(server->preview_socket_path, 0600) < 0) {
+		wlr_log(WLR_ERROR, "failed to restrict preview ipc socket %s: %s",
+			server->preview_socket_path, strerror(errno));
+		close(sock);
+		unlink(server->preview_socket_path);
+		return false;
+	}
 
 	struct wl_event_loop *event_loop = wl_display_get_event_loop(server->display);
 	server->preview_socket_source =
@@ -3098,7 +3145,7 @@ static void write_shell_state(struct engineos_shell_server *server,
 		return;
 	}
 
-	if (!mkdir_p(server->state_dir, 0775)) {
+	if (!mkdir_p(server->state_dir, 0700)) {
 		wlr_log(WLR_ERROR, "failed to create shell state dir %s: %s",
 			server->state_dir, strerror(errno));
 		return;
@@ -3114,6 +3161,14 @@ static void write_shell_state(struct engineos_shell_server *server,
 	if (file == NULL) {
 		wlr_log(WLR_ERROR, "failed to open shell state file %s: %s",
 			tmp_file, strerror(errno));
+		free(tmp_file);
+		return;
+	}
+	if (fchmod(fileno(file), 0600) < 0) {
+		wlr_log(WLR_ERROR, "failed to restrict shell state file %s: %s",
+			tmp_file, strerror(errno));
+		fclose(file);
+		unlink(tmp_file);
 		free(tmp_file);
 		return;
 	}
@@ -3156,7 +3211,26 @@ static void write_shell_state(struct engineos_shell_server *server,
 		server->wallpaper.y, server->wallpaper.width,
 		server->wallpaper.height, server->wallpaper.image_width,
 		server->wallpaper.image_height);
-	fprintf(file, ",\n  \"slots\": {\n");
+	fprintf(file, ",\n  \"terminal_clients\": [");
+	bool first_terminal_client = true;
+	struct engineos_terminal_client *terminal_client;
+	wl_list_for_each(terminal_client, &server->terminal_clients, link) {
+		if (!first_terminal_client) {
+			fprintf(file, ",");
+		}
+		first_terminal_client = false;
+		fprintf(file, "\n    {\"tty\": ");
+		json_write_string(file, terminal_client->tty);
+		fprintf(file, ", \"slot\": ");
+		json_write_string(file, surface_role_name(terminal_client->role));
+		fprintf(file, ", \"focused_pane_key\": ");
+		json_write_string(file, terminal_client->focused_pane_key);
+		fprintf(file, "}");
+	}
+	if (!first_terminal_client) {
+		fprintf(file, "\n  ");
+	}
+	fprintf(file, "],\n  \"slots\": {\n");
 	write_slot_state(file, server, ENGINEOS_SURFACE_TERMINAL);
 	fprintf(file, ",\n");
 	write_slot_state(file, server, ENGINEOS_SURFACE_TERMINAL_SECONDARY);
@@ -5701,6 +5775,13 @@ static void destroy_server(struct engineos_shell_server *server) {
 			free_pane_binding(binding);
 		}
 	}
+	if (!wl_list_empty(&server->terminal_clients)) {
+		struct engineos_terminal_client *client;
+		struct engineos_terminal_client *tmp;
+		wl_list_for_each_safe(client, tmp, &server->terminal_clients, link) {
+			free_terminal_client(client);
+		}
+	}
 	if (!wl_list_empty(&server->launches)) {
 		struct engineos_shell_launch *launch;
 		struct engineos_shell_launch *tmp;
@@ -5786,6 +5867,7 @@ int main(int argc, char **argv) {
 	server.preview_socket_fd = -1;
 	wl_list_init(&server.launches);
 	wl_list_init(&server.pane_bindings);
+	wl_list_init(&server.terminal_clients);
 
 	static const struct option options[] = {
 		{"headless", no_argument, NULL, 'H'},

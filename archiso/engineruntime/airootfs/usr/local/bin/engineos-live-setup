@@ -15,7 +15,6 @@ touch \
   /var/log/engineos/app.log \
   /var/log/engineos/cube.log \
   /var/log/engineos/doctor-firstboot.log \
-  /var/log/engineos/engine-runner.log \
   /var/log/engineos/engine.log \
   /var/log/engineos/live-setup.log \
   /var/log/engineos/runtime-start.log \
@@ -25,7 +24,6 @@ chown root:wheel \
   /var/log/engineos/app.log \
   /var/log/engineos/cube.log \
   /var/log/engineos/doctor-firstboot.log \
-  /var/log/engineos/engine-runner.log \
   /var/log/engineos/engine.log \
   /var/log/engineos/live-setup.log \
   /var/log/engineos/runtime-start.log \
@@ -35,7 +33,6 @@ chmod 0664 \
   /var/log/engineos/app.log \
   /var/log/engineos/cube.log \
   /var/log/engineos/doctor-firstboot.log \
-  /var/log/engineos/engine-runner.log \
   /var/log/engineos/engine.log \
   /var/log/engineos/live-setup.log \
   /var/log/engineos/runtime-start.log \

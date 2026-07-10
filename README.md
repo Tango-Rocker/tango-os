@@ -1,216 +1,129 @@
 # EngineOS
 
-EngineOS is a Windows-hosted, Arch-built OS lab for an EngineDev ISO first and a game-runtime appliance later. The Windows machine hosts the VM workflow. The Arch builder VM owns the source tree, builds local packages, and produces bootable ISO artifacts with `mkarchiso`.
+EngineOS is a hobby OS lab built on Arch Linux. The active target is the live
+bare-metal EngineDev system: a wlroots shell, shell-owned Wayland apps,
+hardware GL evidence, recovery logs, and Quake development through one
+user-facing command surface.
 
-Current target: finish the EngineDev first-deploy dev environment follow-on after PoC 0. The clean EngineDev ISO builds, boots, and passes `engineos proof booted-iso --vm`; the next proof is a fully usable dev guest with Codex CLI, tmux, Docker, and a repo-owned post-install payload. See [CURRENT_STATUS.md](CURRENT_STATUS.md) for current artifact paths and next commands.
+ISO, VM, QEMU, Hyper-V builder, and generated-image workflows are retained as
+legacy reference paths. They are not part of routine development unless the
+image lab is explicitly re-enabled.
 
-## Quick Start
+## Start Here
 
-From a Linux shell in the repository root:
-
-```bash
-./tools/engineos/engineos --help
-./tools/engineos/engineos doctor --mock
-./tools/engineos/engineos doctor --vm
-./tools/engineos/engineos doctor --bare-metal
-./tools/engineos/engineos bootstrap builder --dry-run
-./tools/engineos/engineos validate builder --mock
-./tools/engineos/engineos validate repo --dry-run
-./tools/engineos/engineos preflight all
-./tools/engineos/engineos builder doctor-proof --dry-run --host dev@<builder-vm-ip>
-./tools/engineos/engineos deploy first --dry-run --host dev@127.0.0.1 --port 2222
-./tools/engineos/engineos proof build-lab --dry-run
-./tools/engineos/engineos release checklist --dry-run
-./tools/engineos/engineos usb list
-./tools/engineos/engineos build shell --dry-run
-./tools/engineos/engineos build iso --dry-run
-./tools/engineos/engineos build iso enginedev --fast --dry-run
-./tools/engineos/engineos build repo --dry-run
-./tools/engineos/engineos engine status
-./tools/engineos/engineos assets explain quake
-./tools/engineos/engineos assets prepare quake
-./tools/engineos/engineos build engine quake --dry-run
-./tools/engineos/engineos validate engine quake
-./tools/engineos/engineos validate shell
-./tools/engineos/engineos logs all --files
-./tools/engineos/engineos test compositor --headless
-./tools/engineos/engineos test shell-actions
-./tools/engineos/engineos test engine-runner-env
-./tools/engineos/engineos test assets
-./tools/engineos/engineos test reliability
-./tools/engineos/engineos test logs
-./tools/engineos/engineos test artifacts
-./tools/engineos/engineos test vm
-./tools/engineos/engineos test engine
-./tools/engineos/engineos test shell
-./tools/engineos/engineos test input
-./tools/engineos/engineos test render --smoke
-./tools/engineos/engineos test
-```
-
-`engineos capture frame --target shell` writes a PNG when `grim` or ImageMagick `import` is available, otherwise it writes a metadata artifact that records why capture fell back.
-
-Inside a booted EngineDev ISO, validate the live environment with:
+Read [CURRENT_STATUS.md](CURRENT_STATUS.md) for current proof state and the
+next command. The normal source-checkout loop is:
 
 ```bash
-engineos proof booted-iso --vm
+./tools/engineos/eos --help
+./tools/engineos/eos-source-test agent
+./tools/engineos/eos-agent hygiene check
+./tools/engineos/eos-lint packages
+./tools/engineos/eos-preflight all
+./tools/engineos/eos-test shell-actions
+./tools/engineos/eos-test shell
+./tools/engineos/eos-test input
 ```
 
-Inside a booted EngineRuntime ISO:
+Use `eos-source-test <scope>` when the installed session exports `/usr` paths
+that could otherwise mask source changes. Use `eos-ci local` for a real package
+build/reinstall loop.
+
+## Live Development
+
+The shell and tmux pane bridge are event-driven. Tmux reports exact client tty,
+pane identity, focus, and geometry; `engineos-shell` owns GUI binding, layout,
+clipping, rendering, and focus.
 
 ```bash
-engineos proof booted-iso --runtime
+eos-runtime shell refresh-user
+eos-runtime shell restart-live
+eos-app manifest validate
+eos-app pane launch -- falkon
+eos-app pane list --json
 ```
 
-Runtime autostart can be disabled with the `engineos.noautostart` kernel command-line flag.
+The primary shell terminal reattaches the most relevant existing tmux session.
+The second output uses the reserved `engineos-side` session. Both clients share
+one tmux server; shell restarts do not create proxy GUI windows.
 
-Quake assets are user-provided and are not included in the ISO by default. The default user copy path is:
+MC image previews carry the invoking tmux pane and client tty. The shell draws
+them only on the registered terminal output; ambiguous pane ownership is an
+error instead of a guessed screen.
 
-```text
-~/.local/share/engineos/quake/id1/pak0.pak
-```
+## Quake Workflow
 
-Use `engineos assets prepare quake` to create the directory and `engineos assets check quake` to verify it.
-After `engineos build engine quake --fetch` produces `engines/quakespasm/upstream/Quake/quakespasm`, `engineos run quake` can use that built binary automatically.
-
-On the intended Arch builder VM, install the baseline build tools first:
+Quake runs as a per-user service. The level agent uses the installed,
+commit-pinned `dgen` release and a separate Codex MCP client per job.
 
 ```bash
-./tools/engineos/engineos bootstrap builder --dry-run
-./tools/engineos/engineos bootstrap builder
+eos-game quake setup
+eos-game quake create "a short flooded gatehouse" --wait
+eos-game quake status
+eos-game quake edit <job-id>
+eos-game quake play
+eos-game quake proof
 ```
 
-To inspect the exact package set without installing it:
+Commercial Quake assets are never stored in this repository. The default
+user-owned path is `~/.local/share/engineos/quake/id1/pak0.pak`; verify it with
+`eos-assets check quake`.
+
+## Deployment
+
+Deployment is computed from committed Git ranges, not the dirty working tree.
+The planner maps changed files to packages, adds local package dependencies,
+builds in dependency order, and performs one package transaction.
 
 ```bash
-./tools/engineos/engineos bootstrap builder --print-packages
+./tools/engineos/eos dev plan --range <base>..<head>
+./tools/engineos/eos dev apply --range <base>..<head>
+tools/hooks/install_git_push_deploy_hook.sh
 ```
+
+The pre-push hook refuses relevant dirty files and fails the push when package
+deployment or proof fails. This keeps published commits and the running
+EngineDev package state aligned.
+
+## Agent Harness
+
+`.agents/index.toml` is the single role index. The router and hygiene checker
+read it directly; there are no generated profiles, wrapper copies, queues, or
+inactive lifecycle hooks.
+
+```bash
+./tools/engineos/eos-agent route "fix Quake focus after reload"
+./tools/engineos/eos-agent show pergame-quake
+./tools/engineos/eos-agent hygiene check
+./tools/engineos/eos-observe metrics
+```
+
+Session extraction is provided by pinned `codex-insights 0.2.0`, using
+`gpt-5.6-luna` with medium reasoning. Raw archives are private and cleanup is
+explicit through `codex-insights prune`.
 
 ## Repository Map
 
 ```text
-archiso/              mkarchiso profiles
-packages/             local Arch package definitions
-shell/                wlroots shell source area
-engine-runner/        process control daemon/client source area
-engines/              engine ports and wrappers
-tools/engineos/       top-level CLI
-tools/scripts/        build, test, and diagnostic helpers
-tools/mcp/            future MCP wrappers around the CLI
-tools/codex/          Codex workflow helpers
-docs/                 architecture and operating docs
-.agents/skills/       project-local agent skills
-tests/                smoke checks for the scaffold
+packages/                  local Arch package definitions
+shell/                     wlroots compositor
+engines/quakespasm/        QuakeSpasm source integration
+tools/engineos/            eos-* entrypoints
+tools/scripts/             command implementations
+tools/game/                per-user game service adapters
+tools/level-agent/         Quake level-agent implementation
+tools/post-install-payload managed live-user configuration
+.agents/                   role index, role rules, and skills
+docs/                      architecture and workflow documentation
+archiso/                   legacy generated-image profiles
 ```
 
-## Docs
+## Documentation
 
-Start here:
-
-- [CURRENT_STATUS.md](CURRENT_STATUS.md): current truth, artifacts, blockers, and next commands
-- [ROADMAP.md](ROADMAP.md): short phase map
-- [docs/README.md](docs/README.md): docs index by purpose
-- [docs/mvp-plan.md](docs/mvp-plan.md): proof ladder to MVP
-- [docs/architecture.md](docs/architecture.md): stable system shape
-- [docs/agent-harness.md](docs/agent-harness.md): agent command policy
-- [docs/builder-vm-hyperv.md](docs/builder-vm-hyperv.md): Windows Hyper-V builder setup
-- [docs/dev-instance.md](docs/dev-instance.md): EngineDev first-deploy setup
-- [AGENTS.md](AGENTS.md): agent entrypoint
-- [BACKLOG.md](BACKLOG.md): deferred tangents
-
-## Build Model
-
-The project is built in three layers:
-
-1. Source repo: code, tools, archiso profiles, docs, and package definitions.
-2. Local pacman repo: EngineOS packages built from `packages/*`.
-3. Generated ISO: `enginedev` first, `engineruntime` later.
-
-The build scripts support dry-runs outside Arch. Real ISO and package builds require an Arch builder VM with `archiso`, `makepkg`, and `repo-add`.
-
-On Windows Hyper-V, use [docs/builder-vm-hyperv.md](docs/builder-vm-hyperv.md)
-to create the Arch builder VM and make `dev@<builder-vm-ip>` reachable.
-
-The repo should live at `/srv/engineos` on a Linux-native filesystem because the archiso profiles consume the local package repo from `file:///srv/engineos/repo/$arch`.
-
-On the Arch builder VM, the current proof sequence is:
-
-```bash
-./tools/engineos/engineos bootstrap builder --dry-run
-./tools/engineos/engineos bootstrap builder
-./tools/engineos/engineos validate builder
-./tools/engineos/engineos proof build-lab
-```
-
-That command runs preflight, package lint, shell build, local repo build, EngineDev ISO build, and artifact listing with a timestamped proof log under `artifacts/logs`.
-It also validates the local repo artifacts before the ISO build step.
-
-ISO builds use `TMPDIR=/srv/engineos/tmp` so mkinitcpio does not fill the builder's `/tmp` tmpfs. The current builder also has a persistent 4 GiB swapfile; increasing Hyper-V RAM still requires an elevated Windows shell.
-
-For faster EngineDev iteration, use the generated fast-compression profile:
-
-```bash
-./tools/engineos/engineos build iso enginedev --fast --clean --archive-existing
-```
-
-`--fast` switches only the generated build profile to SquashFS `zstd` level 3.
-The checked-in archiso profile remains on `xz` for release-candidate builds.
-
-If you want to boot the generated ISO with QEMU from the builder VM, install QEMU plus OVMF firmware and run:
-
-```bash
-./tools/engineos/engineos vm boot enginedev --dry-run
-./tools/engineos/engineos vm boot enginedev
-```
-
-The helper discovers the newest `EngineDevOS-*.iso` under `out/` by default. Manual VMware or VirtualBox booting is still fine; the required guest commands are the same.
-
-Inside the booted guest, run:
-
-```bash
-engineos proof booted-iso --vm
-```
-
-To turn the booted EngineDev guest into a working development instance, run from
-the builder:
-
-```bash
-ENGINEOS_GUEST_PASSWORD=dev ./tools/engineos/engineos deploy first --host dev@127.0.0.1 --port 2222
-```
-
-The deploy command copies `tools/post-install-payload/` into the guest, installs
-or verifies tmux/Docker/Codex CLI, starts Docker, and writes
-`/var/log/engineos/post-first-deploy.log`.
-
-After the EngineDev VM is already booted by the builder with SSH forwarded on
-port 2222, the host-side combined build-and-doctor validation is:
-
-```bash
-./tools/engineos/engineos builder doctor-proof --host dev@<builder-vm-ip>
-```
-
-That command SSHes into the builder, runs the build-lab proof, then SSHes from
-the builder into the booted EngineDev guest and runs `engineos doctor --vm`.
-On this Windows/WSL lab, use `ENGINEOS_SSH=ssh.exe` if WSL cannot route to the
-Hyper-V builder but Windows OpenSSH can.
-
-After a real ISO build, export artifacts and checksums to a host-visible directory:
-
-```bash
-./tools/engineos/engineos artifacts export /path/to/export
-```
-
-For an MVP release-candidate report after both ISOs exist:
-
-```bash
-./tools/engineos/engineos release checklist --out-dir out --export-dir /path/to/export
-```
-
-To prepare a USB stick for bare-metal testing, inspect devices and dry-run the write first:
-
-```bash
-./tools/engineos/engineos usb list
-./tools/engineos/engineos usb write --profile engineruntime --device /dev/sdX --dry-run
-```
-
-The real write requires `--yes-i-understand-this-wipes-device` and refuses non-block-device targets.
+- [CURRENT_STATUS.md](CURRENT_STATUS.md): live truth, blockers, and next proof
+- [ROADMAP.md](ROADMAP.md): PoC, sprint, and MVP sequence
+- [docs/agent-harness.md](docs/agent-harness.md): command and publication policy
+- [docs/agent-roles.md](docs/agent-roles.md): role ownership
+- [shell/README.md](shell/README.md): compositor behavior and interfaces
+- [docs/dev-instance.md](docs/dev-instance.md): bare-metal EngineDev setup
+- [BACKLOG.md](BACKLOG.md): intentionally deferred work

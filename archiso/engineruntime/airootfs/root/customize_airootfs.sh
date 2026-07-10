@@ -51,9 +51,7 @@ chmod 0440 /etc/sudoers.d/10-engineos-wheel
 systemctl enable NetworkManager.service
 systemctl enable sshd.service
 systemctl enable engineos-live-setup.service
-systemctl enable engineos-engine-runner.service
 systemctl enable engineos-runtime.service
-systemctl enable engineos-observe-exporter.service
 systemctl enable getty@tty2.service
 systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service
 install -d -m 0755 /var/lib/systemd/linger

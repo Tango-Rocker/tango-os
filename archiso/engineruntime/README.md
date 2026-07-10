@@ -25,7 +25,7 @@ ssh -p 2223 engineos@127.0.0.1   # password: engineos
 eos-proof booted-iso --runtime
 ```
 
-The profile creates an `engineos` user in the `wheel` group with the validation password `engineos`, enables NetworkManager and SSH for VM proofs, runs `engineos-live-setup.service` once at boot before runtime services, starts `engineos-engine-runner.service`, enables `engineos-runtime.service` for guarded shell autostart on `tty1`, enables `getty@tty2.service` as the recovery TTY, and installs `engineos-recovery-help` for the recovery login path.
+The profile creates an `engineos` user in the `wheel` group with the validation password `engineos`, enables NetworkManager and SSH for VM proofs, runs `engineos-live-setup.service` once at boot before runtime services, enables `engineos-runtime.service` for guarded shell autostart on `tty1`, enables `getty@tty2.service` as the recovery TTY, and installs `engineos-recovery-help` for the recovery login path. Quake is supervised by the per-user `engineos-quake.service` unit.
 
 Runtime autostart can be disabled with the kernel command-line flag:
 

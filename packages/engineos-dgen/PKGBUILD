@@ -1,0 +1,29 @@
+pkgname=engineos-dgen
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Pinned deterministic Quake dungeon generator for EngineOS"
+arch=('any')
+url="https://github.com/Tango-Rocker/quake-os-integration"
+license=('custom:EngineOS-TBD')
+depends=('python' 'python-pydantic')
+makedepends=('git' 'python-build' 'python-installer' 'python-wheel')
+_commit=0013e58ba8b5ee7436d29b33cd0f7010ae2996e5
+# Immutable commit behind the validated v0.1.0 release tag.
+source=("git+$url.git#commit=$_commit")
+sha256sums=('SKIP')
+
+build() {
+  cd quake-os-integration
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  local _engineos_root
+  _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
+  cd quake-os-integration
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -d "$pkgdir/usr/share/engineos/dgen"
+  cp -a catalog "$pkgdir/usr/share/engineos/dgen/catalog"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 "$_engineos_root/LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

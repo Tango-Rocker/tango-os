@@ -20,7 +20,7 @@ work. Preserve the user-owned commercial asset boundary.
 
 ```bash
 eos-assets check quake
-eos-runtime quake --smoke
+eos-game quake play --smoke
 eos-logs engine --last 200
 eos-test assets
 ```

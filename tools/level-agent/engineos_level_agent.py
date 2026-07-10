@@ -8,6 +8,7 @@ import queue
 import shlex
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -19,10 +20,11 @@ from typing import Any
 
 
 SCHEMA = "engineos-level-agent/v1"
-DEFAULT_DGEN_ROOT = Path("/home/dev/quake-generator")
+DEFAULT_DGEN_ROOT = Path("/usr/share/engineos/dgen")
 DEFAULT_WAD = Path("/usr/share/engineos/quake/engineos-dgen.wad")
 DEFAULT_TRENCHBROOM_QUAKE_GAME_DIR = Path("/usr/share/TrenchBroom/games/Quake")
 DEFAULT_SOCKET_NAME = "level-agent.sock"
+TRENCHBROOM_PROFILE_VERSION = "engineos-quake-v2"
 
 
 def now() -> str:
@@ -48,8 +50,9 @@ def default_state_dir() -> Path:
     override = os.environ.get("ENGINEOS_LEVEL_AGENT_STATE_DIR")
     if override:
         return Path(override)
-    if "ENGINEOS_ROOT" in os.environ:
-        return Path(os.environ["ENGINEOS_ROOT"]) / "artifacts" / "level-agent"
+    root = Path(os.environ.get("ENGINEOS_ROOT", "/usr"))
+    if root != Path("/usr") and (root / "tools").is_dir():
+        return root / "artifacts" / "level-agent"
     return Path.home() / ".local" / "state" / "engineos" / "level-agent"
 
 
@@ -57,15 +60,22 @@ def default_log_dir() -> Path:
     override = os.environ.get("ENGINEOS_LEVEL_AGENT_LOG_DIR")
     if override:
         return Path(override)
-    if "ENGINEOS_ROOT" in os.environ:
-        return Path(os.environ["ENGINEOS_ROOT"]) / "artifacts" / "logs"
+    root = Path(os.environ.get("ENGINEOS_ROOT", "/usr"))
+    if root != Path("/usr") and (root / "tools").is_dir():
+        return root / "artifacts" / "logs"
     return Path.home() / ".local" / "state" / "engineos" / "logs"
 
 
+def ensure_private_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    path.chmod(0o700)
+
+
 def atomic_write_json(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(path.parent)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.chmod(0o600)
     tmp.replace(path)
 
 
@@ -132,7 +142,6 @@ class CodexMCPClient:
         self.proc: subprocess.Popen[str] | None = None
         self.stderr_log: Any | None = None
         self.next_id = 1
-        self.thread_id: str | None = None
         self.lock = threading.Lock()
 
     def close(self) -> None:
@@ -156,10 +165,11 @@ class CodexMCPClient:
             raise CodexMCPError("empty Codex MCP command")
         if shutil.which(self.argv[0]) is None and "/" not in self.argv[0]:
             raise CodexMCPError(f"Codex MCP command not found on PATH: {self.argv[0]}")
-        self.workspace.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(self.workspace)
         if self.stderr_log:
             self.stderr_log.close()
         self.stderr_log = (self.workspace / "codex-mcp.stderr.log").open("a", encoding="utf-8")
+        (self.workspace / "codex-mcp.stderr.log").chmod(0o600)
         self.proc = subprocess.Popen(
             self.argv,
             cwd=str(self.workspace),
@@ -237,38 +247,22 @@ class CodexMCPClient:
             self.ensure_started()
             relative = f"jobs/{job['id']}/job.dungeon"
             author_prompt = build_codex_prompt(prompt, relative)
-            if self.thread_id:
-                result = self._request(
-                    "tools/call",
-                    {
-                        "name": "codex-reply",
-                        "arguments": {
-                            "threadId": self.thread_id,
-                            "prompt": author_prompt,
-                        },
+            result = self._request(
+                "tools/call",
+                {
+                    "name": "codex",
+                    "arguments": {
+                        "prompt": author_prompt,
+                        "cwd": str(self.workspace),
+                        "approval-policy": "never",
+                        "sandbox": self.sandbox,
+                        "base-instructions": codex_base_instructions(),
                     },
-                    timeout=900,
-                )
-            else:
-                result = self._request(
-                    "tools/call",
-                    {
-                        "name": "codex",
-                        "arguments": {
-                            "prompt": author_prompt,
-                            "cwd": str(self.workspace),
-                            "approval-policy": "never",
-                            "sandbox": self.sandbox,
-                            "base-instructions": codex_base_instructions(),
-                        },
-                    },
-                    timeout=900,
-                )
+                },
+                timeout=900,
+            )
             structured = result.get("structuredContent")
             if isinstance(structured, dict):
-                thread_id = structured.get("threadId")
-                if isinstance(thread_id, str) and thread_id:
-                    self.thread_id = thread_id
                 content = structured.get("content")
                 if isinstance(content, str):
                     return content
@@ -314,11 +308,10 @@ Rules:
 class LevelAgent:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.settings.state_dir.mkdir(parents=True, exist_ok=True)
-        self.settings.log_dir.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(self.settings.state_dir)
+        ensure_private_dir(self.settings.log_dir)
         self.codex_workspace = self.settings.state_dir / "codex-workspace"
-        self.codex_workspace.mkdir(parents=True, exist_ok=True)
-        self.codex = CodexMCPClient(self.codex_workspace)
+        ensure_private_dir(self.codex_workspace)
         self.jobs_lock = threading.Lock()
 
     def job_path(self, job_id: str) -> Path:
@@ -353,7 +346,7 @@ class LevelAgent:
         job_id = f"lvl-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}-{uuid.uuid4().hex[:8]}"
         map_name = safe_job_name(prompt)
         workspace = self.codex_workspace / "jobs" / job_id
-        workspace.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(workspace)
         job = {
             "schema": SCHEMA,
             "id": job_id,
@@ -393,7 +386,11 @@ class LevelAgent:
         job = self.load_job(job_id)
         try:
             self._set_state(job, "planning")
-            codex_output = self.codex.write_dungeon_spec(job, job["prompt"])
+            codex = CodexMCPClient(self.codex_workspace)
+            try:
+                codex_output = codex.write_dungeon_spec(job, job["prompt"])
+            finally:
+                codex.close()
             job = self.load_job(job_id)
             job["codex_output"] = tail_text(codex_output)
             self.save_job(job)
@@ -431,17 +428,14 @@ class LevelAgent:
         if override:
             return shlex.split(override)
         dgen = shutil.which("dgen")
-        if dgen:
-            return [dgen]
-        return [sys.executable, "-m", "dgen.cli"]
+        if not dgen:
+            raise RuntimeError("dgen is not installed; install engineos-dgen")
+        return [dgen]
 
     def run_dgen(self, job: dict[str, Any]) -> subprocess.CompletedProcess[str]:
         dgen_root = self.settings.dgen_root
         if not dgen_root.exists():
             raise RuntimeError(f"dgen root is missing: {dgen_root}")
-        env = os.environ.copy()
-        src = str(dgen_root / "src")
-        env["PYTHONPATH"] = src + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         argv = [
             *self.dgen_argv(),
             "build-dungeon",
@@ -456,7 +450,7 @@ class LevelAgent:
         return subprocess.run(
             argv,
             cwd=str(dgen_root),
-            env=env,
+            env=os.environ.copy(),
             text=True,
             capture_output=True,
             check=False,
@@ -490,16 +484,9 @@ class LevelAgent:
         bsp_path = Path(job["bsp_path"])
         if not bsp_path.exists():
             return f"level-agent: accepted BSP is missing: {bsp_path}"
-        id1 = resolve_quake_id1()
-        if id1 is None:
-            return "level-agent: Quake id1 path is not configured; run eos-assets prepare/check quake or set ENGINEOS_QUAKE_ID1"
-        maps_dir = id1 / "maps"
-        maps_dir.mkdir(parents=True, exist_ok=True)
-        target = maps_dir / bsp_path.name
-        shutil.copy2(bsp_path, target)
-        launcher = shlex.split(os.environ.get("ENGINEOS_LEVEL_AGENT_EOS_APP", "eos-app"))
+        launcher = shlex.split(os.environ.get("ENGINEOS_LEVEL_AGENT_GAME_CMD", "eos-game"))
         launch = subprocess.run(
-            [*launcher, "launch", "quake", "--map", job["map_name"]],
+            [*launcher, "quake", "reload", "--bsp", str(bsp_path), "--map", job["map_name"]],
             text=True,
             capture_output=True,
             check=False,
@@ -508,11 +495,11 @@ class LevelAgent:
         job["state"] = "loaded" if launch.returncode == 0 else "load-failed"
         job["load_log"] = tail_text(launch.stdout + launch.stderr)
         if launch.returncode != 0:
-            job["error"] = f"eos-app launch failed with exit {launch.returncode}: {job['load_log']}"
+            job["error"] = f"Quake reload failed with exit {launch.returncode}: {job['load_log']}"
         self.save_job(job)
         if launch.returncode != 0:
-            return f"level-agent: copied {target}, but launch failed: {job['load_log'].strip()}"
-        return f"level-agent: loaded {job['map_name']} from {target}"
+            return f"level-agent: Quake reload failed: {job['load_log'].strip()}"
+        return f"level-agent: loaded {job['map_name']} from {bsp_path}; previous game state was interrupted"
 
 
 def resolve_quake_id1() -> Path | None:
@@ -584,18 +571,21 @@ def serve(args: argparse.Namespace) -> int:
     if args.socket:
         settings.socket_path = Path(args.socket)
     agent = LevelAgent(settings)
-    settings.socket_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_dir(settings.socket_path.parent)
     if settings.socket_path.exists():
         settings.socket_path.unlink()
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(str(settings.socket_path))
     server.listen(16)
-    os.chmod(settings.socket_path, 0o660)
+    os.chmod(settings.socket_path, 0o600)
     print(f"engineos-level-agent listening on {settings.socket_path}", flush=True)
 
     def client_thread(conn: socket.socket) -> None:
         with conn:
             try:
+                _pid, uid, _gid = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                if uid != os.getuid():
+                    raise PermissionError("level-agent client uid does not match service uid")
                 data = conn.recv(65536).decode("utf-8", errors="replace")
                 response = handle_request(agent, parse_request(data))
             except Exception as exc:
@@ -607,7 +597,6 @@ def serve(args: argparse.Namespace) -> int:
             conn, _ = server.accept()
             threading.Thread(target=client_thread, args=(conn,), daemon=True).start()
     finally:
-        agent.codex.close()
         server.close()
         try:
             settings.socket_path.unlink()
@@ -632,19 +621,21 @@ def request_socket(request: dict[str, Any], socket_path: Path | None = None) -> 
 
 def run_inline_build(prompt: str) -> int:
     agent = LevelAgent(Settings.from_env())
-    try:
-        job = agent.build(prompt, wait=True)
-        print(agent.status_text(str(job["id"])))
-        return 0 if job.get("state") == "accepted" else 1
-    finally:
-        agent.codex.close()
+    job = agent.build(prompt, wait=True)
+    print(agent.status_text(str(job["id"])))
+    return 0 if job.get("state") == "accepted" else 1
 
 
-def trenchbroom_setup(_: argparse.Namespace) -> int:
+def trenchbroom_setup(args: argparse.Namespace) -> int:
     home = Path.home()
     tb_root = Path(os.environ.get("ENGINEOS_TRENCHBROOM_USER_DIR", str(home / ".TrenchBroom")))
     game_dir = tb_root / "games" / "EngineOSQuake"
     game_dir.mkdir(parents=True, exist_ok=True)
+    marker = game_dir / ".engineos-profile-version"
+    required = ("GameConfig.cfg", "CompilationProfiles.cfg", "Engines.cfg", "Quake.fgd")
+    if not args.force and marker.is_file() and marker.read_text(encoding="utf-8").strip() == TRENCHBROOM_PROFILE_VERSION and all((game_dir / name).is_file() for name in required):
+        print(f"TrenchBroom EngineOS Quake setup is current under {game_dir}")
+        return 0
     quake_root = Path(os.environ.get("ENGINEOS_QUAKE_ROOT", str(home / ".local" / "share" / "engineos" / "quake")))
     id1 = Path(os.environ["ENGINEOS_QUAKE_ID1"]) if os.environ.get("ENGINEOS_QUAKE_ID1") else resolve_quake_id1()
     if id1 is None:
@@ -657,6 +648,7 @@ def trenchbroom_setup(_: argparse.Namespace) -> int:
     (game_dir / "Engines.cfg").write_text(engineos_engines_profile(), encoding="utf-8")
     install_trenchbroom_quake_metadata(game_dir)
     write_trenchbroom_preferences(tb_root, game_path)
+    marker.write_text(TRENCHBROOM_PROFILE_VERSION + "\n", encoding="utf-8")
     print(f"wrote TrenchBroom EngineOS Quake setup under {game_dir}")
     return 0
 
@@ -789,18 +781,23 @@ def main(argv: list[str] | None = None) -> int:
     build_parser.add_argument("prompt")
     build_parser.add_argument("--wait", action="store_true")
     build_parser.add_argument("--socket")
+    build_parser.add_argument("--inline", action="store_true")
     status_parser = sub.add_parser("status")
     status_parser.add_argument("job_id", nargs="?")
     status_parser.add_argument("--socket")
     load_parser = sub.add_parser("load")
     load_parser.add_argument("job_id", nargs="?")
     load_parser.add_argument("--socket")
-    sub.add_parser("trenchbroom-setup")
+    load_parser.add_argument("--inline", action="store_true")
+    setup_parser = sub.add_parser("trenchbroom-setup")
+    setup_parser.add_argument("--force", action="store_true")
 
     args = parser.parse_args(argv)
     if args.command == "serve":
         return serve(args)
     if args.command == "build":
+        if args.inline:
+            return run_inline_build(args.prompt)
         request = {"command": "build", "prompt": args.prompt, "wait": args.wait}
         try:
             response = request_socket(request, Path(args.socket) if args.socket else None)
@@ -808,30 +805,34 @@ def main(argv: list[str] | None = None) -> int:
             if args.wait and "state=accepted" not in response:
                 return 1
             return 0
-        except (FileNotFoundError, ConnectionRefusedError, socket.timeout, OSError):
-            if args.wait:
-                print("level-agent: sidecar not running; running one-shot build inline", file=sys.stderr)
-                return run_inline_build(args.prompt)
-            print("level-agent: sidecar is not running; start engineos-level-agent serve", file=sys.stderr)
+        except (FileNotFoundError, ConnectionRefusedError) as exc:
+            print(f"level-agent: sidecar is not running: {exc}; use --inline for one-shot execution", file=sys.stderr)
+            return 1
+        except (socket.timeout, OSError) as exc:
+            print(f"level-agent: sidecar request failed: {exc}", file=sys.stderr)
             return 1
     if args.command == "status":
         try:
             print(request_socket({"command": "status", "job_id": args.job_id}, Path(args.socket) if args.socket else None), end="")
             return 0
-        except (FileNotFoundError, ConnectionRefusedError, socket.timeout, OSError):
+        except (FileNotFoundError, ConnectionRefusedError, socket.timeout, OSError) as exc:
+            print(f"level-agent: sidecar unavailable; reading local state: {exc}", file=sys.stderr)
             agent = LevelAgent(Settings.from_env())
             print(agent.status_text(args.job_id))
             return 0
     if args.command == "load":
-        try:
-            response = request_socket({"command": "load", "job_id": args.job_id}, Path(args.socket) if args.socket else None)
-            print(response, end="")
-            return 0 if response.startswith("level-agent: loaded ") else 1
-        except (FileNotFoundError, ConnectionRefusedError, socket.timeout, OSError):
+        if args.inline:
             agent = LevelAgent(Settings.from_env())
             response = agent.load(args.job_id)
             print(response)
             return 0 if response.startswith("level-agent: loaded ") else 1
+        try:
+            response = request_socket({"command": "load", "job_id": args.job_id}, Path(args.socket) if args.socket else None)
+            print(response, end="")
+            return 0 if response.startswith("level-agent: loaded ") else 1
+        except (FileNotFoundError, ConnectionRefusedError, socket.timeout, OSError) as exc:
+            print(f"level-agent: sidecar is not running: {exc}; use --inline for one-shot loading", file=sys.stderr)
+            return 1
     if args.command == "trenchbroom-setup":
         return trenchbroom_setup(args)
     return 2

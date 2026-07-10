@@ -1,71 +1,78 @@
-schema = "engineos-agent-index-v0"
+schema = "engineos-agent-index-v1"
 
 [[roles]]
 id = "oracle"
 display_name = "EngineOS Oracle"
 mode = "primary"
 role_doc = ".agents/roles/oracle/AGENTS.md"
-profile = ".agents/profiles/oracle.profile.toml"
 skill = ".agents/skills/oracle/SKILL.md"
-opencode_wrapper = ".opencode/agents/oracle.md"
 route_triggers = ["broad request", "mixed ownership", "which agent", "handoff", "route"]
+priority = 0
+risk_default = "low"
+proof = "eos-agent hygiene check"
 
 [[roles]]
 id = "overseer"
 display_name = "EngineOS Overseer"
 mode = "subagent"
 role_doc = ".agents/roles/overseer/AGENTS.md"
-profile = ".agents/profiles/overseer.profile.toml"
 skill = ".agents/skills/overseer/SKILL.md"
-opencode_wrapper = ".opencode/agents/overseer.md"
 route_triggers = ["maintenance", "troubleshoot", "service", "startup", "configuration", "boot", "logs", "doctor", "update"]
+priority = 60
+risk_default = "medium"
+proof = "eos-doctor"
 
 [[roles]]
 id = "compiler"
 display_name = "EngineOS Compiler"
 mode = "subagent"
 role_doc = ".agents/roles/compiler/AGENTS.md"
-profile = ".agents/profiles/compiler.profile.toml"
 skill = ".agents/skills/compiler/SKILL.md"
-opencode_wrapper = ".opencode/agents/compiler.md"
 route_triggers = ["compile", "c++", "c/c++", "build from source", "kernel", "AUR", "makepkg", "PKGBUILD", "package", "repo build"]
+priority = 80
+risk_default = "medium"
+proof = "eos-ci local --no-validate-repo --clean-generated"
 
 [[roles]]
 id = "admin-shell"
 display_name = "EngineOS Admin Shell"
 mode = "subagent"
 role_doc = ".agents/roles/admin-shell/AGENTS.md"
-profile = ".agents/profiles/admin-shell.profile.toml"
 skill = ".agents/skills/admin-shell/SKILL.md"
-opencode_wrapper = ".opencode/agents/admin-shell.md"
 route_triggers = ["Wayland", "wlroots", "desktop", "window", "tiling", "app slot", "launchpad", "focus", "input routing", "shell"]
+priority = 90
+risk_default = "medium"
+proof = "eos-app status --json"
 
 [[roles]]
 id = "engine-builder"
 display_name = "EngineOS Engine Builder"
 mode = "subagent"
 role_doc = ".agents/roles/engine-builder/AGENTS.md"
-profile = ".agents/profiles/engine-builder.profile.toml"
 skill = ".agents/skills/engine-builder/SKILL.md"
-opencode_wrapper = ".opencode/agents/engine-builder.md"
 route_triggers = ["3D", "scene", "game loop", "renderer", "rendering", "frame", "cube", "OpenGL", "engine capability", "Tango-OS platform"]
+priority = 70
+risk_default = "medium"
+proof = "eos-test render --smoke"
 
 [[roles]]
 id = "pergame-quake"
 display_name = "EngineOS Per Game Quake"
 mode = "subagent"
 role_doc = ".agents/roles/pergame-quake/AGENTS.md"
-profile = ".agents/profiles/pergame-quake.profile.toml"
 skill = ".agents/skills/pergame-quake/SKILL.md"
-opencode_wrapper = ".opencode/agents/pergame-quake.md"
 route_triggers = ["Quake", "QuakeSpasm", "quake-generator", "pak0", "pak1", "id1", "game input", "Quake audio"]
+priority = 100
+risk_default = "medium"
+proof = "eos-game quake proof"
 
 [[roles]]
 id = "cleaner"
 display_name = "EngineOS Cleaner"
 mode = "subagent"
 role_doc = ".agents/roles/cleaner/AGENTS.md"
-profile = ".agents/profiles/cleaner.profile.toml"
 skill = ".agents/skills/cleaner/SKILL.md"
-opencode_wrapper = ".opencode/agents/cleaner.md"
-route_triggers = ["hygiene", "cleanup", "stale", "duplicate", "index", "docs drift", "skill docs", "agent pack", "wrapper", "profile drift", "validation drift"]
+route_triggers = ["hygiene", "cleanup", "stale", "duplicate", "index", "docs drift", "skill docs", "agent pack", "harness drift", "validation drift"]
+priority = 95
+risk_default = "low"
+proof = "eos-agent hygiene check"

@@ -10,30 +10,24 @@ docs/agent-roles.md               role boundaries and handoff rules
 .agents/index.toml                machine-readable role/path index
 .agents/roles/*/AGENTS.md         role-local ownership instructions
 .agents/skills/*/SKILL.md         task routers and area workflows
-tools/scripts/agent_metadata.sh   profile and wrapper generator
+tools/scripts/agent_router.py     structured TOML role router
+tools/scripts/agent_hygiene.py    role/path drift validator
 ```
 
 ## Installed Files
 
 ```text
 .codex/config.toml
-.codex/hooks.example.json
 agentd.md
 docs/agent-roles.md
-docs/agent-profiles.md
 .agents/index.toml
 .agents/roles/*/AGENTS.md
 .agents/skills/*/SKILL.md
-tools/hooks/session_start.py
-tools/hooks/pre_tool_policy.py
-tools/hooks/stop_check.py
 ```
 
 The `engineos-tools` package installs the same guidance under
-`/usr/share/engineos`, writes generated profiles to
-`.agents/profiles/*.profile.toml`, writes generated OpenCode wrappers to
-`.opencode/agents/*.md`, and installs executable hook helpers under
-`/usr/share/engineos/tools`.
+`/usr/share/engineos`. Role metadata remains canonical in one TOML file; the
+package does not generate profiles, wrappers, queues, or inactive hooks.
 
 ## Interface Policy
 
@@ -48,43 +42,31 @@ as shell state, app slots, service status, recent log summaries, and crash
 bundle indexes. Runtime MCP v0 must not execute CLI commands, sudo, package
 operations, or window control.
 
-Observability v0 is local, opt-in, metadata-only JSONL. It may record shell
+Observability v1 is local, opt-in, metadata-only JSONL. It may record shell
 command hashes, `engineos` command metadata, and agent route/handoff events. It
 must not store raw shell commands, raw prompts, raw AI responses, secrets, or
 commercial game assets.
 
-Agent operations v0 adds a repo-local queue and ledger under
-`artifacts/agent-ledger/`. The ledger is operational state, not opt-in
-telemetry. Dispatcher work is manual-drain, one task at a time, repo-scoped,
-and must block sudo, package operations, USB/disk operations, service changes,
-external directories, and raw prompt/AI I/O storage.
-
 ## Observability
 
-`eos-observe metrics` derives Prometheus text metrics from
-metadata-only observability events plus the local agent queue/ledger. It reports
-event counters, current task states by role, ledger event counters, oldest task
-age by role/state, dispatcher lock state, and queue/ledger record totals. It
-must not expose raw shell commands, raw prompts, AI I/O, or task summaries.
+`eos-observe metrics` derives Prometheus text metrics from metadata-only
+observability events. It reports event counters by kind, source, role, and
+risk, and must not expose raw shell commands, raw prompts, or AI I/O.
 
-Use:
+Inspect or export it directly:
 
 ```bash
-eos-observe exporter start --host 0.0.0.0 --port 9109
-eos-observe tui
+eos-observe metrics
+eos-observe tail --last 20
 ```
-
-External collectors can scrape the exporter when needed. EngineOS does not ship
-repo-owned Docker orchestration for Prometheus or OpenTelemetry.
 
 ## Checks
 
 ```bash
 ./tools/engineos/eos-source-test agent
-./tools/engineos/eos-agent profile list
+./tools/engineos/eos-agent list
 ./tools/engineos/eos-agent hygiene check
 ./tools/engineos/eos-test agent-hygiene
-./tools/engineos/eos-test agent-dispatcher
 ./tools/engineos/eos-test observability
 ./tools/engineos/eos-test agent-route
 ./tools/engineos/eos-preflight repo --package engineos-tools

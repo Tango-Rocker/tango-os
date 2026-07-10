@@ -1,7 +1,7 @@
 [Unit]
 Description=EngineOS dev shell autostart
-After=engineos-live-setup.service engineos-engine-runner.service NetworkManager.service
-Wants=engineos-live-setup.service engineos-engine-runner.service
+After=engineos-live-setup.service NetworkManager.service
+Wants=engineos-live-setup.service
 Conflicts=getty@tty1.service
 StartLimitBurst=3
 StartLimitIntervalSec=60

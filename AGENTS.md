@@ -38,16 +38,14 @@ Read only what the task needs:
 archiso/              legacy generated-image profiles; not routine work
 packages/             local Arch package definitions
 shell/                wlroots shell work
-engine-runner/        process control work
 engines/              QuakeSpasm and future engine ports
-tools/engineos/       eos-* command wrappers and dispatcher
+tools/engineos/       eos-* command wrappers and command entrypoints
 tools/scripts/        implementation helpers for the CLI
 tools/post-install-payload/ first-deploy guest setup scripts and assets
 docs/                 architecture, plans, and workflow docs
 .agents/index.toml    canonical agent role/path index
 .agents/roles/        role-specific AGENTS.md boundaries
 .agents/skills/       local task skills
-artifacts/agent-ledger/ local queue/ledger for manual agent dispatch
 tests/                smoke checks
 ```
 
@@ -61,9 +59,8 @@ Use this before opening broad docs.
 | Understand sprint scope | [ROADMAP.md](ROADMAP.md) | [docs/mvp-plan.md](docs/mvp-plan.md) |
 | Run agent workflow safely | [docs/agent-harness.md](docs/agent-harness.md) | [docs/agent-workflow.md](docs/agent-workflow.md) |
 | Route broad agent work | [docs/agent-roles.md](docs/agent-roles.md) | `.agents/roles/*/AGENTS.md` |
-| Inspect agent profiles | [docs/agent-profiles.md](docs/agent-profiles.md) | `eos-agent profile list` |
+| Inspect agent roles | [docs/agent-roles.md](docs/agent-roles.md) | `eos-agent list` |
 | Clean agent-pack drift | [.agents/skills/cleaner/SKILL.md](.agents/skills/cleaner/SKILL.md) | `eos-agent hygiene check` |
-| Queue or dispatch agent work | [docs/engineos-agent-pack.md](docs/engineos-agent-pack.md) | `eos-agent dispatch status` |
 | Write a session record | [agentd.md](agentd.md) | [docs/session-archive/](docs/session-archive/) |
 | First-deploy EngineDev setup | [docs/dev-instance.md](docs/dev-instance.md) | [CURRENT_STATUS.md](CURRENT_STATUS.md) |
 | Navigate code or check LSP | [.agents/skills/code-navigation/SKILL.md](.agents/skills/code-navigation/SKILL.md) | [docs/agent-lsp.md](docs/agent-lsp.md) |
@@ -86,7 +83,6 @@ builder, and generated-image paths are legacy/reference-only:
 ./tools/engineos/eos-doctor
 ./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-agent hygiene check
-./tools/engineos/eos-agent dispatch status
 ./tools/engineos/eos-ci local --package engineos-tools --test agent --install --clean-generated --no-validate-repo
 ./tools/engineos/eos-preflight all
 ./tools/engineos/eos-lint packages
@@ -164,7 +160,6 @@ Run the narrowest relevant check before handing off. For broad scaffold changes:
 ```bash
 bash -n tools/engineos/engineos tools/scripts/*.sh tools/eos/*/*.sh engines/quakespasm/engineos/*.sh tests/smoke.sh archiso/enginedev/profiledef.sh archiso/engineruntime/profiledef.sh
 ./tools/engineos/eos-test agent-hygiene
-./tools/engineos/eos-test agent-dispatcher
 ./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-preflight all
 ./tools/engineos/eos-test

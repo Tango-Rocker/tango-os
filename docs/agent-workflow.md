@@ -8,29 +8,26 @@ Future EngineOS MCP work is reserved for read-only live runtime state.
 ## Default Loop
 
 ```bash
-./tools/engineos/eos-doctor --vm
+./tools/engineos/eos-doctor
 ./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-agent hygiene check
-./tools/engineos/eos-agent dispatch status
-./tools/engineos/eos-builder bootstrap --dry-run
 ./tools/engineos/eos-preflight repo --package engineos-tools
 ./tools/engineos/eos-ci local --package engineos-tools --test agent-route --no-validate-repo --clean-generated
-./tools/engineos/eos-proof build-lab --dry-run
-./tools/engineos/eos-build iso --dry-run
-./tools/engineos/eos-source-test smoke
+./tools/engineos/eos-app manifest validate
+./tools/engineos/eos-game quake proof
 ```
 
-Dry-runs are previews for destructive or builder-only actions. On the Arch
-builder VM, replace dry-runs with real builds only after the local check path is
-clean:
+Apply committed live changes with the package-aware development workflow:
 
 ```bash
-cd /srv/engineos
-./tools/engineos/eos-builder bootstrap
-./tools/engineos/eos-validate builder
-./tools/engineos/eos-proof build-lab
-./tools/engineos/eos-vm boot enginedev --display none --background --ssh-port 2222
+./tools/engineos/eos dev plan --range <base>..<head>
+./tools/engineos/eos dev apply --range <base>..<head>
+./tools/engineos/eos-runtime shell refresh-user
+./tools/engineos/eos-runtime shell restart-live
 ```
+
+ISO, VM, QEMU, and Hyper-V commands are legacy/reference-only unless the user
+explicitly re-enables the image lab.
 
 ## Codex Harness
 
@@ -38,14 +35,12 @@ Project-local Codex integration lives in:
 
 ```text
 .codex/config.toml
-.codex/hooks.example.json
 .agents/index.toml
 .agents/roles/*/AGENTS.md
 .agents/skills/*/SKILL.md
-tools/scripts/agent_metadata.sh
-tools/hooks/*.py
+tools/scripts/agent_router.py
+tools/scripts/agent_hygiene.py
 docs/agent-roles.md
-docs/agent-profiles.md
 ```
 
 Validate it with:
@@ -53,7 +48,6 @@ Validate it with:
 ```bash
 ./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-test agent-hygiene
-./tools/engineos/eos-test agent-dispatcher
 ```
 
 Run source-checkout tests through `eos-source-test <scope>` and package loops
@@ -61,17 +55,10 @@ through `eos-ci local --no-validate-repo`; do not add MCP tools just to mirror
 local commands. Direct `eos-build`, `eos-lint`, and `eos-preflight` are
 lower-level checks.
 
-Queued agent work is local and manual-drain in v0:
+Inspect metadata-only agent route events locally with:
 
 ```bash
-./tools/engineos/eos-agent queue list
-./tools/engineos/eos-agent dispatch drain --dry-run
-```
-
-Inspect the queue and agent health locally with:
-
-```bash
-./tools/engineos/eos-observe tui --once
+./tools/engineos/eos-observe tail --last 20
 ./tools/engineos/eos-observe metrics
 ```
 

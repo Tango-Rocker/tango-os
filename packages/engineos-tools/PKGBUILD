@@ -1,10 +1,11 @@
 pkgname=engineos-tools
 pkgver=0.1.0
-pkgrel=20
+pkgrel=23
 pkgdesc="EngineOS command, proof, agent, and observability tools"
 arch=('any')
 url="https://example.invalid/engineos"
 license=('custom:EngineOS-TBD')
+install=engineos-tools.install
 depends=('bash' 'python' 'git' 'ripgrep' 'jq' 'engineos-config')
 provides=(
   'engineos-core' 'engineos-cli' 'engineos-package-tools' 'engineos-preflight-tools'
@@ -39,15 +40,10 @@ package() {
   install -d -m0755 "$pkgdir/usr/lib/engineos/scripts" "$pkgdir/usr/lib/engineos/eos"
   cp -a "$_engineos_root/tools/scripts"/. "$pkgdir/usr/lib/engineos/scripts/"
   cp -a "$_engineos_root/tools/eos"/. "$pkgdir/usr/lib/engineos/eos/"
-  rm -f "$pkgdir/usr/lib/engineos/scripts/engine_runner.sh" \
-    "$pkgdir/usr/lib/engineos/scripts/engine_runner_daemon.py"
   rm -f "$pkgdir/usr/lib/engineos/scripts"/generate_dgen_wad.py
   rm -rf "$pkgdir/usr/lib/engineos/scripts/__pycache__"
   chmod -R a+rX "$pkgdir/usr/lib/engineos/scripts" "$pkgdir/usr/lib/engineos/eos"
-  find "$pkgdir/usr/lib/engineos/scripts" "$pkgdir/usr/lib/engineos/eos" -type f \( -name '*.sh' -o -name '*.ps1' \) -exec chmod 0755 {} +
-
-  install -Dm644 "$_engineos_root/packages/engineos-tools/files/usr/lib/systemd/system/engineos-observe-exporter.service" "$pkgdir/usr/lib/systemd/system/engineos-observe-exporter.service"
-  install -Dm644 "$_engineos_root/packages/engineos-tools/files/usr/lib/systemd/system/engineos-agent-dispatcher@.service" "$pkgdir/usr/lib/systemd/system/engineos-agent-dispatcher@.service"
+	find "$pkgdir/usr/lib/engineos/scripts" "$pkgdir/usr/lib/engineos/eos" -type f \( -name '*.sh' -o -name '*.py' -o -name '*.ps1' \) -exec chmod 0755 {} +
 
   install -d -m0755 "$pkgdir/usr/share/engineos"
   cp -a "$_engineos_root/tools/post-install-payload" "$pkgdir/usr/share/engineos/post-install-payload"
@@ -57,14 +53,8 @@ package() {
   install -Dm644 "$_engineos_root/CURRENT_STATUS.md" "$pkgdir/usr/share/engineos/CURRENT_STATUS.md"
   install -Dm644 "$_engineos_root/ROADMAP.md" "$pkgdir/usr/share/engineos/ROADMAP.md"
   install -Dm644 "$_engineos_root/.codex/config.toml" "$pkgdir/usr/share/engineos/.codex/config.toml"
-  install -Dm644 "$_engineos_root/.codex/hooks.example.json" "$pkgdir/usr/share/engineos/.codex/hooks.example.json"
   cp -a "$_engineos_root/docs" "$pkgdir/usr/share/engineos/docs"
   cp -a "$_engineos_root/.agents" "$pkgdir/usr/share/engineos/.agents"
-  rm -rf "$pkgdir/usr/share/engineos/.agents/profiles"
-  ENGINEOS_ROOT="$_engineos_root" "$_engineos_root/tools/scripts/agent_metadata.sh" write "$pkgdir/usr/share/engineos"
-  install -Dm755 "$_engineos_root/tools/hooks/session_start.py" "$pkgdir/usr/share/engineos/tools/hooks/session_start.py"
-  install -Dm755 "$_engineos_root/tools/hooks/pre_tool_policy.py" "$pkgdir/usr/share/engineos/tools/hooks/pre_tool_policy.py"
-  install -Dm755 "$_engineos_root/tools/hooks/stop_check.py" "$pkgdir/usr/share/engineos/tools/hooks/stop_check.py"
   install -Dm755 "$_engineos_root/tools/hooks/git_pre_push_deploy.sh" "$pkgdir/usr/share/engineos/tools/hooks/git_pre_push_deploy.sh"
   install -Dm755 "$_engineos_root/tools/hooks/install_git_push_deploy_hook.sh" "$pkgdir/usr/share/engineos/tools/hooks/install_git_push_deploy_hook.sh"
 

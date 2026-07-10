@@ -53,7 +53,6 @@ systemctl enable docker.service
 systemctl enable engineos-live-setup.service
 systemctl enable engineos-live-codex-setup.service
 systemctl enable engineos-dev-shell.service
-systemctl enable engineos-observe-exporter.service
 systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service
 install -d -m 0755 /var/lib/systemd/linger
 : >/var/lib/systemd/linger/dev

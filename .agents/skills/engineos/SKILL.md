@@ -37,7 +37,6 @@ Prefer these on the live checkout. Dry-runs are previews only, not proof.
 ./tools/engineos/eos-doctor
 ./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-agent hygiene check
-./tools/engineos/eos-agent dispatch status
 ./tools/engineos/eos-observe metrics
 ./tools/engineos/eos-observe tui --once
 ./tools/engineos/eos-preflight all
@@ -58,17 +57,14 @@ Codex-specific files are part of the product:
 ```text
 AGENTS.md
 .codex/config.toml
-.codex/hooks.example.json
 .agents/index.toml
 .agents/roles/*/AGENTS.md
-.agents/profiles/*.profile.toml
 .agents/skills/*/SKILL.md
 tools/hooks/*.py
 docs/agent-harness.md
 docs/agent-workflow.md
 docs/agent-lsp.md
 docs/agent-roles.md
-docs/agent-profiles.md
 ```
 
 ## Finish And Deploy
@@ -87,8 +83,7 @@ package rebuild/reinstall loop. It must not call `eos-builder`, `eos-vm`, or
 
 Use direct `eos-*` CLI commands for local builds, tests, proofs, logs,
 runtime actions, observability, and route checks. Use skills for repeatable
-workflow judgment. Use `eos-agent hygiene check` for agent-pack drift and
-`eos-agent dispatch ...` for manual local queue/ledger work. The old
+workflow judgment. Use `eos-agent hygiene check` for agent-pack drift. The old
 project-status/docs MCP server is removed; future EngineOS MCP work is reserved
 for read-only live runtime state and must not
 mirror local commands or expose arbitrary shell, raw sudo, package removal,

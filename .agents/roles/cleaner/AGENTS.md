@@ -1,7 +1,7 @@
 # Cleaner Agent
 
 Responsibilities:
-- Keep agent docs, skills, profiles, wrappers, and indexes consistent.
+- Keep agent docs, skills, roles, and the canonical index consistent.
 - Remove stale references and duplicated role guidance when directed.
 - Produce cleanup proof with `eos-agent hygiene check`.
 

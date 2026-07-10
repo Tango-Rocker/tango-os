@@ -27,12 +27,12 @@ usage() {
 Usage: test_runner.sh [smoke|all]
        test_runner.sh agent
        test_runner.sh agent-hygiene
-       test_runner.sh agent-dispatcher
        test_runner.sh observability
-       test_runner.sh agent-route
+	   test_runner.sh agent-route
+	   test_runner.sh dev-workflow
        test_runner.sh compositor --headless
        test_runner.sh shell-actions
-       test_runner.sh engine-runner-env
+	   test_runner.sh game-workflow
        test_runner.sh image-preview
        test_runner.sh app
        test_runner.sh level-agent
@@ -84,12 +84,12 @@ run_all() {
   run_all_step smoke
   run_all_step agent
   run_all_step agent-hygiene
-  run_all_step agent-dispatcher
   run_all_step observability
-  run_all_step agent-route
+	run_all_step agent-route
+	run_all_step dev-workflow
   run_all_step compositor --headless
   run_all_step shell-actions
-  run_all_step engine-runner-env
+	run_all_step game-workflow
   run_all_step image-preview
   run_all_step app
   run_all_step level-agent
@@ -148,608 +148,126 @@ run_compositor() {
   esac
 }
 
+run_dev_workflow() {
+	local fixture="${TMPDIR:-/tmp}/engineos-change-plan-test-$$"
+	local base head out
+	trap 'rm -rf "$fixture"' RETURN
+	mkdir -p "$fixture/packages/engineos-base" "$fixture/packages/engineos-app" \
+		"$fixture/tools/scripts" "$fixture/tools/hooks" "$fixture/tools/engineos"
+	git init -q "$fixture"
+	git -C "$fixture" config user.name EngineOS-Test
+	git -C "$fixture" config user.email engineos-test@example.invalid
+	cat >"$fixture/packages/engineos-base/PKGBUILD" <<'EOF'
+pkgname=engineos-base
+pkgver=1
+pkgrel=1
+depends=()
+EOF
+	cat >"$fixture/packages/engineos-app/PKGBUILD" <<'EOF'
+pkgname=engineos-app
+pkgver=1
+pkgrel=1
+depends=('engineos-base')
+EOF
+	git -C "$fixture" add packages
+	git -C "$fixture" commit -qm base
+	base="$(git -C "$fixture" rev-parse HEAD)"
+	printf '\n# committed app change\n' >>"$fixture/packages/engineos-app/PKGBUILD"
+	git -C "$fixture" add packages/engineos-app/PKGBUILD
+	git -C "$fixture" commit -qm app-change
+	head="$(git -C "$fixture" rev-parse HEAD)"
+	out="$(python "$ROOT/tools/scripts/change_plan.py" --root "$fixture" --range "$base..$head")"
+	python - "$out" <<'PY'
+import json, sys
+plan = json.loads(sys.argv[1])
+assert plan["direct_packages"] == ["engineos-app"]
+assert plan["packages"] == ["engineos-base", "engineos-app"]
+assert plan["files"] == ["packages/engineos-app/PKGBUILD"]
+PY
+	printf '# dirty\n' >>"$fixture/packages/engineos-app/PKGBUILD"
+	if python "$ROOT/tools/scripts/change_plan.py" --root "$fixture" \
+			--range "$base..$head" --check-dirty >/dev/null 2>&1; then
+		die "committed-range planner accepted relevant dirty files"
+	fi
+	git -C "$fixture" restore packages/engineos-app/PKGBUILD
+	printf 'untracked\n' >"$fixture/packages/engineos-app/local note.txt"
+	if python "$ROOT/tools/scripts/change_plan.py" --root "$fixture" \
+			--range "$base..$head" --check-dirty >/dev/null 2>&1; then
+		die "committed-range planner accepted a relevant untracked path with spaces"
+	fi
+	rm -f "$fixture/packages/engineos-app/local note.txt"
+
+	cp "$ROOT/tools/hooks/git_pre_push_deploy.sh" "$fixture/tools/hooks/"
+	cat >"$fixture/tools/engineos/eos" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >"$ENGINEOS_FAKE_DEPLOY_ARGS"
+EOF
+	chmod +x "$fixture/tools/hooks/git_pre_push_deploy.sh" "$fixture/tools/engineos/eos"
+	ENGINEOS_FAKE_DEPLOY_ARGS="$fixture/deploy.args" \
+		bash -c 'cd "$1" && tools/hooks/git_pre_push_deploy.sh origin test-url' bash "$fixture" <<EOF
+refs/heads/main $head refs/heads/main $base
+EOF
+	grep -F "dev apply --ref-update refs/heads/main $head refs/heads/main $base" "$fixture/deploy.args" >/dev/null ||
+		die "pre-push hook did not preserve the pushed commit range"
+	printf 'committed-range deploy workflow test passed\n'
+}
+
 run_agent() {
-  local role
-  local profile
-  local skill
-  local wrapper
-  local hook_root
-  local fake_eos_log
-  local hook_out
-  local missing_host_out
-  local tmp_dir="${TMPDIR:-/tmp}/engineos-agent-test-$$"
-
-  cleanup_agent() {
-    rm -rf "$tmp_dir"
-  }
-  trap cleanup_agent RETURN
-  mkdir -p "$tmp_dir"
-
-  "$SCRIPT_DIR/preflight.sh" repo --package engineos-tools >/dev/null
-  "$SCRIPT_DIR/package_lint.sh" --package engineos-tools >/dev/null
-  "$SCRIPT_DIR/agent_hygiene.sh" check >/dev/null
-
-  if find "$ROOT/.codex" "$ROOT/packages/engineos-tools" \
-      -path '*/pkg/*' -prune -o \
-      -path '*/src/*' -prune -o \
-      -type f -print0 |
-      xargs -0 grep -n 'engineos_mcp_server.py\|project_status\|read_status' >/dev/null 2>&1; then
-    die "project-status MCP references remain in Codex config or agent package"
-  fi
-  [[ ! -e "$ROOT/tools/mcp/engineos_mcp_server.py" ]] ||
-    die "removed project MCP server still exists"
-  grep -F 'tools/hooks/session_start.py' "$ROOT/.codex/hooks.example.json" >/dev/null ||
-    die "Codex hook example does not reference the session-start hook"
-  [[ -x "$ROOT/tools/hooks/git_pre_push_deploy.sh" ]] ||
-    die "deploy-on-push helper is missing or not executable"
-  [[ -x "$ROOT/tools/hooks/install_git_push_deploy_hook.sh" ]] ||
-    die "deploy-on-push installer is missing or not executable"
-  bash -n "$ROOT/tools/hooks/git_pre_push_deploy.sh" "$ROOT/tools/hooks/install_git_push_deploy_hook.sh"
-  grep -F 'install_git_push_deploy_hook.sh' "$ROOT/.agents/skills/engineos/SKILL.md" >/dev/null ||
-    die "EngineOS skill does not explain deploy-on-push setup"
-  grep -F 'install_git_push_deploy_hook.sh' "$ROOT/tools/post-install-payload/assets/codex/engineos-dev-directives.md" >/dev/null ||
-    die "EngineDev directives do not explain deploy-on-push setup"
-  grep -F 'docs/agent-roles.md' "$ROOT/docs/engineos-agent-pack.md" >/dev/null ||
-    die "agent pack docs do not reference the role spec"
-  grep -F 'agentd.md' "$ROOT/docs/engineos-agent-pack.md" >/dev/null ||
-    die "agent pack docs do not reference the progressive-disclosure directive file"
-  grep -F 'docs/agent-profiles.md' "$ROOT/docs/engineos-agent-pack.md" >/dev/null ||
-    die "agent pack docs do not reference profile docs"
-  grep -F '.agents/index.toml' "$ROOT/docs/engineos-agent-pack.md" >/dev/null ||
-    die "agent pack docs do not reference the canonical agent index"
-
-  hook_root="$tmp_dir/hook-root"
-  fake_eos_log="$tmp_dir/fake-eos.log"
-  hook_out="$tmp_dir/hook.out"
-  mkdir -p "$hook_root/tools/hooks" "$hook_root/tools/engineos"
-  git init -q "$hook_root"
-  cp "$ROOT/tools/hooks/git_pre_push_deploy.sh" "$hook_root/tools/hooks/git_pre_push_deploy.sh"
-  cp "$ROOT/tools/hooks/install_git_push_deploy_hook.sh" "$hook_root/tools/hooks/install_git_push_deploy_hook.sh"
-  chmod 0755 "$hook_root/tools/hooks/git_pre_push_deploy.sh" \
-    "$hook_root/tools/hooks/install_git_push_deploy_hook.sh"
-
-  git -C "$hook_root" config engineos.deployCommand 'printf local-deploy >"$ENGINEOS_FAKE_EOS_LOG"'
-  ENGINEOS_FAKE_EOS_LOG="$fake_eos_log" \
-    bash -c 'cd "$1" && tools/hooks/git_pre_push_deploy.sh origin git@example.invalid:engineos.git' bash "$hook_root" >"$hook_out" <<'EOF'
-refs/heads/main 1111111111111111111111111111111111111111 refs/heads/main 0000000000000000000000000000000000000000
-EOF
-  grep -F 'local-deploy' "$fake_eos_log" >/dev/null ||
-    die "deploy-on-push hook did not run configured local deploy command"
-
-  rm -f "$fake_eos_log"
-  ENGINEOS_FAKE_EOS_LOG="$fake_eos_log" \
-    bash -c 'cd "$1" && tools/hooks/git_pre_push_deploy.sh origin git@example.invalid:engineos.git' bash "$hook_root" >"$hook_out" <<'EOF'
-refs/tags/v1.2.3 2222222222222222222222222222222222222222 refs/tags/v1.2.3 0000000000000000000000000000000000000000
-EOF
-  [[ ! -e "$fake_eos_log" ]] ||
-    die "deploy-on-push hook should skip tag-only pushes"
-
-  git -C "$hook_root" config engineos.deployHost dev@192.0.2.10
-  git -C "$hook_root" config engineos.deployDest /srv/engineos
-  git -C "$hook_root" config engineos.deployRunProof true
-  bash -c 'cd "$1" && tools/hooks/install_git_push_deploy_hook.sh --command "printf installed-local-deploy"' bash "$hook_root" >"$hook_out"
-  [[ -x "$hook_root/.git/hooks/pre-push" ]] ||
-    die "deploy-on-push installer did not write an executable pre-push hook"
-  grep -F 'EngineOS deploy-on-push hook' "$hook_root/.git/hooks/pre-push" >/dev/null ||
-    die "deploy-on-push installer wrote an unexpected hook"
-  [[ "$(git -C "$hook_root" config --get engineos.deployCommand)" == 'printf installed-local-deploy' ]] ||
-    die "deploy-on-push installer did not persist local deploy command"
-  [[ -z "$(git -C "$hook_root" config --get engineos.deployHost || true)" ]] ||
-    die "deploy-on-push installer left builder host config behind"
-
-  for role in oracle overseer compiler admin-shell engine-builder pergame-quake cleaner; do
-    [[ -f "$ROOT/.agents/roles/$role/AGENTS.md" ]] ||
-      die "role AGENTS.md missing: $role"
-    for heading in 'Responsibilities:' 'Boundaries:' 'Forbidden actions:' 'Escalation:' 'Proof commands:'; do
-      grep -F "$heading" "$ROOT/.agents/roles/$role/AGENTS.md" >/dev/null ||
-        die "role $role missing heading: $heading"
-    done
-
-    profile="$tmp_dir/$role.profile.toml"
-    "$SCRIPT_DIR/agent_metadata.sh" profile "$role" >"$profile"
-    grep -F 'schema = "engineos-agent-profile-v0"' "$profile" >/dev/null ||
-      die "agent profile missing schema: $role"
-    grep -F "role = \"$role\"" "$profile" >/dev/null ||
-      die "agent profile role mismatch: $role"
-    grep -F "role_doc = \".agents/roles/$role/AGENTS.md\"" "$profile" >/dev/null ||
-      die "agent profile does not reference role AGENTS.md: $role"
-    grep -F "skill = \".agents/skills/$role/SKILL.md\"" "$profile" >/dev/null ||
-      die "agent profile does not reference role skill: $role"
-    grep -F "opencode_wrapper = \".opencode/agents/$role.md\"" "$profile" >/dev/null ||
-      die "agent profile does not reference OpenCode wrapper: $role"
-    grep -F 'observability_policy = "metadata-only' "$profile" >/dev/null ||
-      die "agent profile does not declare metadata-only observability: $role"
-    for field in 'route_triggers = [' 'handoff_targets = [' 'proof_commands = [' 'allowed_read = [' 'ask_before = [' 'forbidden = ['; do
-      grep -F "$field" "$profile" >/dev/null ||
-        die "agent profile $role missing field: $field"
-    done
-    if [[ "$role" == "oracle" ]]; then
-      grep -F 'mode = "primary"' "$profile" >/dev/null ||
-        die "Oracle profile is not primary"
-    else
-      grep -F 'mode = "subagent"' "$profile" >/dev/null ||
-        die "agent profile is not subagent: $role"
-    fi
-
-    [[ -f "$ROOT/.agents/skills/$role/SKILL.md" ]] ||
-      die "role skill missing: $role"
-    grep -Fx -- '---' "$ROOT/.agents/skills/$role/SKILL.md" >/dev/null ||
-      die "role skill missing frontmatter fence: $role"
-    grep -F "name: $role" "$ROOT/.agents/skills/$role/SKILL.md" >/dev/null ||
-      die "role skill name mismatch: $role"
-    grep -F 'description:' "$ROOT/.agents/skills/$role/SKILL.md" >/dev/null ||
-      die "role skill missing description: $role"
-    if grep -F 'TODO' "$ROOT/.agents/skills/$role/SKILL.md" >/dev/null; then
-      die "role skill still contains TODO: $role"
-    fi
-
-    wrapper="$tmp_dir/$role.md"
-    "$SCRIPT_DIR/agent_metadata.sh" wrapper "$role" >"$wrapper"
-    grep -F 'description:' "$wrapper" >/dev/null ||
-      die "OpenCode wrapper missing description: $role"
-    grep -F "docs/agent-roles.md" "$wrapper" >/dev/null ||
-      die "OpenCode wrapper does not reference shared role docs: $role"
-    grep -F ".agents/skills/$role/SKILL.md" "$wrapper" >/dev/null ||
-      die "OpenCode wrapper does not reference shared skill: $role"
-    if [[ "$role" == "oracle" ]]; then
-      grep -F 'mode: primary' "$wrapper" >/dev/null ||
-        die "Oracle wrapper is not primary"
-      grep -F 'edit: ask' "$wrapper" >/dev/null ||
-        die "Oracle wrapper edit permission is not ask"
-      grep -F 'bash: ask' "$wrapper" >/dev/null ||
-        die "Oracle wrapper bash permission is not ask"
-    else
-      grep -F 'mode: subagent' "$wrapper" >/dev/null ||
-        die "OpenCode wrapper is not subagent: $role"
-      for permission in 'read: allow' 'glob: allow' 'grep: allow' 'list: allow' 'edit: ask' 'bash: ask' 'external_directory: ask'; do
-        grep -F "$permission" "$wrapper" >/dev/null ||
-          die "OpenCode wrapper $role missing permission: $permission"
-      done
-    fi
-  done
-
-  "$SCRIPT_DIR/agent_profile.sh" list | grep -Fx 'oracle' >/dev/null ||
-    die "agent profile list does not include oracle"
-  "$SCRIPT_DIR/agent_profile.sh" list | grep -Fx 'cleaner' >/dev/null ||
-    die "agent profile list does not include cleaner"
-  "$SCRIPT_DIR/agent_profile.sh" show pergame-quake | grep -F 'role = "pergame-quake"' >/dev/null ||
-    die "agent profile show does not print pergame-quake"
-  "$SCRIPT_DIR/agent_profile.sh" show cleaner | grep -F 'role = "cleaner"' >/dev/null ||
-    die "agent profile show does not print cleaner"
-  "$ROOT/tools/engineos/eos-agent" capabilities >"$tmp_dir/capabilities.txt"
-  grep -F 'schema=engineos-agent-capabilities-v0' "$tmp_dir/capabilities.txt" >/dev/null ||
-    die "agent capabilities output missing schema"
-  grep -F 'role=oracle' "$tmp_dir/capabilities.txt" >/dev/null ||
-    die "agent capabilities output does not include oracle"
-  grep -F 'role=cleaner' "$tmp_dir/capabilities.txt" >/dev/null ||
-    die "agent capabilities output does not include cleaner"
-  grep -F 'skill=.agents/skills/oracle/SKILL.md' "$tmp_dir/capabilities.txt" >/dev/null ||
-    die "agent capabilities output does not include skill path"
-
-  printf 'agent harness smoke test passed\n'
+	"$SCRIPT_DIR/preflight.sh" repo --package engineos-tools >/dev/null
+	"$SCRIPT_DIR/package_lint.sh" --package engineos-tools >/dev/null
+	python -m py_compile "$SCRIPT_DIR/agent_router.py" "$SCRIPT_DIR/agent_hygiene.py"
+	"$ROOT/tools/engineos/eos-agent" hygiene check >/dev/null
+	"$ROOT/tools/engineos/eos-agent" list | grep -Fx oracle >/dev/null ||
+		die "structured agent router did not list oracle"
+	"$ROOT/tools/engineos/eos-agent" show pergame-quake | grep -F '"proof": "eos-game quake proof"' >/dev/null ||
+		die "structured agent router did not expose Quake proof metadata"
+	for role in oracle overseer compiler admin-shell engine-builder pergame-quake cleaner; do
+		[[ -f "$ROOT/.agents/roles/$role/AGENTS.md" ]] || die "missing role doc: $role"
+		[[ -f "$ROOT/.agents/skills/$role/SKILL.md" ]] || die "missing role skill: $role"
+	done
+	printf 'agent harness smoke test passed\n'
 }
 
 run_agent_hygiene() {
-  local tmp_dir="${TMPDIR:-/tmp}/engineos-agent-hygiene-test-$$"
-  local fixture="$tmp_dir/fixture"
-  local out="$tmp_dir/out.txt"
-  local ledger="$tmp_dir/ledger"
-
-  cleanup_agent_hygiene() {
-    rm -rf "$tmp_dir"
-  }
-  trap cleanup_agent_hygiene RETURN
-
-  mkdir -p "$fixture/.agents/roles/cleaner" \
-    "$fixture/.agents/skills/cleaner/agents" \
-    "$fixture/docs" \
-    "$fixture/.codex"
-
-  "$SCRIPT_DIR/agent_hygiene.sh" check >/dev/null
-  "$SCRIPT_DIR/agent_hygiene.sh" check --json >"$out"
-  grep -F '"status":"pass"' "$out" >/dev/null ||
-    die "agent hygiene json did not report a clean pass"
-
-  cat >"$fixture/.agents/index.toml" <<'EOF_INDEX'
-schema = "engineos-agent-index-v0"
-
-[[roles]]
-id = "cleaner"
-display_name = "EngineOS Cleaner"
-mode = "subagent"
-role_doc = ".agents/roles/cleaner/AGENTS.md"
-profile = ".agents/profiles/cleaner.profile.toml"
-skill = ".agents/skills/wrong/SKILL.md"
-opencode_wrapper = ".opencode/agents/cleaner.md"
-route_triggers = ["cleanup"]
-EOF_INDEX
-  cat >"$fixture/.agents/roles/cleaner/AGENTS.md" <<'EOF_ROLE'
-# Cleaner Agent
-
-Responsibilities:
-- Keep docs tidy.
-
-Boundaries:
-- Stay local.
-
-Forbidden actions:
-- No sudo.
-
-Escalation:
-- Ask Oracle.
-
-Proof commands:
-- `engineos one`
-- `engineos two`
-- `engineos three`
-- `engineos four`
-- `engineos five`
-EOF_ROLE
-  cat >"$fixture/.agents/skills/cleaner/SKILL.md" <<'EOF_SKILL'
----
-name: cleaner
-description: Fixture cleaner skill.
----
-
-# Cleaner
-EOF_SKILL
-  printf 'interface:\n  display_name: "Cleaner"\n  short_description: "Fixture"\n' >"$fixture/.agents/skills/cleaner/agents/openai.yaml"
-  printf '[bad](missing.md)\n' >"$fixture/docs/engineos-agent-pack.md"
-  printf 'roles engineos_mcp_server.py\n' >"$fixture/docs/agent-roles.md"
-  printf 'profiles\n' >"$fixture/docs/agent-profiles.md"
-  printf 'server = "engineos_mcp_server.py"\n' >"$fixture/.codex/config.toml"
-
-  if ENGINEOS_AGENT_HYGIENE_ROOT="$fixture" "$SCRIPT_DIR/agent_hygiene.sh" check --fix-plan >"$out" 2>&1; then
-    die "agent hygiene accepted a stale fixture"
-  fi
-  grep -F 'stale-project-mcp' "$out" >/dev/null ||
-    {
-      cat "$out" >&2
-      die "agent hygiene fixture did not detect stale MCP reference"
-    }
-  grep -F 'duplicated-proof-block' "$out" >/dev/null ||
-    die "agent hygiene fixture did not detect duplicated proof block"
-  grep -F 'generated-wrapper-drift' "$out" >/dev/null ||
-    die "agent hygiene fixture did not detect generated wrapper drift"
-  grep -F 'broken-doc-link' "$out" >/dev/null ||
-    die "agent hygiene fixture did not detect broken doc link"
-
-  if ENGINEOS_AGENT_HYGIENE_ROOT="$fixture" \
-      ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
-      "$SCRIPT_DIR/agent_hygiene.sh" check --enqueue >"$out" 2>&1; then
-    die "agent hygiene enqueue fixture unexpectedly passed"
-  fi
-  grep -F 'queued task_id=' "$out" >/dev/null ||
-    die "agent hygiene --enqueue did not queue Cleaner task"
-  grep -F '"role":"cleaner"' "$ledger/queue.jsonl" >/dev/null ||
-    die "agent hygiene --enqueue queue record is not for cleaner"
-
-  printf 'agent hygiene smoke test passed\n'
-}
-
-run_agent_dispatcher() {
-  local tmp_dir="${TMPDIR:-/tmp}/engineos-agent-dispatcher-test-$$"
-  local ledger="$tmp_dir/ledger"
-  local out="$tmp_dir/out.txt"
-  local task_id
-  local cancelled_id
-
-  cleanup_agent_dispatcher() {
-    rm -rf "$tmp_dir"
-  }
-  trap cleanup_agent_dispatcher RETURN
-
-  mkdir -p "$tmp_dir"
-
-  ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
-    "$SCRIPT_DIR/agent_dispatcher.sh" queue add \
-      --role cleaner \
-      --reason test \
-      --summary "tidy indexed agent docs" \
-      --proof "true" \
-      --source test >"$out"
-  task_id="$(sed -n 's/.*task_id=\([^ ]*\).*/\1/p' "$out")"
-  [[ -n "$task_id" ]] || die "agent dispatcher did not print task id"
-
-  ENGINEOS_AGENT_LEDGER_DIR="$ledger" "$SCRIPT_DIR/agent_dispatcher.sh" queue list >"$out"
-  grep -F "$task_id state=queued role=cleaner" "$out" >/dev/null ||
-    die "agent dispatcher list did not show queued cleaner task"
-
-  ENGINEOS_AGENT_LEDGER_DIR="$ledger" "$SCRIPT_DIR/agent_dispatcher.sh" queue show "$task_id" >"$out"
-  grep -F '"event":"queued"' "$out" >/dev/null ||
-    die "agent dispatcher show did not include queued event"
-
-  ENGINEOS_AGENT_LEDGER_DIR="$ledger" "$SCRIPT_DIR/agent_dispatcher.sh" dispatch drain --dry-run --limit 1 >"$out"
-  grep -F "dry-run task_id=$task_id role=cleaner proof=true" "$out" >/dev/null ||
-    die "agent dispatcher dry-run drain did not show queued task"
-
-  ENGINEOS_AGENT_LEDGER_DIR="$ledger" "$SCRIPT_DIR/agent_dispatcher.sh" dispatch wake >"$out"
-  if [[ ! -p "$ledger/wake.fifo" && ! -f "$ledger/wake.fifo.unavailable" ]]; then
-    die "agent dispatcher wake did not create fifo or platform marker"
-  fi
-
-  ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
-    ENGINEOS_AGENT_RUNNER=fixture-pass \
-    "$SCRIPT_DIR/agent_dispatcher.sh" dispatch drain --execute --limit 1 >"$out"
-  grep -F "completed task_id=$task_id" "$out" >/dev/null ||
-    die "agent dispatcher fixture execution did not complete task"
-
-  ENGINEOS_AGENT_LEDGER_DIR="$ledger" "$SCRIPT_DIR/agent_dispatcher.sh" queue list --status done >"$out"
-  grep -F "$task_id state=done role=cleaner" "$out" >/dev/null ||
-    die "agent dispatcher did not list completed task as done"
-
-  ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
-    "$SCRIPT_DIR/agent_dispatcher.sh" queue add \
-      --role cleaner \
-      --reason fail \
-      --summary "fail this task" \
-      --proof "true" \
-      --source test >"$out"
-  task_id="$(sed -n 's/.*task_id=\([^ ]*\).*/\1/p' "$out")"
-  [[ -n "$task_id" ]] || die "agent dispatcher did not print failing task id"
-  if ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
-      ENGINEOS_AGENT_RUNNER=fixture-fail \
-      "$SCRIPT_DIR/agent_dispatcher.sh" dispatch drain --execute --limit 1 >"$out"; then
-    die "agent dispatcher fixture failure did not fail drain"
-  fi
-  grep -F "failed task_id=$task_id reason=runner-failed rc=17" "$out" >/dev/null ||
-    die "agent dispatcher fixture failure did not report runner failure"
-  grep -F 'drain summary: 1 task(s) considered, 1 failure(s)' "$out" >/dev/null ||
-    die "agent dispatcher drain failure summary was not explicit"
-  ENGINEOS_AGENT_LEDGER_DIR="$ledger" "$SCRIPT_DIR/agent_dispatcher.sh" queue list --status failed >"$out"
-  grep -F "$task_id state=failed role=cleaner" "$out" >/dev/null ||
-    die "agent dispatcher did not list failed task as failed"
-
-  if ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
-      "$SCRIPT_DIR/agent_dispatcher.sh" queue add \
-        --role cleaner \
-        --reason blocked \
-        --summary "try sudo package removal" \
-        --proof "sudo pacman -R engineos-tools" \
-        --source test >"$out" 2>&1; then
-    die "agent dispatcher accepted blocked sudo/package task"
-  fi
-  grep -F 'blocked task_id=' "$out" >/dev/null ||
-    die "agent dispatcher did not report blocked policy task"
-
-  ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
-    "$SCRIPT_DIR/agent_dispatcher.sh" queue add \
-      --role cleaner \
-      --reason cancel \
-      --summary "cancel this task" \
-      --proof "true" \
-      --source test >"$out"
-  cancelled_id="$(sed -n 's/.*task_id=\([^ ]*\).*/\1/p' "$out")"
-  ENGINEOS_AGENT_LEDGER_DIR="$ledger" "$SCRIPT_DIR/agent_dispatcher.sh" queue cancel "$cancelled_id" >"$out"
-  grep -F "cancelled task_id=$cancelled_id" "$out" >/dev/null ||
-    die "agent dispatcher cancel did not report cancellation"
-
-  mkdir -p "$ledger/dispatcher.lock"
-  if ENGINEOS_AGENT_LEDGER_DIR="$ledger" "$SCRIPT_DIR/agent_dispatcher.sh" dispatch drain --dry-run >"$out" 2>&1; then
-    die "agent dispatcher ignored existing lock"
-  fi
-  grep -F 'dispatcher already running' "$out" >/dev/null ||
-    die "agent dispatcher lock failure did not explain itself"
-
-  printf 'agent dispatcher smoke test passed\n'
+	local out
+	out="$("$ROOT/tools/engineos/eos-agent" hygiene check --json)"
+	grep -F '"status":"pass"' <<<"$out" >/dev/null ||
+		die "lean agent hygiene check did not pass"
+	printf 'agent hygiene smoke test passed\n'
 }
 
 run_observability() {
-  local tmp_dir="${TMPDIR:-/tmp}/engineos-observability-test-$$"
-  local out="$tmp_dir/out.txt"
-  local export_file="$tmp_dir/export/events.jsonl"
-  local events="$tmp_dir/state/events.jsonl"
-  local ledger="$tmp_dir/ledger"
-  local stubborn_pid=""
-
-  cleanup_observability() {
-    if [[ -n "$stubborn_pid" ]]; then
-      kill -KILL "$stubborn_pid" >/dev/null 2>&1 || true
-    fi
-    rm -rf "$tmp_dir"
-  }
-  trap cleanup_observability RETURN
-
-  mkdir -p "$tmp_dir"
-
-  ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-    "$SCRIPT_DIR/observability.sh" record --kind shell-command --source shell --shell bash --status 0 --cwd "$tmp_dir" --command 'echo should-not-write' >/dev/null
-  [[ ! -e "$events" ]] ||
-    die "observability wrote events while disabled"
-
-  ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-    ENGINEOS_OBSERVABILITY_PROMPT_RESPONSE=yes \
-    "$SCRIPT_DIR/observability.sh" prompt-login --shell bash >"$out"
-  grep -F 'observability enabled: metadata-only' "$out" >/dev/null ||
-    die "observability prompt-login did not enable from yes response"
-
-  ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-    "$SCRIPT_DIR/observability.sh" record --kind shell-command --source shell --shell bash --status 7 --cwd "$tmp_dir/secret-path" --command 'curl -H "Authorization: Bearer token-secret" https://example.invalid' >/dev/null
-  [[ -f "$events" ]] || die "observability did not write enabled event"
-  grep -F '"kind":"shell-command"' "$events" >/dev/null ||
-    die "observability event missing kind"
-  grep -F '"command_hash":"' "$events" >/dev/null ||
-    die "observability event missing command hash"
-  grep -F '"command_redacted":true' "$events" >/dev/null ||
-    die "observability event does not mark command redaction"
-  grep -F '"sensitive_pattern":true' "$events" >/dev/null ||
-    die "observability did not detect sensitive command pattern"
-  if grep -F 'token-secret' "$events" >/dev/null ||
-      grep -F 'Authorization' "$events" >/dev/null ||
-      grep -F 'secret-path' "$events" >/dev/null; then
-    die "observability stored raw command or cwd data"
-  fi
-
-  ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-    "$ROOT/tools/engineos/eos-doctor" --vm >/dev/null
-  grep -F '"kind":"engineos-command"' "$events" >/dev/null ||
-    die "observability did not record eos command metadata"
-  if grep -F 'eos-doctor --vm' "$events" >/dev/null; then
-    die "observability stored raw eos command"
-  fi
-
-  ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-    "$SCRIPT_DIR/observability.sh" tail --last 2 >"$out"
-  grep -F '"kind":"shell-command"' "$out" >/dev/null ||
-    die "observability tail did not show event"
-
-  ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-    "$SCRIPT_DIR/observability.sh" export --out "$export_file" >"$out"
-  [[ -f "$export_file" ]] || die "observability export did not create output file"
-  grep -F '"metadata_only":true' "$export_file" >/dev/null ||
-    die "observability export missing metadata-only event"
-
-  ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-    ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
-    "$SCRIPT_DIR/agent_dispatcher.sh" queue add \
-      --role cleaner \
-      --reason observability-test \
-      --summary "observe queue metrics" \
-      --proof "true" \
-      --source test >/dev/null
-  ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-    ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
-    ENGINEOS_AGENT_RUNNER=fixture-pass \
-    "$SCRIPT_DIR/agent_dispatcher.sh" dispatch drain --execute --limit 1 >/dev/null
-
-  ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-    ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
-    "$SCRIPT_DIR/observability.sh" metrics >"$out"
-  grep -F 'engineos_observability_events_total' "$out" >/dev/null ||
-    die "observability metrics missing event counter"
-  grep -F 'engineos_agent_tasks_current{role="cleaner",state="done"' "$out" >/dev/null ||
-    die "observability metrics missing cleaner done task gauge"
-  grep -F 'engineos_agent_ledger_events_total' "$out" >/dev/null ||
-    die "observability metrics missing ledger event counter"
-  if grep -F 'observe queue metrics' "$out" >/dev/null; then
-    die "observability metrics exposed raw task summary"
-  fi
-
-  ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-    ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
-    "$SCRIPT_DIR/observability.sh" metrics --format json >"$out"
-  grep -F '"schema":"engineos-observability-metrics-v0"' "$out" >/dev/null ||
-    die "observability metrics json missing schema"
-
-  ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-    ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
-    "$SCRIPT_DIR/observability.sh" exporter once >"$out"
-  grep -F 'engineos_agent_tasks_current' "$out" >/dev/null ||
-    die "observability exporter one-shot missing task metric"
-
-  if ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-      "$SCRIPT_DIR/observability.sh" exporter start --host 192.0.2.1 --port 19109 >"$out" 2>&1; then
-    die "observability exporter start succeeded for an unbindable host"
-  fi
-  grep -E 'observability exporter (failed to start|did not become healthy)' "$out" >/dev/null ||
-    die "observability exporter start failure was not explicit"
-  [[ ! -f "$tmp_dir/state/observability-exporter.pid" ]] ||
-    die "observability exporter start left a pid file after startup failure"
-
-  if ! command -v setsid >/dev/null 2>&1; then
-    die "setsid unavailable; cannot test observability exporter stop failure"
-  fi
-  setsid sh -c 'trap "" TERM; while :; do sleep 1; done' >/dev/null 2>&1 &
-  stubborn_pid="$!"
-  printf '%s\n' "$stubborn_pid" >"$tmp_dir/state/observability-exporter.pid"
-  if ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-      "$SCRIPT_DIR/observability.sh" exporter stop >"$out" 2>&1; then
-    die "observability exporter stop succeeded while process ignored SIGTERM"
-  fi
-  grep -F 'stop requested but pid is still running' "$out" >/dev/null ||
-    die "observability exporter stop did not expose stubborn process"
-  [[ -f "$tmp_dir/state/observability-exporter.pid" ]] ||
-    die "observability exporter stop removed pid file for still-running process"
-  kill -KILL "$stubborn_pid" >/dev/null 2>&1 || true
-  wait "$stubborn_pid" 2>/dev/null || true
-  stubborn_pid=""
-  ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-    "$SCRIPT_DIR/observability.sh" exporter stop >"$out"
-  grep -F 'observability exporter not running' "$out" >/dev/null ||
-    die "observability exporter stop did not clean stale pid after forced kill"
-
-  ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-    ENGINEOS_AGENT_LEDGER_DIR="$ledger" \
-    "$SCRIPT_DIR/observability.sh" tui --once >"$out"
-  grep -F 'EngineOS Observability' "$out" >/dev/null ||
-    die "observability TUI one-shot missing title"
-  grep -F 'cleaner' "$out" >/dev/null ||
-    die "observability TUI one-shot missing cleaner row"
-
-  "$SCRIPT_DIR/observability.sh" hook zsh >"$out"
-  grep -F 'add-zsh-hook preexec' "$out" >/dev/null ||
-    die "zsh observability hook missing preexec"
-  "$SCRIPT_DIR/observability.sh" hook bash >"$out"
-  grep -F 'PROMPT_COMMAND=' "$out" >/dev/null ||
-    die "bash observability hook missing PROMPT_COMMAND"
-  grep -F 'eos-observe prompt-login --shell zsh' "$ROOT/tools/post-install-payload/assets/zprofile" >/dev/null ||
-    die "zprofile does not prompt for observability opt-in"
-  if grep -F 'eos-observe hook zsh' "$ROOT/tools/post-install-payload/assets/zshrc" >/dev/null ||
-      grep -F 'eos-observe hook zsh' "$ROOT/tools/post-install-payload/assets/zprofile" >/dev/null; then
-    die "managed zsh files should not install per-command observability hooks"
-  fi
-  grep -F 'eos-observe prompt-login --shell bash' "$ROOT/archiso/enginedev/airootfs/etc/skel/.bash_profile" >/dev/null ||
-    die "EngineDev bash profile does not prompt for observability opt-in"
-  grep -F 'eos-observe hook bash' "$ROOT/archiso/engineruntime/airootfs/etc/skel/.bash_profile" >/dev/null ||
-    die "EngineRuntime bash profile does not install observability hook"
-
-  ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-    "$SCRIPT_DIR/observability.sh" purge >/dev/null
-  [[ ! -e "$events" ]] ||
-    die "observability purge left event log behind"
-
-  printf 'observability smoke test passed\n'
+	local tmp_dir="${TMPDIR:-/tmp}/engineos-observability-lean-$$"
+	local out="$tmp_dir/out.txt"
+	trap 'rm -rf "$tmp_dir"' RETURN
+	mkdir -p "$tmp_dir"
+	ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir" "$SCRIPT_DIR/observability.sh" enable >/dev/null
+	ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir" "$SCRIPT_DIR/observability.sh" record \
+		--kind agent-route --source router --role admin-shell --risk medium \
+		--request "private request text" >/dev/null
+	ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir" "$SCRIPT_DIR/observability.sh" metrics --format json >"$out"
+	grep -F '"schema":"engineos-observability-metrics-v1"' "$out" >/dev/null ||
+		die "observability did not emit the lean v1 metrics schema"
+	grep -F '"kind":"agent-route"' "$out" >/dev/null ||
+		die "observability metrics did not count route metadata"
+	if grep -F 'private request text' "$tmp_dir/events.jsonl" >/dev/null; then
+		die "observability stored raw request text"
+	fi
+	printf 'observability smoke test passed\n'
 }
 
 run_agent_route() {
-  local tmp_dir="${TMPDIR:-/tmp}/engineos-agent-route-test-$$"
-  local out="$tmp_dir/out.txt"
-  local events="$tmp_dir/state/events.jsonl"
-
-  cleanup_agent_route() {
-    rm -rf "$tmp_dir"
-  }
-  trap cleanup_agent_route RETURN
-
-  mkdir -p "$tmp_dir"
-
-  "$SCRIPT_DIR/agent_route.sh" route --dry-run "compile a C++ repo from source for the target" >"$out"
-  grep -F 'role=compiler' "$out" >/dev/null ||
-    die "agent route did not select compiler"
-  grep -F 'risk=medium' "$out" >/dev/null ||
-    die "agent route did not assign compiler risk"
-  grep -F 'proof=eos-ci local --no-validate-repo --clean-generated' "$out" >/dev/null ||
-    die "agent route did not suggest compiler proof"
-
-  "$SCRIPT_DIR/agent_route.sh" route --dry-run "quake generator needs pak assets and input defaults" >"$out"
-  grep -F 'role=pergame-quake' "$out" >/dev/null ||
-    die "agent route did not select pergame-quake"
-
-  "$SCRIPT_DIR/agent_route.sh" route --dry-run "manage wayland windows and tiling app slots" >"$out"
-  grep -F 'role=admin-shell' "$out" >/dev/null ||
-    die "agent route did not select admin-shell"
-
-  "$SCRIPT_DIR/agent_route.sh" route --dry-run "clean up stale duplicated skill docs and profile drift" >"$out"
-  grep -F 'role=cleaner' "$out" >/dev/null ||
-    die "agent route did not select cleaner"
-
-  ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-    "$SCRIPT_DIR/observability.sh" enable >/dev/null
-  ENGINEOS_OBSERVABILITY_STATE_DIR="$tmp_dir/state" \
-    "$SCRIPT_DIR/agent_route.sh" route --dry-run "troubleshoot service startup logs" >"$out"
-  grep -F 'role=overseer' "$out" >/dev/null ||
-    die "agent route did not select overseer"
-  grep -F 'proof=eos-doctor' "$out" >/dev/null ||
-    die "agent route did not suggest overseer proof"
-  grep -F '"kind":"agent-route"' "$events" >/dev/null ||
-    die "agent route did not record metadata when observability enabled"
-  grep -F '"request_hash":"' "$events" >/dev/null ||
-    die "agent route metadata missing request hash"
-  if grep -F 'troubleshoot service startup logs' "$events" >/dev/null; then
-    die "agent route stored raw request"
-  fi
-
-  printf 'agent route smoke test passed\n'
+	local out="${TMPDIR:-/tmp}/engineos-agent-route-$$.txt"
+	trap 'rm -f "$out"' RETURN
+	"$ROOT/tools/engineos/eos-agent" route "compile a C++ repo from source" >"$out"
+	grep -F 'role=compiler' "$out" >/dev/null || die "router did not select compiler"
+	"$ROOT/tools/engineos/eos-agent" route "quake generator package and wayland focus" >"$out"
+	grep -F 'role=pergame-quake' "$out" >/dev/null || die "router specificity did not select Quake"
+	"$ROOT/tools/engineos/eos-agent" route "manage wayland windows and focus" >"$out"
+	grep -F 'role=admin-shell' "$out" >/dev/null || die "router did not select admin-shell"
+	"$ROOT/tools/engineos/eos-agent" route "clean up stale role docs" >"$out"
+	grep -F 'role=cleaner' "$out" >/dev/null || die "router did not select cleaner"
+	printf 'agent route smoke test passed\n'
 }
 
 run_installed_preflight() {
@@ -758,7 +276,6 @@ run_installed_preflight() {
   local bin_dir="$tmp_dir/usr/bin"
   local script_dir="$tmp_dir/usr/lib/engineos/scripts"
   local eos_dir="$tmp_dir/usr/lib/engineos/eos"
-  local lib_bin_dir="$tmp_dir/usr/lib/engineos/bin"
   local out="$tmp_dir/preflight.txt"
 
   cleanup_installed_preflight() {
@@ -766,24 +283,23 @@ run_installed_preflight() {
   }
   trap cleanup_installed_preflight RETURN
 
-  mkdir -p "$bin_dir" "$script_dir" "$eos_dir" "$lib_bin_dir"
+	mkdir -p "$bin_dir" "$script_dir" "$eos_dir"
   cp "$ROOT/tools/engineos/eos" "$bin_dir/eos"
   for cmd in eos-doctor eos-build eos-agent eos-observe eos-source-test eos-test; do
     cp "$ROOT/tools/engineos/eos-wrapper" "$bin_dir/$cmd"
   done
   cp "$ROOT/tools/engineos/engineos" "$bin_dir/engineos"
   cp "$ROOT/tools/scripts/"*.sh "$script_dir/"
+  cp "$ROOT/tools/scripts/agent_router.py" "$ROOT/tools/scripts/agent_hygiene.py" "$script_dir/"
   cp -R "$ROOT/tools/eos"/. "$eos_dir/"
-  printf '#!/usr/bin/env bash\nexit 0\n' >"$lib_bin_dir/engine-runner-daemon"
-  chmod +x "$bin_dir/"* "$script_dir/"*.sh "$eos_dir"/*/*.sh "$lib_bin_dir/engine-runner-daemon"
+	chmod +x "$bin_dir/"* "$script_dir/"*.sh "$script_dir/"*.py "$eos_dir"/*/*.sh
 
   ENGINEOS_INSTALLED_IMAGE=true \
     ENGINEOS_ROOT="$root_dir" \
     ENGINEOS_INSTALLED_BIN_DIR="$bin_dir" \
     ENGINEOS_INSTALLED_SCRIPT_DIR="$script_dir" \
     ENGINEOS_INSTALLED_EOS_DIR="$eos_dir" \
-    ENGINEOS_INSTALLED_LIB_BIN_DIR="$lib_bin_dir" \
-    "$SCRIPT_DIR/preflight.sh" scripts >"$out"
+		"$SCRIPT_DIR/preflight.sh" scripts >"$out"
 
   grep -F "OK   $bin_dir/eos" "$out" >/dev/null ||
     die "installed preflight did not check installed eos dispatcher"
@@ -1225,115 +741,82 @@ FAKE
   printf 'shell actions smoke test passed\n'
 }
 
-run_engine_runner_env() {
-  local tmp_dir="${TMPDIR:-/tmp}/engineos-runner-env-$$"
-  local out="$tmp_dir/out.txt"
-  local stubborn_pid=""
+run_game_workflow() {
+	local tmp_dir="${TMPDIR:-/tmp}/engineos-game-workflow-$$"
+	local out="$tmp_dir/out.txt"
+	local err="$tmp_dir/err.txt"
+	local systemctl_log="$tmp_dir/systemctl.log"
+	local request="$tmp_dir/run/quake-launch.json"
+	trap 'rm -rf "$tmp_dir"' RETURN
+	mkdir -p "$tmp_dir/run" "$tmp_dir/state" "$tmp_dir/id1"
+	cat >"$tmp_dir/systemctl" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$ENGINEOS_FAKE_SYSTEMCTL_LOG"
+FAKE
+	chmod +x "$tmp_dir/systemctl"
 
-  cleanup_engine_runner_env() {
-    if [[ -n "$stubborn_pid" ]]; then
-      kill -KILL "-$stubborn_pid" >/dev/null 2>&1 || kill -KILL "$stubborn_pid" >/dev/null 2>&1 || true
-    fi
-    ENGINEOS_STATE_DIR="$tmp_dir/run" ENGINEOS_LOG_DIR="$tmp_dir/logs" "$SCRIPT_DIR/engine_runner.sh" daemon-stop >/dev/null 2>&1 || true
-    rm -rf "$tmp_dir"
-  }
-  trap cleanup_engine_runner_env RETURN
+	if ENGINEOS_GAME_RUNTIME_DIR="$tmp_dir/run" \
+			ENGINEOS_GAME_STATE_DIR="$tmp_dir/state" \
+			ENGINEOS_QUAKE_ID1="$tmp_dir/id1" \
+			ENGINEOS_SYSTEMCTL_CMD=true \
+			"$SCRIPT_DIR/game.sh" quake play --map '../bad' >"$out" 2>"$err"; then
+		die "game workflow accepted an unsafe map name"
+	fi
+	grep -F 'invalid Quake map name' "$err" >/dev/null ||
+		die "game workflow did not report invalid map input"
 
-  mkdir -p "$tmp_dir/run" "$tmp_dir/logs"
+	ENGINEOS_GAME_RUNTIME_DIR="$tmp_dir/run" \
+		ENGINEOS_GAME_STATE_DIR="$tmp_dir/state" \
+		ENGINEOS_QUAKE_LAUNCH_REQUEST="$request" \
+		ENGINEOS_QUAKE_ID1="$tmp_dir/id1" \
+		ENGINEOS_SYSTEMCTL_CMD="$tmp_dir/systemctl" \
+		ENGINEOS_FAKE_SYSTEMCTL_LOG="$systemctl_log" \
+		WAYLAND_DISPLAY=engineos-test-wayland \
+		"$SCRIPT_DIR/game.sh" quake play --map dgen_smoke --game id1 --smoke >"$out"
+	grep -F 'Quake started by engineos-quake.service map=dgen_smoke' "$out" >/dev/null ||
+		die "game workflow did not report the user-service launch"
+	python - "$request" "$tmp_dir/id1" <<'PY'
+import json, pathlib, stat, sys
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+assert data == {"schema": "engineos-quake-launch/v1", "map": "dgen_smoke",
+				"game": "id1", "smoke": True, "window": False,
+				"fullscreen": False, "id1": sys.argv[2]}
+assert stat.S_IMODE(path.stat().st_mode) == 0o600
+PY
+	grep -F -- '--user import-environment WAYLAND_DISPLAY' "$systemctl_log" >/dev/null ||
+		die "game workflow did not import the Wayland environment"
+	grep -F -- '--user restart engineos-quake.service' "$systemctl_log" >/dev/null ||
+		die "game workflow did not restart the per-user Quake unit"
 
-  mkdir -p "$tmp_dir/not-a-source-root"
-  if ENGINEOS_ROOT="$tmp_dir/not-a-source-root" \
-      ENGINEOS_STATE_DIR="$tmp_dir/fail-run" \
-      ENGINEOS_LOG_DIR="$tmp_dir/fail-logs" \
-      ENGINEOS_ENGINE_RUNNER_DAEMON="$tmp_dir/missing-daemon" \
-      "$SCRIPT_DIR/engine_runner.sh" status >"$out" 2>&1; then
-    die "engine runner used Python fallback without explicit opt-in"
-  fi
-  grep -F 'ENGINEOS_ENGINE_RUNNER_ALLOW_PYTHON_FALLBACK=true' "$out" >/dev/null ||
-    die "engine runner fallback failure did not require explicit opt-in"
+	mkdir -p "$tmp_dir/engines/quakespasm/engineos"
+	cat >"$tmp_dir/engines/quakespasm/engineos/run.sh" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >"$HOME/quake-service-args.txt"
+FAKE
+	chmod +x "$tmp_dir/engines/quakespasm/engineos/run.sh"
+	HOME="$tmp_dir" ENGINEOS_ROOT="$tmp_dir" \
+		ENGINEOS_QUAKE_LAUNCH_REQUEST="$request" \
+		python "$ROOT/tools/game/engineos_quake_service.py"
+	grep -F -- '--map dgen_smoke --game id1 --smoke' "$tmp_dir/quake-service-args.txt" >/dev/null ||
+		die "Quake user-service adapter did not exec the validated launch request"
+	python - "$request" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+data["window"] = True
+data["fullscreen"] = True
+path.write_text(json.dumps(data), encoding="utf-8")
+PY
+	if HOME="$tmp_dir" ENGINEOS_ROOT="$tmp_dir" \
+			ENGINEOS_QUAKE_LAUNCH_REQUEST="$request" \
+			python "$ROOT/tools/game/engineos_quake_service.py" >"$out" 2>"$err"; then
+		die "Quake user-service adapter accepted conflicting display modes"
+	fi
+	grep -F 'window and fullscreen modes are mutually exclusive' "$err" >/dev/null ||
+		die "Quake user-service adapter did not explain conflicting display modes"
 
-  local ENGINEOS_ENGINE_RUNNER_ALLOW_PYTHON_FALLBACK=true
-  export ENGINEOS_ENGINE_RUNNER_ALLOW_PYTHON_FALLBACK
-
-  ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-    "$SCRIPT_DIR/engine_runner.sh" status >"$out"
-  grep -F 'engine status: stopped' "$out" >/dev/null ||
-    die "engine runner initial status was not stopped"
-
-  if ENGINEOS_STATE_DIR="$tmp_dir/run" \
-      ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-      "$SCRIPT_DIR/engine_runner.sh" restart >"$out" 2>&1; then
-    die "engine runner restart without previous target should fail"
-  fi
-  grep -F 'no previous engine target to restart' "$out" >/dev/null ||
-    die "engine runner restart without target did not explain the failure"
-
-  if ! command -v setsid >/dev/null 2>&1; then
-    die "setsid unavailable; cannot test stubborn engine stop behavior"
-  fi
-  setsid sh -c 'trap "" TERM; while :; do sleep 1; done' >/dev/null 2>&1 &
-  stubborn_pid="$!"
-  printf '%s\n' "$stubborn_pid" >"$tmp_dir/run/engine.pid"
-  printf 'quake\n' >"$tmp_dir/run/engine.target"
-  printf '["--smoke"]' >"$tmp_dir/run/engine.args.json"
-  if ENGINEOS_STATE_DIR="$tmp_dir/run" \
-      ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-      "$SCRIPT_DIR/engine_runner.sh" restart >"$out" 2>&1; then
-    die "engine runner restart succeeded while previous engine ignored SIGTERM"
-  fi
-  grep -F 'engine restart aborted: engine stop requested but pid is still running' "$out" >/dev/null ||
-    die "engine runner restart did not expose previous engine stop failure"
-  kill -KILL "-$stubborn_pid" >/dev/null 2>&1 || kill -KILL "$stubborn_pid" >/dev/null 2>&1 || true
-  wait "$stubborn_pid" 2>/dev/null || true
-  stubborn_pid=""
-  rm -f "$tmp_dir/run/engine.pid" "$tmp_dir/run/engine.target" "$tmp_dir/run/engine.args.json"
-
-  mkdir "$tmp_dir/run/engine.pid"
-  if ENGINEOS_STATE_DIR="$tmp_dir/run" \
-      ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-      WAYLAND_DISPLAY="engineos-test-wayland" \
-      "$SCRIPT_DIR/engine_runner.sh" launch quake --smoke >"$out" 2>&1; then
-    die "engine runner launch succeeded when engine state could not be recorded"
-  fi
-  grep -F 'launch failed to record engine state' "$out" >/dev/null ||
-    die "engine runner launch did not expose state recording failure"
-  rm -rf "$tmp_dir/run/engine.pid"
-
-  ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-    WAYLAND_DISPLAY="engineos-test-wayland" \
-    "$SCRIPT_DIR/engine_runner.sh" launch quake --smoke >"$out"
-  grep -F 'engine launched: quake' "$out" >/dev/null ||
-    die "engine runner launch did not report quake launch"
-
-  ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-    "$SCRIPT_DIR/engine_runner.sh" status >"$out"
-  grep -F 'target: quake' "$out" >/dev/null ||
-    die "engine runner status did not retain quake target"
-
-  ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-    WAYLAND_DISPLAY="engineos-test-wayland" \
-    "$SCRIPT_DIR/engine_runner.sh" restart >"$out"
-  grep -F 'engine launched: quake' "$out" >/dev/null ||
-    die "engine runner restart did not relaunch previous quake target"
-
-  ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-    "$SCRIPT_DIR/engine_runner.sh" quit >"$out"
-  grep -E 'engine (already )?stopped|engine stop requested' "$out" >/dev/null ||
-    die "engine runner quit did not report a stopped/stopping engine"
-
-  if ! grep -F 'display=engineos-test-wayland' "$tmp_dir/logs/engine.log" >/dev/null; then
-    die "engine runner did not forward WAYLAND_DISPLAY to launch log"
-  fi
-  if [[ "$(grep -c 'socket launch quake --smoke display=engineos-test-wayland' "$tmp_dir/logs/engine.log")" -lt 2 ]]; then
-    die "engine runner lifecycle did not log both launch and restart"
-  fi
-
-  printf 'engine runner lifecycle smoke test passed\n'
+	printf 'game workflow contract test passed\n'
 }
 
 run_image_preview() {
@@ -1346,13 +829,23 @@ run_image_preview() {
   local jpg="$tmp_dir/sample.jpg"
   local sock="$tmp_dir/preview.sock"
   local preview_bin="$ROOT/tools/engineos/engine-image-preview"
-  local shell_bin="$ROOT/build/shell/engineos-shell"
+  local shell_bin="${ENGINEOS_TEST_SHELL_BIN:-}"
   local shell_pid=""
+  local gui_pid=""
+  local pending_pid=""
 
   cleanup_image_preview() {
     if [[ -n "$shell_pid" ]]; then
       kill "$shell_pid" >/dev/null 2>&1 || true
       wait "$shell_pid" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "$gui_pid" ]]; then
+      kill "$gui_pid" >/dev/null 2>&1 || true
+      wait "$gui_pid" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "$pending_pid" ]]; then
+      kill "$pending_pid" >/dev/null 2>&1 || true
+      wait "$pending_pid" >/dev/null 2>&1 || true
     fi
     rm -rf "$tmp_dir"
   }
@@ -1363,6 +856,12 @@ run_image_preview() {
     preview_bin="${ENGINEOS_INSTALLED_BIN_DIR:-/usr/bin}/engine-image-preview"
   fi
   [[ -x "$preview_bin" ]] || die "engine-image-preview helper is not executable"
+  if [[ -z "$shell_bin" ]]; then
+    meson setup "$tmp_dir/shell-build" "$ROOT/shell" >/dev/null
+    meson compile -C "$tmp_dir/shell-build" >/dev/null
+    shell_bin="$tmp_dir/shell-build/engineos-shell"
+  fi
+  [[ -x "$shell_bin" ]] || die "current engineos-shell test binary is not executable"
 
   python - "$png" "$jpg" <<'PY'
 import base64
@@ -1393,11 +892,27 @@ PY
   cat >"$fake_bin/tmux" <<'FAKE'
 #!/usr/bin/env bash
 if [[ "$1" == "display-message" ]]; then
-  if [[ "${*: -1}" == "#{session_name}" ]]; then
-    printf '%s\n' "${ENGINEOS_FAKE_TMUX_SESSION:-engineos}"
-    exit 0
-  fi
-  printf '10 5 80 24 160 48\n'
+	format="${!#}"
+	case "$format" in
+		*'#{socket_path}'*'#{session_name}'*)
+			printf '/tmp/engineos-tmux\twork\t@3\t2\t%s\n' "${TMUX_PANE:-%1}"
+			;;
+		'#{socket_path}')
+			printf '/tmp/engineos-tmux\n'
+			;;
+		*'#{session_name}'*)
+			printf 'work @3 2 %s\n' "${TMUX_PANE:-%1}"
+			;;
+		'#{client_tty}')
+			printf '/dev/pts/11\n'
+			;;
+		*'#{client_cell_width}'*)
+			printf '9 18\n'
+			;;
+		*)
+			printf '10 5 80 24 160 48\n'
+			;;
+	esac
   exit 0
 fi
 exit 1
@@ -1452,27 +967,23 @@ FAKE
   grep -F '"owner":"mc-quick-view:' "$out" >/dev/null ||
     die "image preview quick-view did not use a stable MC owner token"
 
-  cat >"$tmp_dir/shell-state.json" <<'JSON'
-{"active_slot":"terminal"}
-JSON
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_STATE_DIR="$tmp_dir" \
-    ENGINEOS_FAKE_TMUX_SESSION=engineos-side \
-    TMUX_PANE="%1" \
-    "$preview_bin" --quick-view "$png" --panel right --dry-run >"$out"
-  grep -F '"slot":"terminal-secondary"' "$out" >/dev/null ||
-    die "image preview quick-view did not prefer owning tmux terminal over active shell slot"
+	PATH="$fake_bin:$PATH" \
+		TMUX_PANE="%1" \
+		"$preview_bin" --quick-view "$png" --panel right --dry-run >"$out"
+	grep -F '"client_tty":"/dev/pts/11"' "$out" >/dev/null ||
+		die "image preview quick-view did not include the owning tmux client tty"
+	grep -F '"pane":{"pane_id":"%1","session":"work","socket":"/tmp/engineos-tmux"' "$out" >/dev/null ||
+		die "image preview quick-view did not include pane identity"
 
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_FAKE_TMUX_SESSION=engineos \
-    ENGINEOS_TERMINAL_ROLE=terminal-secondary \
-    TMUX_PANE="%2" \
-    "$preview_bin" --quick-view "$png" --panel right --dry-run >"$out"
-  grep -F '"slot":"terminal"' "$out" >/dev/null ||
-    die "image preview quick-view did not prefer owning tmux terminal over stale terminal role"
-  if grep -F '"slot":"terminal-secondary"' "$out" >/dev/null; then
-    die "image preview quick-view let stale terminal role override tmux session"
-  fi
+	PATH="$fake_bin:$PATH" \
+		ENGINEOS_TERMINAL_ROLE=terminal-secondary \
+		TMUX_PANE="%2" \
+		"$preview_bin" --quick-view "$png" --panel right --dry-run >"$out"
+	if grep -F '"slot":' "$out" >/dev/null; then
+		die "image preview quick-view forwarded stale terminal role from tmux server environment"
+	fi
+	grep -F '"pane_id":"%2"' "$out" >/dev/null ||
+		die "image preview quick-view did not preserve the invoking pane identity"
 
   PATH="$fake_bin:$PATH" \
     TMUX_PANE="%1" \
@@ -1546,11 +1057,14 @@ PY
   if [[ -x "$shell_bin" ]]; then
     local shell_state="$tmp_dir/shell-state"
     local shell_log="$tmp_dir/shell.log"
+    local shell_runtime="$tmp_dir/runtime"
+    install -d -m0700 "$shell_runtime"
     ENGINEOS_STATE_DIR="$shell_state" \
+      XDG_RUNTIME_DIR="$shell_runtime" \
       WLR_BACKENDS=headless \
       WLR_HEADLESS_OUTPUTS=1 \
       WLR_RENDERER_ALLOW_SOFTWARE=1 \
-      "$shell_bin" --headless --smoke-ms 3000 \
+      "$shell_bin" --headless --smoke-ms 10000 \
         --terminal-secondary true >"$shell_log" 2>&1 &
     shell_pid=$!
     for _ in {1..100}; do
@@ -1561,9 +1075,91 @@ PY
       die "compiled shell did not create preview IPC socket"
 
     ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --ping >"$out" 2>"$err"
-    ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --view "$png" >"$out" 2>"$err"
-    ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --view "$jpg" >"$out" 2>"$err"
-    ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --wallpaper "$png" --opacity 55 >"$out" 2>"$err"
+    ENGINEOS_SHELL_IPC_SOCKET="$shell_state/preview.sock" \
+      ENGINEOS_LOG_DIR="$tmp_dir/logs" \
+      "$SCRIPT_DIR/app.sh" terminal register \
+        --slot terminal-secondary --tty /dev/pts/11 >"$out"
+
+    command -v foot >/dev/null 2>&1 || die "foot is required for exact pane-token mapping proof"
+    PATH="$fake_bin:$PATH" \
+      ENGINEOS_LOG_DIR="$tmp_dir/logs" \
+      ENGINEOS_STATE_DIR="$shell_state" \
+      ENGINEOS_SHELL_IPC_SOCKET="$shell_state/preview.sock" \
+      ENGINEOS_FAKE_TMUX_IDENTITY="work @3 2 %1" \
+      ENGINEOS_FAKE_TMUX_SOCKET="/tmp/engineos-tmux" \
+      ENGINEOS_FAKE_TMUX_GEOMETRY="10 5 80 24 160 48" \
+      XDG_RUNTIME_DIR="$shell_runtime" WAYLAND_DISPLAY=wayland-0 \
+      TMUX="/tmp/engineos-tmux,1,0" TMUX_PANE="%1" \
+      "$SCRIPT_DIR/app.sh" pane launch -- \
+        foot --app-id=pane-token-test --title=PaneTokenTest \
+          sh -c 'sleep 5' >"$tmp_dir/pane-foot.log" 2>&1 &
+    gui_pid=$!
+    for _ in {1..100}; do
+      grep -Eq '"layout": "tmux-pane-gui".*"pane_key": "tmux:/tmp/engineos-tmux:work:%1"' \
+        "$shell_state/shell-state.json" 2>/dev/null && break
+      sleep 0.03
+    done
+    if ! grep -Eq '"layout": "tmux-pane-gui".*"pane_key": "tmux:/tmp/engineos-tmux:work:%1"' \
+        "$shell_state/shell-state.json"; then
+      cat "$tmp_dir/pane-foot.log" >&2 || true
+      tail -n 80 "$shell_log" >&2 || true
+      die "compiled shell did not bind the exact-token Wayland client to its pane"
+    fi
+    grep -F '"terminal_slot": "terminal-secondary"' "$shell_state/shell-state.json" >/dev/null ||
+      die "compiled shell did not retain the pane's registered terminal owner"
+    if grep -F '"token"' "$shell_state/shell-state.json" >/dev/null; then
+      die "compiled shell leaked a pane launch token into shell state"
+    fi
+    kill "$gui_pid" >/dev/null 2>&1 || true
+    wait "$gui_pid" >/dev/null 2>&1 || true
+    gui_pid=""
+
+    PATH="$fake_bin:$PATH" \
+      ENGINEOS_LOG_DIR="$tmp_dir/logs" \
+      ENGINEOS_STATE_DIR="$shell_state" \
+      ENGINEOS_SHELL_IPC_SOCKET="$shell_state/preview.sock" \
+      ENGINEOS_FAKE_TMUX_IDENTITY="work @3 2 %1" \
+      ENGINEOS_FAKE_TMUX_SOCKET="/tmp/engineos-tmux" \
+      ENGINEOS_FAKE_TMUX_GEOMETRY="10 5 80 24 160 48" \
+      XDG_RUNTIME_DIR="$shell_runtime" WAYLAND_DISPLAY=wayland-0 \
+      TMUX="/tmp/engineos-tmux,1,0" TMUX_PANE="%1" \
+      "$SCRIPT_DIR/app.sh" pane launch -- sleep 5 >"$tmp_dir/pending.log" 2>&1 &
+    pending_pid=$!
+    for _ in {1..50}; do
+      grep -F '"pending": true' "$shell_state/shell-state.json" >/dev/null 2>&1 && break
+      sleep 0.03
+    done
+    XDG_RUNTIME_DIR="$shell_runtime" WAYLAND_DISPLAY=wayland-0 \
+      foot --app-id=pane-missing-token --title=MissingPaneToken \
+        sh -c 'sleep 1' >"$tmp_dir/missing-token-foot.log" 2>&1 &
+    gui_pid=$!
+    wait "$gui_pid" >/dev/null 2>&1 || true
+    gui_pid=""
+    grep -F 'reason=missing-launch-token' "$shell_log" >/dev/null ||
+      die "compiled shell did not reject an un-tokened client during pane launch"
+    kill "$pending_pid" >/dev/null 2>&1 || true
+    wait "$pending_pid" >/dev/null 2>&1 || true
+    pending_pid=""
+
+    XDG_RUNTIME_DIR="$shell_runtime" WAYLAND_DISPLAY=wayland-0 \
+      ENGINEOS_PANE_LAUNCH_TOKEN=stale-pane-token \
+      foot --app-id=pane-stale-token --title=StalePaneToken \
+        sh -c 'sleep 1' >"$tmp_dir/stale-token-foot.log" 2>&1 &
+    gui_pid=$!
+    wait "$gui_pid" >/dev/null 2>&1 || true
+    gui_pid=""
+    grep -F 'reason=unknown-or-stale-token' "$shell_log" >/dev/null ||
+      die "compiled shell did not reject a stale pane launch token"
+
+    PATH="$fake_bin:$PATH" TMUX_PANE="%1" \
+      ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" \
+      "$preview_bin" --view "$png" >"$out" 2>"$err"
+    PATH="$fake_bin:$PATH" TMUX_PANE="%1" \
+      ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" \
+      "$preview_bin" --view "$jpg" >"$out" 2>"$err"
+    PATH="$fake_bin:$PATH" TMUX_PANE="%1" \
+      ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" \
+      "$preview_bin" --wallpaper "$png" --opacity 55 >"$out" 2>"$err"
     ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --hide-wallpaper >"$out" 2>"$err"
     ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --hide >"$out" 2>"$err"
     python - "$shell_state/preview.sock" <<'PY'
@@ -1583,6 +1179,8 @@ PY
 
     grep -F "image preview shown path=$png" "$shell_log" | grep -F "image=4x3" >/dev/null ||
       die "compiled shell did not decode and show PNG preview"
+    grep -F "image preview shown path=$png" "$shell_log" | grep -F "slot=terminal-secondary" >/dev/null ||
+      die "compiled shell did not route the owned preview to the registered terminal"
     grep -F "image preview shown path=$jpg" "$shell_log" | grep -F "image=4x3" >/dev/null ||
       die "compiled shell did not decode and show JPEG preview"
     grep -F "wallpaper shown path=$png" "$shell_log" | grep -F "opacity=55" >/dev/null ||
@@ -1637,6 +1235,10 @@ if [[ "$1" == "display-message" ]]; then
     printf '%s\n' "${ENGINEOS_FAKE_TMUX_CELL_SIZE:-9 18}"
     exit 0
   fi
+	if [[ "$format" == *client_tty* ]]; then
+		printf '%s\n' "${ENGINEOS_FAKE_TMUX_CLIENT_TTY:-/dev/pts/11}"
+		exit 0
+	fi
   printf '%s\n' "${ENGINEOS_FAKE_TMUX_GEOMETRY:-10 5 80 24 160 48}"
   exit 0
 fi
@@ -1655,35 +1257,35 @@ FAKE
   PATH="$fake_bin:$PATH" \
     ENGINEOS_LOG_DIR="$log_dir" \
     ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    ENGINEOS_RUNTIME_CMD="$fake_bin/eos-runtime" \
+		ENGINEOS_GAME_CMD="$fake_bin/eos-runtime" \
     ENGINEOS_FAKE_APP_LAUNCHED="$launched" \
     WAYLAND_DISPLAY="engineos-test-wayland" \
     "$SCRIPT_DIR/app.sh" launch quake --smoke >"$out"
-  grep -F 'engine launch quake --smoke' "$launched" >/dev/null ||
-    die "app launcher did not dispatch quake through engine runner"
+	grep -F 'quake play --smoke' "$launched" >/dev/null ||
+		die "app launcher did not dispatch quake through the game workflow"
   grep -F 'app launch app=quake owner=engineos-shell display=engineos-test-wayland sdl=wayland args=--smoke' "$log_dir/app.log" >/dev/null ||
     die "app launcher did not log shell-owned quake launch"
 
   PATH="$fake_bin:$PATH" \
     ENGINEOS_LOG_DIR="$log_dir" \
     ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    ENGINEOS_RUNTIME_CMD="$fake_bin/eos-runtime" \
+		ENGINEOS_GAME_CMD="$fake_bin/eos-runtime" \
     ENGINEOS_FAKE_APP_LAUNCHED="$launched" \
     WAYLAND_DISPLAY="engineos-test-wayland" \
     "$SCRIPT_DIR/app.sh" launch quake --map dgen_smoke --game id1 --output >"$out"
-  grep -F 'engine launch quake --map dgen_smoke --game id1' "$launched" >/dev/null ||
+	grep -F 'quake play --map dgen_smoke --game id1' "$launched" >/dev/null ||
     die "app launcher did not pass quake map/game arguments"
 
   PATH="$fake_bin:$PATH" \
     ENGINEOS_LOG_DIR="$log_dir" \
     ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    ENGINEOS_RUNTIME_CMD="$fake_bin/eos-runtime" \
+		ENGINEOS_GAME_CMD="$fake_bin/eos-runtime" \
     ENGINEOS_FAKE_APP_LAUNCHED="$launched" \
     WAYLAND_DISPLAY="engineos-test-wayland" \
     TMUX="$tmp_dir/tmux-socket,1,0" \
     TMUX_PANE="%1" \
     "$SCRIPT_DIR/app.sh" launch quake >"$out"
-  grep -F 'engine launch quake --window' "$launched" >/dev/null ||
+	grep -F 'quake play --window' "$launched" >/dev/null ||
     die "app launcher did not force pane-bounded quake into windowed mode"
   grep -F 'mode=pane' "$tmp_dir/run/launch-bounds/engine.env" >/dev/null ||
     die "app launcher did not write pane bounds request"
@@ -1697,13 +1299,13 @@ FAKE
   PATH="$fake_bin:$PATH" \
     ENGINEOS_LOG_DIR="$log_dir" \
     ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    ENGINEOS_RUNTIME_CMD="$fake_bin/eos-runtime" \
+		ENGINEOS_GAME_CMD="$fake_bin/eos-runtime" \
     ENGINEOS_FAKE_APP_LAUNCHED="$launched" \
     WAYLAND_DISPLAY="engineos-test-wayland" \
     TMUX="$tmp_dir/tmux-socket,1,0" \
     TMUX_PANE="%1" \
     "$SCRIPT_DIR/app.sh" launch quake --fullscreen >"$out"
-  grep -F 'engine launch quake --fullscreen' "$launched" >/dev/null ||
+	grep -F 'quake play --fullscreen' "$launched" >/dev/null ||
     die "app launcher did not pass quake fullscreen flag"
   grep -F 'mode=output' "$tmp_dir/run/launch-bounds/engine.env" >/dev/null ||
     die "app launcher did not clear pane bounds for fullscreen launch"
@@ -1889,20 +1491,37 @@ JSON
     {"id": 2, "role": "terminal", "focused": true, "visible": true, "minimized": false, "maximized": false, "layout": "output", "x": 0, "y": 0, "width": 1600, "height": 900, "title": "EngineOS", "app_id": "foot"}
   ],
   "pane_bindings": [
-    {"key": "tmux:/tmp/engineos-tmux:work:%9", "socket": "/tmp/engineos-tmux", "session": "work", "window_id": "@3", "window_index": "2", "pane_id": "%9", "token": "pane-token", "command_label": "falkon", "pending": false, "focused": true, "view_id": 7, "geometry": {"pane_left": 12, "pane_top": 4, "pane_width": 90, "pane_height": 26, "window_width": 180, "window_height": 52, "cell_width": 9, "cell_height": 18}}
+    {"key": "tmux:/tmp/engineos-tmux:work:%9", "socket": "/tmp/engineos-tmux", "session": "work", "window_id": "@3", "window_index": "2", "pane_id": "%9", "command_label": "falkon", "pending": false, "focused": true, "view_id": 7, "geometry": {"pane_left": 12, "pane_top": 4, "pane_width": 90, "pane_height": 26, "window_width": 180, "window_height": 52, "cell_width": 9, "cell_height": 18}}
   ]
 }
 JSON
-  ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    "$SCRIPT_DIR/app.sh" window list --json >"$out"
+	ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_STATE_DIR="$tmp_dir/run" \
+		"$SCRIPT_DIR/app.sh" window list --json >"$out"
 	  grep -F '"id":7' "$out" >/dev/null ||
 	    die "app window list json did not report Falkon window id"
 	  grep -F '"app_id":"org.kde.falkon"' "$out" >/dev/null ||
 	    die "app window list json did not report Falkon app id"
 	  grep -F '"bound":true' "$out" >/dev/null ||
 	    die "app window list json did not report shell-owned pane binding"
-	  ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_STATE_DIR="$tmp_dir/run" \
-	    "$SCRIPT_DIR/app.sh" pane list --json >"$out"
+	local pane_sock="$tmp_dir/pane.sock"
+	python - "$pane_sock" "$tmp_dir/run/shell-state.json" <<'PY' &
+import json, os, socket, sys
+sock_path, state_path = sys.argv[1:]
+try: os.unlink(sock_path)
+except FileNotFoundError: pass
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(sock_path); server.listen(1)
+client, _ = server.accept(); client.recv(4096)
+bindings = json.load(open(state_path, encoding="utf-8"))["pane_bindings"]
+client.sendall((json.dumps({"version": 1, "status": "ok", "pane_bindings": bindings}) + "\n").encode())
+client.close(); server.close()
+PY
+	local pane_server_pid=$!
+	for _ in {1..50}; do [[ -S "$pane_sock" ]] && break; sleep 0.02; done
+	ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_STATE_DIR="$tmp_dir/run" \
+		ENGINEOS_SHELL_IPC_SOCKET="$pane_sock" \
+		"$SCRIPT_DIR/app.sh" pane list --json >"$out"
+	wait "$pane_server_pid"
 	  grep -F '"pane_bindings":[{"key":"tmux:/tmp/engineos-tmux:work:%9"' "$out" >/dev/null ||
 	    die "app pane list json did not report shell-owned pane binding"
 	  if ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_STATE_DIR="$tmp_dir/run" \
@@ -1927,8 +1546,7 @@ printf 'token=%s\n' "${ENGINEOS_PANE_LAUNCH_TOKEN:-missing}" >"$ENGINEOS_FAKE_GU
 printf 'display=%s\n' "${WAYLAND_DISPLAY:-missing}" >>"$ENGINEOS_FAKE_GUI_ENV"
 FAKE
 	  chmod +x "$fake_bin/fake-gui"
-	  local pane_sock="$tmp_dir/pane.sock"
-	  python - "$pane_sock" "$tmp_dir/pane-launch-request.txt" <<'PY' &
+	python - "$pane_sock" "$tmp_dir/pane-launch-request.txt" <<'PY' &
 import os
 import socket
 import sys
@@ -1948,7 +1566,7 @@ client.sendall(b'{"version":1,"status":"ok","capabilities":["pane-launch"]}\n')
 client.close()
 server.close()
 PY
-	  local pane_server_pid=$!
+	pane_server_pid=$!
 	  for _ in {1..50}; do
 	    [[ -S "$pane_sock" ]] && break
 	    sleep 0.02
@@ -2189,11 +1807,24 @@ printf '// fake map\n' >"$out"
 printf 'fake bsp\n' >"${out%.map}.bsp"
 printf 'wrote: %s\n' "$out"
 FAKE
-  cat >"$fake_bin/eos-app" <<'FAKE'
+	cat >"$fake_bin/eos-game" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >"$ENGINEOS_FAKE_LEVEL_AGENT_LAUNCH"
+if [[ "$1 $2" == "quake reload" ]]; then
+	shift 2
+	bsp="" map=""
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+			--bsp) shift; bsp="$1" ;;
+			--map) shift; map="$1" ;;
+		esac
+		shift
+	done
+	mkdir -p "$ENGINEOS_QUAKE_ID1/maps"
+	cp "$bsp" "$ENGINEOS_QUAKE_ID1/maps/$map.bsp"
+fi
 FAKE
-  chmod +x "$fake_bin/fake-codex-mcp" "$fake_bin/dgen" "$fake_bin/eos-app"
+	chmod +x "$fake_bin/fake-codex-mcp" "$fake_bin/dgen" "$fake_bin/eos-game"
 
   PATH="$fake_bin:$PATH" \
     ENGINEOS_CODEX_MCP_COMMAND="$fake_bin/fake-codex-mcp" \
@@ -2203,7 +1834,7 @@ FAKE
     ENGINEOS_DGEN_ROOT="$tmp_dir/dgen-root" \
     ENGINEOS_QUAKE_ID1="$tmp_dir/quake/id1" \
     ENGINEOS_FAKE_LEVEL_AGENT_LAUNCH="$launch_args" \
-    ENGINEOS_LEVEL_AGENT_EOS_APP="$fake_bin/eos-app" \
+		ENGINEOS_LEVEL_AGENT_GAME_CMD="$fake_bin/eos-game" \
     "$ROOT/tools/level-agent/engineos-level-agent" serve --socket "$sock" >"$tmp_dir/server.log" 2>&1 &
   server_pid="$!"
   for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -2221,6 +1852,13 @@ FAKE
     die "level-agent build did not reach accepted state"
   grep -F 'map=make_a_short_flooded_gatehouse' "$out" >/dev/null ||
     die "level-agent build did not derive stable map name"
+  local level_job_id
+  level_job_id="$(sed -n 's/^job=\([^ ]*\).*/\1/p' "$out")"
+  [[ -n "$level_job_id" ]] || die "level-agent build did not report a job id"
+  [[ "$(stat -c '%a' "$tmp_dir/state/jobs/$level_job_id/job.json")" == 600 ]] ||
+    die "level-agent job state is not private"
+  [[ "$(stat -c '%a' "$tmp_dir/state")" == 700 ]] ||
+    die "level-agent state directory is not private"
 
   PATH="$fake_bin:$PATH" \
     ENGINEOS_LEVEL_AGENT_STATE_DIR="$tmp_dir/state" \
@@ -2231,13 +1869,13 @@ FAKE
   PATH="$fake_bin:$PATH" \
     ENGINEOS_QUAKE_ID1="$tmp_dir/quake/id1" \
     ENGINEOS_FAKE_LEVEL_AGENT_LAUNCH="$launch_args" \
-    ENGINEOS_LEVEL_AGENT_EOS_APP="$fake_bin/eos-app" \
+		ENGINEOS_LEVEL_AGENT_GAME_CMD="$fake_bin/eos-game" \
     ENGINEOS_LEVEL_AGENT_STATE_DIR="$tmp_dir/state" \
     "$ROOT/tools/level-agent/engineos-level-agent" load --socket "$sock" >"$out"
   grep -F 'loaded make_a_short_flooded_gatehouse' "$out" >/dev/null ||
     die "level-agent load did not report loaded map"
-  grep -F 'launch quake --map make_a_short_flooded_gatehouse' "$launch_args" >/dev/null ||
-    die "level-agent load did not launch Quake through eos-app with map"
+	grep -F 'quake reload --bsp ' "$launch_args" | grep -F -- '--map make_a_short_flooded_gatehouse' >/dev/null ||
+		die "level-agent load did not reload Quake through eos-game with the accepted map"
   [[ -f "$tmp_dir/quake/id1/maps/make_a_short_flooded_gatehouse.bsp" ]] ||
     die "level-agent load did not deploy BSP into id1/maps"
 
@@ -2283,6 +1921,18 @@ PY
     die "trenchbroom setup did not write engine profile schema version"
   grep -F 'launch quake --map ${MAP_BASE_NAME}' "$tmp_dir/tb/games/EngineOSQuake/Engines.cfg" >/dev/null ||
     die "trenchbroom setup did not write EngineOS launch profile"
+
+  kill "$server_pid"
+  wait "$server_pid" >/dev/null 2>&1 || true
+  server_pid=""
+  if PATH="$fake_bin:$PATH" \
+      ENGINEOS_LEVEL_AGENT_STATE_DIR="$tmp_dir/state" \
+      "$ROOT/tools/level-agent/engineos-level-agent" load \
+        --socket "$sock" >"$out" 2>"$tmp_dir/load.err"; then
+    die "level-agent load silently fell back when the sidecar was unavailable"
+  fi
+  grep -F 'use --inline for one-shot loading' "$tmp_dir/load.err" >/dev/null ||
+    die "level-agent load did not explain the explicit inline fallback"
 
   printf 'level-agent socket contract test passed\n'
 }
@@ -2418,9 +2068,8 @@ run_reliability() {
   local runtime_login_profile=""
   local runtime_issue=""
 
-  cleanup_reliability() {
-    ENGINEOS_STATE_DIR="$tmp_dir/run" ENGINEOS_LOG_DIR="$log_dir" "$SCRIPT_DIR/engine_runner.sh" daemon-stop >/dev/null 2>&1 || true
-    rm -rf "$tmp_dir" || {
+	cleanup_reliability() {
+		rm -rf "$tmp_dir" || {
       sleep 0.2
       rm -rf "$tmp_dir"
     }
@@ -2836,24 +2485,26 @@ FAKE
     ENGINEOS_LOG_DIR="$log_dir" \
     ENGINEOS_FAKE_TERMINAL_LAUNCHED="$launched" \
     ENGINEOS_TERMINAL_CANDIDATES="foot" \
-    ENGINEOS_TERMINAL_APP_ID="engineos-terminal" \
+		ENGINEOS_TERMINAL_APP_ID="engineos-terminal" \
+		ENGINEOS_TERMINAL_ROLE="terminal" \
     ENGINEOS_TERMINAL_TITLE="EngineOS Terminal" \
     ENGINEOS_TERMINAL_SESSION_CMD="engineos-tmux-attach-primary" \
     WAYLAND_DISPLAY="engineos-test-wayland" \
     "$SCRIPT_DIR/terminal_launcher.sh" >/dev/null
-  grep -F 'foot --override csd.preferred=none --override csd.size=0 --app-id engineos-terminal --title EngineOS Terminal -- zsh -lc unset TMUX TMUX_PANE; engineos-tmux-attach-primary' "$launched" >/dev/null ||
+	grep -F 'foot --override csd.preferred=none --override csd.size=0 --app-id engineos-terminal --title EngineOS Terminal -- zsh -lc unset TMUX TMUX_PANE; eos-app terminal register --slot terminal; exec engineos-tmux-attach-primary' "$launched" >/dev/null ||
     die "terminal launcher did not disable foot titlebar decorations"
 
   PATH="$fake_bin:$PATH" \
     ENGINEOS_LOG_DIR="$log_dir" \
     ENGINEOS_FAKE_TERMINAL_LAUNCHED="$launched" \
     ENGINEOS_TERMINAL_CANDIDATES="alacritty" \
-    ENGINEOS_TERMINAL_APP_ID="engineos-terminal-secondary" \
+		ENGINEOS_TERMINAL_APP_ID="engineos-terminal-secondary" \
+		ENGINEOS_TERMINAL_ROLE="terminal-secondary" \
     ENGINEOS_TERMINAL_TITLE="EngineOS Side" \
     ENGINEOS_TERMINAL_SESSION_CMD="tmux new -A -s engineos-side" \
     WAYLAND_DISPLAY="engineos-test-wayland" \
     "$SCRIPT_DIR/terminal_launcher.sh" >/dev/null
-  grep -F 'alacritty --class engineos-terminal-secondary --title EngineOS Side -- zsh -lc unset TMUX TMUX_PANE; tmux new -A -s engineos-side' "$launched" >/dev/null ||
+	grep -F 'alacritty --class engineos-terminal-secondary --title EngineOS Side -- zsh -lc unset TMUX TMUX_PANE; eos-app terminal register --slot terminal-secondary; exec tmux new -A -s engineos-side' "$launched" >/dev/null ||
     die "terminal launcher did not start named tmux session through zsh"
   grep -F 'session command=tmux new -A -s engineos-side' "$log_dir/terminal.log" >/dev/null ||
     die "terminal launcher did not log tmux session command"
@@ -3256,6 +2907,7 @@ mkdir -p "$target/etc/pacman.d" "$target/etc/sudoers.d" "$target/boot" "$target/
 touch "$target/usr/share/engineos/post-install-payload/scripts/setup_dev_environment.sh"
 chmod +x "$target/usr/share/engineos/post-install-payload/scripts/setup_dev_environment.sh"
 printf '[options]\n' >"$target/etc/pacman.conf"
+printf '#en_US.UTF-8 UTF-8\n' >"$target/etc/locale.gen"
 FAKE
   cat >"$fake_bin/genfstab" <<'FAKE'
 #!/usr/bin/env bash
@@ -3948,6 +3600,10 @@ run_post_first_deploy() {
     die "post-first-deploy setup does not request engineos-tools"
   grep -F 'engineos-cube' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not request engineos-cube"
+  grep -F 'engineos-level-agent' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not request the Quake level workflow"
+  grep -F 'engineos-trenchbroom' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not request the Quake editor workflow"
   grep -F 'npm install -g @openai/codex@latest' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not upgrade npm-managed Codex"
   if grep -F 'best_effort()' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
@@ -3955,8 +3611,6 @@ run_post_first_deploy() {
     die "post-first-deploy setup still contains best-effort service handling"
   fi
   if grep -F 'systemctl enable docker.service >/dev/null 2>&1 || true' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-      grep -F 'systemctl enable engineos-observe-exporter.service >/dev/null 2>&1 || true' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-      grep -F 'systemctl restart engineos-observe-exporter.service >/dev/null 2>&1 || true' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
       grep -F 'systemctl daemon-reload || true' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
       grep -F 'chsh -s /usr/bin/zsh "$TARGET_USER" || true' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null; then
     die "post-first-deploy setup silently ignores service or shell setup failures"
@@ -3965,6 +3619,8 @@ run_post_first_deploy() {
     die "post-first-deploy setup does not fetch codex-extractor"
   grep -F 'session-extrator' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not fetch session-extrator"
+  grep -F 'session-extrator.git@v$version' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
+    die "post-first-deploy setup does not install the pinned codex-insights release"
   grep -F 'opencode-autonomy' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not fetch opencode-autonomy"
   grep -F 'agent' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
@@ -4711,23 +4367,23 @@ case "$SCOPE" in
   agent-hygiene)
     run_agent_hygiene
     ;;
-  agent-dispatcher)
-    run_agent_dispatcher
-    ;;
   observability)
     run_observability
     ;;
-  agent-route)
-    run_agent_route
-    ;;
+	agent-route)
+		run_agent_route
+		;;
+	dev-workflow)
+		run_dev_workflow
+		;;
   compositor)
     run_compositor "$@"
     ;;
   shell-actions)
     run_shell_actions
     ;;
-  engine-runner-env)
-    run_engine_runner_env
+	game-workflow)
+		run_game_workflow
     ;;
   image-preview)
     run_image_preview

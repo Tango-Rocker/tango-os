@@ -1,11 +1,11 @@
 pkgname=engineos-level-agent
 pkgver=0.1.0
-pkgrel=8
+pkgrel=9
 pkgdesc="EngineOS Quake level generation sidecar for Codex, dgen, QuakeSpasm, and TrenchBroom"
 arch=('any')
 url="https://example.invalid/engineos"
 license=('custom:EngineOS-TBD')
-depends=('bash' 'python' 'engineos-tools' 'engineos-quakespasm' 'engineos-ericw-tools')
+depends=('bash' 'python' 'engineos-tools' 'engineos-dgen' 'engineos-quakespasm' 'engineos-ericw-tools')
 source=()
 sha256sums=()
 
@@ -16,6 +16,7 @@ package() {
   install -Dm755 "$_engineos_root/tools/level-agent/engineos-level-agent" "$pkgdir/usr/bin/engineos-level-agent"
   install -Dm755 "$_engineos_root/tools/level-agent/engineos-level-agent" "$pkgdir/usr/bin/eos-level-agent"
   install -Dm755 "$_engineos_root/tools/level-agent/engineos_level_agent.py" "$pkgdir/usr/lib/engineos/level-agent/engineos_level_agent.py"
+  install -Dm644 "$_engineos_root/packages/engineos-level-agent/files/usr/lib/systemd/user/engineos-level-agent.service" "$pkgdir/usr/lib/systemd/user/engineos-level-agent.service"
   install -Dm755 "$_engineos_root/tools/scripts/generate_dgen_wad.py" "$pkgdir/usr/lib/engineos/scripts/generate_dgen_wad.py"
   python "$_engineos_root/tools/scripts/generate_dgen_wad.py" --out "$pkgdir/usr/share/engineos/quake/engineos-dgen.wad"
   install -Dm644 "$_engineos_root/LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

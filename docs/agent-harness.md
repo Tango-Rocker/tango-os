@@ -41,7 +41,6 @@ Tango-OS/Engine-OS work:
 ./tools/engineos/eos-doctor
 ./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-agent hygiene check
-./tools/engineos/eos-agent dispatch status
 ./tools/engineos/eos-ci local --package engineos-tools --test agent-route --no-validate-repo --clean-generated
 ./tools/engineos/eos-preflight all
 ./tools/engineos/eos-lint packages
@@ -57,7 +56,6 @@ For agent harness changes, run:
 ```bash
 ./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-test agent-hygiene
-./tools/engineos/eos-test agent-dispatcher
 ./tools/engineos/eos-preflight repo --package engineos-tools
 ```
 
@@ -99,10 +97,10 @@ disposition, not just local edits:
 tools/hooks/install_git_push_deploy_hook.sh
 ```
 
-   Override the command with `--command '<local deploy command>'` only when the
-   replacement stays on the live checkout. The hook deliberately fails the push
-   if deployment fails; use `git config engineos.deployOnPush false` only for an
-   intentional manual-publish exception.
+   The hook computes deployment from the pushed commit range and refuses
+   relevant dirty files. It deliberately fails the push if deployment fails;
+   use `git config engineos.deployOnPush false` only for an intentional
+   manual-publish exception.
 5. Merge when branch policy, review state, and CI allow it; otherwise open or
    update the merge path and record the exact blocker.
 
@@ -111,24 +109,12 @@ logs, or unrelated work. If push or merge is blocked by credentials, branch
 policy, failing CI, or a dirty tree outside the task scope, report the blocker
 and the exact command to resume from.
 
-Agent work may queue follow-up Cleaner tasks only through explicit queue
-commands or validation hooks. The v0 dispatcher is local, repo-scoped, durable
-JSONL, and manual-drain:
-
-```bash
-./tools/engineos/eos-agent queue list
-./tools/engineos/eos-agent dispatch drain --dry-run
-```
-
 For local observability of agent work:
 
 ```bash
 ./tools/engineos/eos-observe metrics
-./tools/engineos/eos-observe tui
-./tools/engineos/eos-observe exporter once
+./tools/engineos/eos-observe tail --last 20
 ```
-
-External collectors can scrape the EngineOS exporter when needed.
 
 Session records are not part of the default work loop. When a user asks for
 one, read [../agentd.md](../agentd.md) for the archive path and writing style,

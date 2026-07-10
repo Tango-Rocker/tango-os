@@ -8,18 +8,16 @@ Use:
 ```text
 AGENTS.md
 .codex/config.toml
-.codex/hooks.example.json
 .agents/index.toml
 .agents/roles/*/AGENTS.md
 .agents/skills/*/SKILL.md
-tools/scripts/agent_metadata.sh
-tools/hooks/*.py
+tools/scripts/agent_router.py
+tools/scripts/agent_hygiene.py
 docs/engineos-agent-pack.md
 docs/agent-harness.md
 docs/agent-workflow.md
 docs/agent-lsp.md
 docs/agent-roles.md
-docs/agent-profiles.md
 ```
 
 Validation:

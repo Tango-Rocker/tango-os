@@ -1,27 +1,37 @@
-# QuakeSpasm Control Protocol
+# QuakeSpasm Launch Contract
 
-This is a placeholder for the first EngineOS engine control protocol.
+Quake is owned by the per-user `engineos-quake.service`; there is no persistent
+root engine daemon or private engine socket.
 
-Initial commands:
+`eos-game quake play` writes a mode-`0600` JSON request under the user's
+EngineOS runtime directory and restarts the user unit. The request schema is
+`engineos-quake-launch/v1` and accepts only:
 
-- `engine.status`
-- `engine.launch quake`
-- `engine.quit`
-- `engine.restart`
+- `map` and `game`: safe Quake names
+- `smoke`: boolean
+- `window` and `fullscreen`: mutually exclusive booleans
+- `id1`: resolved user-owned asset directory
 
-Initial log streams:
+`/usr/lib/engineos/game/engineos-quake-service` validates the request,
+constructs the runner arguments, keeps only the required graphical-session
+environment, and execs `/usr/share/engineos/quake/run.sh`. Malformed requests
+fail before Quake starts.
 
-- stdout
-- stderr
-- lifecycle events
-
-The first implementation can be a shell wrapper. Move to the engine runner socket protocol after the launch and log behavior is stable.
-
-## Current Build Commands
+Use:
 
 ```bash
-engineos build engine quake --dry-run
-engineos build engine quake --fetch
+eos-game quake play
+eos-game quake status
+eos-game quake stop
+eos-game quake proof
 ```
 
-The default upstream mirror is `https://github.com/sezero/quakespasm.git`. QuakeSpasm's upstream Linux instructions build from the `Quake` subdirectory with `make`; EngineOS uses `make -C upstream/Quake USE_SDL2=1`.
+Build QuakeSpasm from source with:
+
+```bash
+eos-build engine quake --dry-run
+eos-build engine quake --fetch
+```
+
+The default upstream mirror is `https://github.com/sezero/quakespasm.git`.
+EngineOS builds from the upstream `Quake` directory with SDL2 enabled.

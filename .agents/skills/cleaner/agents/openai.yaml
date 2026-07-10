@@ -1,3 +1,3 @@
 interface:
   display_name: "EngineOS Cleaner"
-  short_description: "Keep EngineOS agent docs, skills, profiles, wrappers, and indexes tidy"
+  short_description: "Keep EngineOS agent docs, skills, roles, and index tidy"

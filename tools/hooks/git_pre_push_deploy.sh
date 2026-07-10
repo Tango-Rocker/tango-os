@@ -37,6 +37,7 @@ case "$deploy_enabled" in
     ;;
 esac
 
+ref_update_args=()
 branch_updates=()
 while read -r local_ref local_oid remote_ref remote_oid; do
   [[ -n "${local_ref:-}" ]] || continue
@@ -44,6 +45,7 @@ while read -r local_ref local_oid remote_ref remote_oid; do
     refs/heads/*)
       [[ "$local_oid" != "0000000000000000000000000000000000000000" ]] || continue
       branch_updates+=("${local_ref#refs/heads/}")
+      ref_update_args+=(--ref-update "$local_ref" "$local_oid" "$remote_ref" "$remote_oid")
       ;;
   esac
 done
@@ -53,9 +55,7 @@ if [[ ${#branch_updates[@]} -eq 0 ]]; then
   exit 0
 fi
 
-deploy_command="${ENGINEOS_GIT_PUSH_DEPLOY_COMMAND:-$(git_config engineos.deployCommand)}"
-deploy_command="${deploy_command:-./tools/engineos/eos-ci local --test agent --install --clean-generated --no-validate-repo}"
-[[ -n "$deploy_command" ]] || die "deploy command is empty"
+deploy_command="./tools/engineos/eos dev apply"
 
 printf 'EngineOS deploy-on-push\n'
 printf '  remote:   %s\n' "${remote_name:-<unknown>}"
@@ -68,4 +68,4 @@ printf '\n'
 ENGINEOS_ROOT="$root" \
 ENGINEOS_SCRIPT_DIR="$root/tools/scripts" \
 ENGINEOS_EOS_DIR="$root/tools/eos" \
-  bash -lc "$deploy_command"
+  "$root/tools/engineos/eos" dev apply "${ref_update_args[@]}"

@@ -22,4 +22,4 @@ Manual VMware or VirtualBox booting is also fine. After booting the ISO in the t
 eos-proof booted-iso --vm
 ```
 
-The profile creates a passwordless `dev` user in the `wheel` group, enables NetworkManager and sshd, includes the engine runner plus Quake template packages for installed smoke tests, and runs `engineos-live-setup.service` once at boot to prepare `/var/log/engineos`.
+The profile creates a passwordless `dev` user in the `wheel` group, enables NetworkManager and sshd, includes the per-user Quake service, level-agent, pinned dungeon generator, and Quake template packages for installed smoke tests, and runs `engineos-live-setup.service` once at boot to prepare `/var/log/engineos`.

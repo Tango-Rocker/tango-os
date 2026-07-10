@@ -49,7 +49,7 @@ target_files() {
 target_units() {
   case "$1" in
     shell) printf '%s\n' "engineos-shell.service" ;;
-    engine) printf '%s\n' "engineos-engine-runner.service" ;;
+	engine) printf '%s\n' "engineos-quake.service" ;;
     runtime) printf '%s\n' "engineos-runtime.service" ;;
     live-setup) printf '%s\n' "engineos-live-setup.service" ;;
     all)
@@ -57,7 +57,7 @@ target_units() {
         "engineos-live-setup.service" \
         "engineos-runtime.service" \
         "engineos-shell.service" \
-        "engineos-engine-runner.service"
+		"engineos-quake.service"
       ;;
   esac
 }
@@ -99,7 +99,11 @@ print_journal_logs() {
     [[ -n "$unit" ]] || continue
     found=true
     printf '==> journal: %s <==\n' "$unit"
-    journalctl -b -u "$unit" -n "$LAST" --no-pager 2>&1 || true
+		if [[ "$unit" == "engineos-quake.service" ]]; then
+			journalctl --user -b -u "$unit" -n "$LAST" --no-pager 2>&1 || true
+		else
+			journalctl -b -u "$unit" -n "$LAST" --no-pager 2>&1 || true
+		fi
   done < <(target_units "$TARGET")
 
   [[ "$found" == true ]]

@@ -18,7 +18,7 @@ focused proof command, not to do specialist work after ownership is clear.
    changes; `low` for read-only status, docs, and route previews.
 3. Return role, confidence, risk, reason, and the smallest direct CLI proof.
 4. Use `eos-observe record --kind agent-route ...` only when
-   observability is enabled; never store raw prompts in v0.
+   observability is enabled; never store raw prompts.
 
 ## Commands
 

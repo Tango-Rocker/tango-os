@@ -29,6 +29,7 @@ Usage: app.sh launch terminal [args...]
        app.sh launch cube [--smoke]
        app.sh launch quake [--smoke] [--pane|--fullscreen|--output] [--map NAME] [--game MOD]
        app.sh recover preview|terminal|terminal-secondary|cube|quake
+	   app.sh terminal register --slot terminal|terminal-secondary [--tty /dev/pts/N]
        app.sh pane launch -- COMMAND [ARG...]
        app.sh pane focus [--pane TMUX_PANE]
        app.sh pane geometry [--pane TMUX_PANE]
@@ -44,7 +45,7 @@ Usage: app.sh launch terminal [args...]
 
 Launch graphical applications through the EngineOS shell-owned Wayland session.
 The app layer enforces the common client environment and dispatches to the
-terminal launcher, cube app, or engine runner.
+terminal launcher, cube app, or per-user game service.
 
 Quake launches from inside tmux default to the invoking pane's bounds. Use
 --fullscreen or --output to clear pane bounds for the launch.
@@ -57,15 +58,13 @@ running shell. window commands remain for diagnostics and manual recovery.
 HELP
 }
 
-runtime_cmd_string() {
-  if [[ -n "${ENGINEOS_RUNTIME_CMD:-}" ]]; then
-    printf '%s\n' "$ENGINEOS_RUNTIME_CMD"
-    return
-  fi
-  if [[ -x "$ROOT/tools/engineos/eos-runtime" ]]; then
-    printf '%s\n' "$ROOT/tools/engineos/eos-runtime"
-  else
-    printf '%s\n' eos-runtime
+game_cmd_string() {
+	if [[ -n "${ENGINEOS_GAME_CMD:-}" ]]; then
+		printf '%s\n' "$ENGINEOS_GAME_CMD"
+	elif [[ -x "$ROOT/tools/scripts/game.sh" ]]; then
+		printf '%s\n' "$ROOT/tools/scripts/game.sh"
+	else
+		printf '%s\n' eos-game
   fi
 }
 
@@ -275,6 +274,17 @@ tmux_pane_cell_size() {
   printf '%s %s\n' "$cell_width" "$cell_height"
 }
 
+tmux_client_tty() {
+  local target="${1:-${TMUX_PANE:-}}"
+  [[ -n "${TMUX:-}" && -n "$target" ]] || return 1
+  have_cmd tmux || return 1
+  local client_tty
+  client_tty="$(tmux display-message -p -t "$target" '#{client_tty}' 2>/dev/null)" ||
+    return 1
+  [[ "$client_tty" == /dev/* ]] || return 1
+  printf '%s\n' "$client_tty"
+}
+
 tmux_socket_for_pane() {
   local target="${1:-${TMUX_PANE:-}}"
   local socket=""
@@ -329,6 +339,7 @@ pane_context_request_json() {
   local pane_id="$2"
   local token="${3:-}"
   local command_label="${4:-}"
+	local client_tty="${5:-}"
   local context
   context="$(tmux_pane_context "$pane_id")" || return 1
 
@@ -349,6 +360,13 @@ pane_context_request_json() {
     printf ',"command_label":'
     json_string "$command_label"
   fi
+	if [[ -z "$client_tty" ]]; then
+		client_tty="$(tmux_client_tty "$pane_id" || true)"
+	fi
+	if [[ -n "$client_tty" ]]; then
+		printf ',"client_tty":'
+		json_string "$client_tty"
+	fi
   printf ',"pane":{"socket":'
   json_string "$socket"
   printf ',"session":'
@@ -589,6 +607,64 @@ send_pane_shell_ipc() {
   return 1
 }
 
+run_terminal_register() {
+  local slot="${ENGINEOS_TERMINAL_ROLE:-}"
+  local terminal_tty=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --slot)
+        shift
+        [[ $# -gt 0 ]] || die "terminal register --slot requires a value"
+        slot="$1"
+        ;;
+      --tty)
+        shift
+        [[ $# -gt 0 ]] || die "terminal register --tty requires a value"
+        terminal_tty="$1"
+        ;;
+      help|--help|-h)
+        usage
+        return 0
+        ;;
+      *)
+        die "unknown terminal register option: $1"
+        ;;
+    esac
+    shift
+  done
+  case "$slot" in
+    terminal|terminal-secondary) ;;
+    *) die "terminal register requires --slot terminal or terminal-secondary" ;;
+  esac
+  if [[ -z "$terminal_tty" ]]; then
+    terminal_tty="$(tty 2>/dev/null || true)"
+  fi
+  [[ "$terminal_tty" == /dev/* ]] ||
+    die "terminal register requires a real tty"
+
+  local request
+  printf -v request '{"version":1,"op":"terminal-register","slot":"%s","tty":"%s"}' \
+    "$(json_escape "$slot")" "$(json_escape "$terminal_tty")"
+  send_shell_ipc "$(shell_ipc_socket)" "$request" >/dev/null
+  log_line "terminal register slot=$slot tty=$terminal_tty"
+}
+
+run_terminal() {
+  local sub="${1:-help}"
+  shift || true
+  case "$sub" in
+    register)
+      run_terminal_register "$@"
+      ;;
+    help|--help|-h)
+      usage
+      ;;
+    *)
+      die "unknown app terminal action: $sub"
+      ;;
+  esac
+}
+
 run_window_list() {
   local json=false
   while [[ $# -gt 0 ]]; do
@@ -810,15 +886,40 @@ run_pane_launch() {
 
   prepare_client_env
   export ENGINEOS_PANE_LAUNCH_TOKEN="$token"
-  log_line "pane launch token=$token pane=$TMUX_PANE display=${WAYLAND_DISPLAY:-missing} command=$(quote_cmd "$@")"
+	log_line "pane launch pane=$TMUX_PANE display=${WAYLAND_DISPLAY:-missing} command=$(quote_cmd "$@")"
   exec "$@"
 }
 
 run_pane_focus() {
-  local pane_id
+	local pane_id="${TMUX_PANE:-}"
+	local client_tty=""
   local request
-  pane_id="$(pane_target_arg "$@")" || return 0
-  request="$(pane_context_request_json pane-focus "$pane_id")" ||
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+			--pane)
+				shift
+				[[ $# -gt 0 ]] || die "pane focus --pane requires a tmux pane id"
+				pane_id="$1"
+				;;
+			--client-tty)
+				shift
+				[[ $# -gt 0 ]] || die "pane focus --client-tty requires a tty"
+				client_tty="$1"
+				;;
+			help|--help|-h)
+				usage
+				return 0
+				;;
+			*)
+				die "unknown pane focus option: $1"
+				;;
+		esac
+		shift
+	done
+	[[ -n "$pane_id" ]] || die "pane focus requires TMUX_PANE or --pane"
+	[[ -z "$client_tty" || "$client_tty" == /dev/* ]] ||
+		die "pane focus --client-tty must be a /dev tty"
+	request="$(pane_context_request_json pane-focus "$pane_id" "" "" "$client_tty")" ||
     die "pane focus could not read tmux context for pane $pane_id"
   send_pane_shell_ipc focus "$request"
   printf 'focused pane %s\n' "$pane_id"
@@ -862,18 +963,17 @@ run_pane_list() {
     shift
   done
 
-  [[ -r "$SHELL_STATE_FILE" ]] || die "shell state is not readable: $SHELL_STATE_FILE"
-  python - "$SHELL_STATE_FILE" "$json" <<'PY'
+	local response
+	response="$(send_shell_ipc "$(shell_ipc_socket)" \
+		'{"version":1,"op":"pane-list"}')" || return 1
+	python - "$response" "$json" <<'PY'
 import json
 import sys
 
-state_file, as_json = sys.argv[1], sys.argv[2] == "true"
-with open(state_file, "r", encoding="utf-8") as handle:
-    state = json.load(handle)
-
+state, as_json = json.loads(sys.argv[1]), sys.argv[2] == "true"
 bindings = state.get("pane_bindings", [])
 if as_json:
-    print(json.dumps({"ok": True, "pane_bindings": bindings}, separators=(",", ":")))
+    print(json.dumps(state, separators=(",", ":")))
 else:
     print("KEY\tFOCUS\tPENDING\tVIEW\tPANE\tCOMMAND")
     for binding in bindings:
@@ -1164,7 +1264,7 @@ run_launch() {
       prepare_quake_layout "$@"
       write_app_state "$app" "launch-requested" "" "${QUAKE_LAUNCH_ARGS[@]}"
       log_line "launch app=quake owner=engineos-shell display=${WAYLAND_DISPLAY:-missing} sdl=${SDL_VIDEODRIVER:-unset} args=${QUAKE_LAUNCH_ARGS[*]}"
-      exec "$(runtime_cmd_string)" engine launch quake "${QUAKE_LAUNCH_ARGS[@]}"
+      exec "$(game_cmd_string)" quake play "${QUAKE_LAUNCH_ARGS[@]}"
       ;;
     *)
       die "unknown app id: $app"
@@ -1549,6 +1649,9 @@ case "$ACTION" in
   recover)
     run_recover "$@"
     ;;
+	terminal)
+		run_terminal "$@"
+		;;
   pane)
     run_pane "$@"
     ;;

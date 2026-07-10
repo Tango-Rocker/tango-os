@@ -5,7 +5,7 @@ description: Compile C/C++ apps, local EngineOS packages, kernel-adjacent tools,
 
 # Compiler
 
-Use the Arch builder VM for final compiler acceptance. Local work should prefer
+Use the live Arch EngineDev host for final compiler acceptance. Local work should prefer
 real package lint, preflight, and CI-loop checks that fail visibly.
 
 ## Workflow

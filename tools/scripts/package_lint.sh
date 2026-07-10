@@ -194,18 +194,10 @@ lint_pkgbuild() {
         fail "$pkg: eos wrappers are not generated from the command list"
         return
       fi
-      if ! grep -q 'agent_metadata.sh.*write' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: generated agent metadata is not installed"
-        return
-      fi
-      if ! grep -q 'engineos-agent-dispatcher@.service' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: agent dispatcher service template is not installed"
-        return
-      fi
-      if ! grep -q 'engineos-observe-exporter.service' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: observability exporter service is not installed"
-        return
-      fi
+		if ! grep -q "name '\*.py'" "$pkg_dir/PKGBUILD"; then
+			fail "$pkg: Python router and hygiene scripts are not executable"
+			return
+		fi
       ;;
     engineos-config)
       if ! grep -q 'runtime.conf' "$pkg_dir/PKGBUILD"; then
@@ -221,21 +213,13 @@ lint_pkgbuild() {
         return
       fi
       ;;
-    engineos-engine-runner)
-      if grep -q 'engine_runner_daemon.py' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: Python engine runner daemon must not be packaged"
-        return
-      fi
-      if ! grep -q 'engine-runner-daemon' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: Go engine runner daemon is not installed"
-        return
-      fi
-      if ! grep -q 'engineos-engine-runner.service' "$pkg_dir/PKGBUILD"; then
-        fail "$pkg: systemd service is not installed"
-        return
-      fi
-      ;;
-    engineos-shell)
+	engineos-dgen)
+		if ! grep -Eq '^_commit=[0-9a-f]{40}$' "$pkg_dir/PKGBUILD"; then
+			fail "$pkg: source is not pinned to an exact commit"
+			return
+		fi
+		;;
+	engineos-shell)
       if ! grep -q 'meson install' "$pkg_dir/PKGBUILD"; then
         fail "$pkg: Meson shell binary is not installed"
         return
@@ -252,7 +236,7 @@ lint_pkgbuild() {
         fail "$pkg: expected libxkbcommon dependency"
         return
       fi
-      ;;
+		;;
     engineos-cube)
       if ! grep -q 'apps/cube' "$pkg_dir/PKGBUILD"; then
         fail "$pkg: cube app source tree is not packaged"
@@ -271,7 +255,11 @@ lint_pkgbuild() {
         return
       fi
       ;;
-    engineos-quakespasm)
+	engineos-quakespasm)
+		if ! grep -q 'engineos-quake.service' "$pkg_dir/PKGBUILD"; then
+			fail "$pkg: per-user Quake service is not installed"
+			return
+		fi
       if ! grep -q 'build.sh.*--fetch' "$pkg_dir/PKGBUILD"; then
         fail "$pkg: QuakeSpasm build wrapper is not used with fetch"
         return

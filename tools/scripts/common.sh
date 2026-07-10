@@ -133,7 +133,7 @@ engineos_packages() {
   printf '%s\n' \
     engineos-tools \
     engineos-config \
-    engineos-engine-runner \
+    engineos-dgen \
     engineos-oh-my-zsh \
     engineos-tmux-plugins \
     engineos-cube \
@@ -222,6 +222,8 @@ engineos_eos_commands() {
     eos-ci \
     eos-crash-bundle \
     eos-deploy \
+    eos-dev \
+    eos-game \
     eos-doctor \
     eos-input \
     eos-install \

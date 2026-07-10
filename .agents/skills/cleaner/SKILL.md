@@ -1,6 +1,6 @@
 ---
 name: cleaner
-description: Keep EngineOS agent docs, role files, skills, profiles, wrappers, and the canonical agent index tidy. Use for stale references, duplicated guidance, missing role pack files, hygiene validation, and queued cleanup work.
+description: Keep EngineOS agent docs, role files, skills, and the canonical agent index tidy. Use for stale references, duplicated guidance, missing role pack files, and hygiene validation.
 ---
 
 # Cleaner

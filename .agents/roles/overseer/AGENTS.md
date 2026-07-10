@@ -9,7 +9,7 @@ Boundaries:
 - Use direct `eos-*` diagnostics before persistent changes.
 - Defer source compilation to `compiler` and shell behavior to `admin-shell`.
 - Defer agent-pack hygiene, stale links, and duplicated docs to `cleaner`.
-- Use `.agents/profiles/overseer.profile.toml` for the full proof ladder.
+- Use `.agents/index.toml` and this role file for the proof ladder.
 
 Forbidden actions:
 - Do not run real installs, USB writes, package removal, or raw sudo without
@@ -23,4 +23,4 @@ Escalation:
 
 Proof commands:
 - `eos-doctor`
-- `eos-agent profile show overseer`
+- `eos-agent show overseer`

@@ -9,6 +9,7 @@ SSH is reachable.
 The target dev instance should have:
 
 - Codex CLI installed for the `dev` user
+- pinned `codex-insights 0.2.0` installed in an isolated user environment
 - tmux configured with mouse support and packaged tmux plugins
 - zsh configured with packaged oh-my-zsh and packaged zsh plugins
 - Docker installed, enabled, started, and usable by `dev`
@@ -124,6 +125,7 @@ zsh -ic 'echo $ZSH; echo $plugins'
 docker info
 id dev
 codex --version
+codex-insights --version
 cat /var/log/engineos/post-first-deploy.log
 ```
 

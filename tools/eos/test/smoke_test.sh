@@ -31,7 +31,6 @@ run_eos() {
 }
 
 cleanup() {
-  ENGINEOS_ENGINE_RUNNER_ALLOW_PYTHON_FALLBACK=true ENGINEOS_STATE_DIR="$TMP_DIR/run" ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-runtime engine daemon-stop >/dev/null 2>&1 || true
   rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
@@ -67,7 +66,6 @@ ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-proof booted-iso --vm --dry-run >/d
 printf 'fake iso payload\n' >"$TMP_DIR/EngineDevOS-test-x86_64.iso"
 run_eos eos-vm boot enginedev --dry-run --iso "$TMP_DIR/EngineDevOS-test-x86_64.iso" --memory 1024 --cpus 1 --display none --no-kvm >/dev/null
 run_eos eos-test usb >/dev/null
-ENGINEOS_ENGINE_RUNNER_ALLOW_PYTHON_FALLBACK=true ENGINEOS_STATE_DIR="$TMP_DIR/run" ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-runtime engine status >/dev/null
 run_eos eos-assets explain quake >/dev/null
 ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-test assets >/dev/null
 ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-test reliability >/dev/null
@@ -82,7 +80,7 @@ run_eos eos-input replay "$TMP_DIR/input.json" >/dev/null
 ENGINEOS_DRM_SYSFS="$TMP_DIR/sys/class/drm" run_eos eos-outputs list >/dev/null
 ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-test shell-actions >/dev/null
 ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-test terminal >/dev/null
-ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-test engine-runner-env >/dev/null
+ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-test game-workflow >/dev/null
 run_eos eos-test input >/dev/null
 run_eos eos-test outputs --single >/dev/null
 run_eos eos-test outputs --dual-static >/dev/null

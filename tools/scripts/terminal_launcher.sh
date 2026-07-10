@@ -279,7 +279,17 @@ if terminal_cmd="$(select_terminal)"; then
 
   if [[ -n "${ENGINEOS_TERMINAL_SESSION_CMD:-}" ]]; then
     log_line "session command=$ENGINEOS_TERMINAL_SESSION_CMD"
-    exec "$terminal_cmd" "${TERMINAL_ARGS[@]}" -- zsh -lc "unset TMUX TMUX_PANE; $ENGINEOS_TERMINAL_SESSION_CMD"
+		terminal_role="${ENGINEOS_TERMINAL_ROLE:-terminal}"
+		case "$terminal_role" in
+			terminal|terminal-secondary) ;;
+			*)
+				log_line "launch failed reason=invalid-terminal-role role=$terminal_role"
+				printf 'eos-terminal: invalid terminal role: %s\n' "$terminal_role" >&2
+				exit 2
+				;;
+		esac
+		exec "$terminal_cmd" "${TERMINAL_ARGS[@]}" -- zsh -lc \
+			"unset TMUX TMUX_PANE; eos-app terminal register --slot $terminal_role; exec $ENGINEOS_TERMINAL_SESSION_CMD"
   fi
 
   exec "$terminal_cmd" "${TERMINAL_ARGS[@]}"

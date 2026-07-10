@@ -12,7 +12,7 @@ and commercial assets must stay outside the repo and ISO.
 
 ```bash
 ./tools/engineos/eos-build fetch engine quake --status
-./tools/engineos/eos-runtime quake --smoke
+./tools/engineos/eos game quake play --smoke
 ./tools/engineos/eos-assets check quake
 ./tools/engineos/eos-lint packages --package engineos-quakespasm
 ./tools/engineos/eos-logs engine --last 200

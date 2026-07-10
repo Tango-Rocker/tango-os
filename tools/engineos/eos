@@ -51,12 +51,18 @@ if [[ "$ENGINEOS_SOURCE_TEST_MODE" == "1" ]]; then
   clear_source_test_env
 fi
 
+if [[ -d "$DEFAULT_ENGINEOS_ROOT/tools/scripts" ]]; then
+	unset ENGINEOS_ROOT ENGINEOS_SCRIPT_DIR ENGINEOS_EOS_DIR
+fi
+
 ENGINEOS_ROOT="${ENGINEOS_ROOT:-$DEFAULT_ENGINEOS_ROOT}"
 ENGINEOS_LOG_DIR_OVERRIDE="${ENGINEOS_LOG_DIR-}"
 ENGINEOS_SCRIPT_DIR_OVERRIDE="${ENGINEOS_SCRIPT_DIR-}"
 ENGINEOS_EOS_DIR_OVERRIDE="${ENGINEOS_EOS_DIR-}"
 
-if [[ "$ENGINEOS_SOURCE_TEST_MODE" != "1" && -r /etc/engineos/profile.conf ]]; then
+if [[ "$ENGINEOS_SOURCE_TEST_MODE" != "1" &&
+    ( "$DEFAULT_ENGINEOS_ROOT" == /usr || "$DEFAULT_ENGINEOS_ROOT" == /usr/* ) &&
+    -r /etc/engineos/profile.conf ]]; then
   # shellcheck disable=SC1091
   source /etc/engineos/profile.conf
 fi
@@ -98,9 +104,9 @@ EngineOS split command dispatcher.
 
 Commands:
   eos-doctor, eos-logs, eos-crash-bundle
-  eos-build, eos-package, eos-lint, eos-preflight, eos-ci, eos-release, eos-artifacts
+  eos-build, eos-package, eos-lint, eos-preflight, eos-ci, eos-dev, eos-release, eos-artifacts
   eos-builder, eos-deploy, eos-install, eos-update
-  eos-app, eos-terminal, eos-outputs, eos-runtime, eos-assets, eos-capture, eos-input
+  eos-app, eos-terminal, eos-outputs, eos-runtime, eos-game, eos-assets, eos-capture, eos-input
   eos-proof, eos-validate, eos-vm, eos-usb, eos-secureboot
   eos-agent, eos-observe, eos-test, eos-source-test
 
@@ -141,7 +147,7 @@ record_eos_command() {
   [[ -x "$(script observability.sh)" ]] || return 0
 
   case "$tool ${1:-}" in
-    "eos-observe record"|"eos-observe hook"|"eos-observe prompt-login")
+    "eos-observe record"|"eos-observe prompt-login")
       return 0
       ;;
   esac
@@ -397,18 +403,12 @@ cmd_runtime() {
       mkdir -p "$ENGINEOS_LOG_DIR"
       exec_script shell_runner.sh "$@"
       ;;
-    engine)
-      exec_script engine_runner.sh "$@"
-      ;;
-    status|launch|quit|restart|daemon-stop)
-      exec_script engine_runner.sh "$target" "$@"
-      ;;
     help|--help|-h)
       cat <<'HELP'
 Usage:
   eos-runtime quake [--smoke]
   eos-runtime shell --headless|--nested|--tty|restart-live|refresh-user
-  eos-runtime engine status|launch|quit|restart
+  eos game quake play|reload|status|stop
 HELP
       ;;
     *)
@@ -421,34 +421,22 @@ cmd_agent() {
   local target="${1:-help}"
   shift || true
 
-  case "$target" in
-    route)
-      exec_script agent_route.sh route "$@"
-      ;;
-    profile|profiles)
-      exec_script agent_profile.sh "$@"
-      ;;
-    capabilities|capability)
-      exec_script agent_profile.sh capabilities "$@"
-      ;;
-    hygiene)
-      exec_script agent_hygiene.sh "$@"
-      ;;
-    queue)
-      exec_script agent_dispatcher.sh queue "$@"
-      ;;
-    dispatch)
-      exec_script agent_dispatcher.sh dispatch "$@"
+	case "$target" in
+		route|list|show|capabilities|capability)
+			[[ "$target" != capability ]] || target=capabilities
+			exec python "$(script agent_router.py)" "$target" "$@"
+			;;
+		hygiene)
+			exec python "$(script agent_hygiene.py)" "$@"
       ;;
     help|--help|-h)
       cat <<'HELP'
 Usage:
-  eos-agent route --dry-run "<request>"
-  eos-agent profile list|show <role>
-  eos-agent capabilities
-  eos-agent hygiene check [--json] [--fix-plan] [--enqueue]
-  eos-agent queue add|list|show|cancel
-  eos-agent dispatch drain|status|wake
+	  eos-agent route [--json] "<request>"
+	  eos-agent list
+	  eos-agent show <role>
+	  eos-agent capabilities
+	  eos-agent hygiene check [--json] [--fix-plan]
 HELP
       ;;
     *)
@@ -575,6 +563,10 @@ main() {
       record_eos_command "$tool" "$@"
       exec_script ci_loop.sh "$@"
       ;;
+    eos-dev|dev)
+      record_eos_command "eos-dev" "$@"
+      exec_script dev_workflow.sh "$@"
+      ;;
     eos-release)
       record_eos_command "$tool" "$@"
       exec_script release.sh "$@"
@@ -614,6 +606,10 @@ main() {
     eos-runtime)
       record_eos_command "$tool" "$@"
       cmd_runtime "$@"
+      ;;
+    eos-game|game)
+      record_eos_command "eos-game" "$@"
+      exec_script game.sh "$@"
       ;;
     eos-assets)
       record_eos_command "$tool" "$@"

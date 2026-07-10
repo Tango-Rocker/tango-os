@@ -395,15 +395,13 @@ if [[ "$MODE" == "vm" ]]; then
 fi
 service_check engineos-live-setup.service
 if [[ "$MODE" == "runtime" || "$MODE" == "bare-metal" ]]; then
-  service_check engineos-engine-runner.service
-  service_check engineos-runtime.service
+	service_check engineos-runtime.service
 fi
 
 package_check engineos-config
 package_check engineos-tools
 package_check ttf-dejavu
 package_check engineos-cube
-package_check engineos-engine-runner
 package_check engineos-quakespasm
 package_check engineos-quake-template
 command_check quakespasm

@@ -1,6 +1,6 @@
 [Unit]
 Description=EngineOS runtime live image setup
-Before=engineos-engine-runner.service engineos-runtime.service
+Before=engineos-runtime.service
 
 [Service]
 Type=oneshot

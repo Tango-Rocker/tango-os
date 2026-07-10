@@ -227,11 +227,8 @@ check_package_inputs() {
       require_file "tools/scripts/capture_frame.sh"
       require_file "tools/scripts/input_trace.sh"
       require_file "tools/scripts/observability.sh"
-      require_file "tools/scripts/agent_metadata.sh"
-      require_file "tools/scripts/agent_route.sh"
-      require_file "tools/scripts/agent_profile.sh"
-      require_file "tools/scripts/agent_hygiene.sh"
-      require_file "tools/scripts/agent_dispatcher.sh"
+		require_file "tools/scripts/agent_router.py"
+		require_file "tools/scripts/agent_hygiene.py"
       require_file "tools/eos/builder/builder_handoff.sh"
       require_file "tools/eos/builder/builder_doctor_proof.sh"
       require_file "tools/eos/builder/bootstrap_builder.sh"
@@ -245,26 +242,19 @@ check_package_inputs() {
       require_file "tools/eos/test/test_runner.sh"
       require_file "tools/eos/test/smoke_test.sh"
       require_file "packages/engineos-tools/PKGBUILD"
-      require_file "packages/engineos-tools/files/usr/lib/systemd/system/engineos-observe-exporter.service"
-      require_file "packages/engineos-tools/files/usr/lib/systemd/system/engineos-agent-dispatcher@.service"
       require_file "AGENTS.md"
       require_file "agentd.md"
       require_file "BACKLOG.md"
       require_file "CURRENT_STATUS.md"
       require_file "ROADMAP.md"
       require_file ".codex/config.toml"
-      require_file ".codex/hooks.example.json"
       require_file "docs/agent-harness.md"
       require_file "docs/dev-instance.md"
       require_file "docs/agent-lsp.md"
       require_file "docs/agent-roles.md"
-      require_file "docs/agent-profiles.md"
       require_file "docs/agent-workflow.md"
       require_file "docs/engineos-agent-pack.md"
       require_file ".agents/index.toml"
-      require_file "tools/hooks/session_start.py"
-      require_file "tools/hooks/pre_tool_policy.py"
-      require_file "tools/hooks/stop_check.py"
       require_file ".agents/skills/engineos/SKILL.md"
       require_file ".agents/skills/archiso-build/SKILL.md"
       require_file ".agents/skills/code-navigation/SKILL.md"
@@ -273,15 +263,8 @@ check_package_inputs() {
       require_file ".agents/skills/quake-port/SKILL.md"
       require_file ".agents/skills/render-gl/SKILL.md"
       require_file ".agents/skills/wlroots-compositor/SKILL.md"
-      if ! "$ROOT/tools/scripts/agent_metadata.sh" profile oracle >/dev/null; then
-        fail "agent profile generation failed"
-      fi
-      if ! "$ROOT/tools/scripts/agent_metadata.sh" wrapper oracle >/dev/null; then
-        fail "agent wrapper generation failed"
-      fi
-      check_abs_python_syntax "$ROOT/tools/hooks/session_start.py"
-      check_abs_python_syntax "$ROOT/tools/hooks/pre_tool_policy.py"
-      check_abs_python_syntax "$ROOT/tools/hooks/stop_check.py"
+		check_abs_python_syntax "$ROOT/tools/scripts/agent_router.py"
+		check_abs_python_syntax "$ROOT/tools/scripts/agent_hygiene.py"
       ;;
     engineos-oh-my-zsh)
       require_file "packages/engineos-oh-my-zsh/PKGBUILD"
@@ -299,41 +282,20 @@ check_package_inputs() {
       require_file "shell/meson.build"
       require_file "shell/src/engineos-shell.c"
       ;;
-    engineos-engine-runner)
-      require_file "tools/scripts/engine_runner.sh"
-      require_file "tools/go/cmd/engine-runner-daemon/main.go"
-      require_file "tools/go/internal/engineos/config.go"
-      require_file "packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service"
-      require_file "engine-runner/README.md"
-      if grep -F 'engine_runner_daemon.py' "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null; then
-        fail "engineos-engine-runner service must use the Go daemon"
-      fi
-      if grep -F 'LogsDirectory=engineos' "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null; then
-        fail "engineos-engine-runner service lets systemd reset /var/log/engineos permissions"
-      elif grep -F 'RuntimeDirectory=engineos' "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null; then
-        fail "engineos-engine-runner service lets systemd reset /run/engineos permissions"
-      elif grep -F 'UMask=0002' "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null &&
-          grep -F 'ExecStartPre=/usr/bin/install -d -m 2775 -o root -g wheel /run/engineos /var/log/engineos /var/lib/engineos' \
-          "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null &&
-          grep -F 'ExecStartPre=/usr/bin/chown root:wheel /run/engineos /var/log/engineos /var/lib/engineos' \
-          "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null &&
-          grep -F 'ExecStartPre=/usr/bin/chmod 2775 /run/engineos /var/log/engineos /var/lib/engineos' \
-          "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null &&
-          grep -F 'ExecStartPre=/usr/bin/touch /var/log/engineos/engine-runner.log /var/log/engineos/engine.log' \
-          "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null &&
-          grep -F 'ExecStartPre=/usr/bin/chown root:wheel /var/log/engineos/engine-runner.log /var/log/engineos/engine.log' \
-          "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null &&
-          grep -F 'ExecStartPre=/usr/bin/chmod 0664 /var/log/engineos/engine-runner.log /var/log/engineos/engine.log' \
-          "$ROOT/packages/engineos-engine-runner/files/usr/lib/systemd/system/engineos-engine-runner.service" >/dev/null; then
-        ok "engineos-engine-runner service preserves EngineOS log/state permissions"
-      else
-        fail "engineos-engine-runner service does not prepare writable EngineOS log/state dirs"
-      fi
-      ;;
-    engineos-quakespasm)
+	engineos-dgen)
+		require_file "packages/engineos-dgen/PKGBUILD"
+		if grep -Eq '^_commit=[0-9a-f]{40}$' "$ROOT/packages/engineos-dgen/PKGBUILD"; then
+			ok "engineos-dgen pins an exact source commit"
+		else
+			fail "engineos-dgen source is not pinned to an exact commit"
+		fi
+		;;
+	engineos-quakespasm)
       require_file "engines/quakespasm/engineos/build.sh"
       require_file "engines/quakespasm/engineos/fetch.sh"
-      require_file "engines/quakespasm/engineos/patches/0001-engineos-level-agent-console-commands.patch"
+		require_file "engines/quakespasm/engineos/patches/0001-engineos-level-agent-console-commands.patch"
+		require_file "tools/game/engineos_quake_service.py"
+		require_file "packages/engineos-quakespasm/files/usr/lib/systemd/user/engineos-quake.service"
       ;;
     engineos-quake-template)
       require_file "packages/engineos-quake-template/assets.toml"
@@ -351,8 +313,9 @@ check_package_inputs() {
       require_file "packages/engineos-trenchbroom/engineos-trenchbroom-wrapper"
       require_file "packages/engineos-trenchbroom/engineos-trenchbroom.desktop"
       ;;
-    engineos-level-agent)
-      require_file "tools/level-agent/engineos-level-agent"
+	engineos-level-agent)
+		require_file "tools/level-agent/engineos-level-agent"
+		require_file "packages/engineos-level-agent/files/usr/lib/systemd/user/engineos-level-agent.service"
       require_file "tools/level-agent/engineos_level_agent.py"
       require_file "tools/scripts/generate_dgen_wad.py"
       require_file "packages/engineos-level-agent/PKGBUILD"
@@ -382,10 +345,8 @@ check_installed_scripts() {
   require_abs_file "$INSTALLED_SCRIPT_DIR/installation_guide.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/update_check.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/observability.sh"
-  require_abs_file "$INSTALLED_SCRIPT_DIR/agent_route.sh"
-  require_abs_file "$INSTALLED_SCRIPT_DIR/agent_profile.sh"
-  require_abs_file "$INSTALLED_SCRIPT_DIR/agent_hygiene.sh"
-  require_abs_file "$INSTALLED_SCRIPT_DIR/agent_dispatcher.sh"
+	require_abs_file "$INSTALLED_SCRIPT_DIR/agent_router.py"
+	require_abs_file "$INSTALLED_SCRIPT_DIR/agent_hygiene.py"
   require_abs_file "$INSTALLED_SCRIPT_DIR/crash_bundle.sh"
   require_abs_file "$INSTALLED_EOS_DIR/builder/bootstrap_builder.sh"
   require_abs_file "$INSTALLED_EOS_DIR/builder/builder_handoff.sh"
@@ -423,11 +384,6 @@ check_installed_scripts() {
     check_abs_bash_syntax "$module"
   done
 
-  if [[ -x "$INSTALLED_ENGINEOS_BIN_DIR/engine-runner-daemon" ]]; then
-    ok "$INSTALLED_ENGINEOS_BIN_DIR/engine-runner-daemon"
-  else
-    warn "$INSTALLED_ENGINEOS_BIN_DIR/engine-runner-daemon missing; engine runner package may be absent"
-  fi
 }
 
 check_scripts() {
@@ -441,10 +397,6 @@ check_scripts() {
   require_file "tools/engineos/eos-source-test"
   require_file "tools/engineos/eos-wrapper"
   require_file "tools/engineos/generate-wrappers.sh"
-  require_file "tools/go/go.mod"
-  require_file "tools/go/cmd/engine-runner-daemon/main.go"
-  require_file "tools/go/internal/engineos/config.go"
-  require_file "tools/go/internal/engineos/jsonl.go"
   require_file "tools/eos/README.md"
   require_file "tools/eos/builder/bootstrap_builder.sh"
   require_file "tools/eos/builder/builder_handoff.sh"
@@ -477,7 +429,9 @@ check_scripts() {
   require_file "tools/scripts/terminal_launcher.sh"
   require_file "tools/scripts/capture_frame.sh"
   require_file "tools/scripts/doctor.sh"
-  require_file "tools/scripts/engine_runner.sh"
+	require_file "tools/scripts/game.sh"
+	require_file "tools/scripts/change_plan.py"
+	require_file "tools/scripts/dev_workflow.sh"
   require_file "tools/scripts/input_trace.sh"
   require_file "tools/scripts/logs.sh"
   require_file "tools/scripts/package_lint.sh"
@@ -485,10 +439,8 @@ check_scripts() {
   require_file "tools/scripts/shell_runner.sh"
   require_file "tools/scripts/update_check.sh"
   require_file "tools/scripts/observability.sh"
-  require_file "tools/scripts/agent_route.sh"
-  require_file "tools/scripts/agent_profile.sh"
-  require_file "tools/scripts/agent_hygiene.sh"
-  require_file "tools/scripts/agent_dispatcher.sh"
+	require_file "tools/scripts/agent_router.py"
+	require_file "tools/scripts/agent_hygiene.py"
   require_file "tools/scripts/validate_builder.sh"
   require_file "tools/scripts/validate_repo.sh"
   require_file "tools/scripts/validate_engine.sh"
@@ -533,7 +485,8 @@ check_scripts() {
   check_bash_syntax "tools/scripts/terminal_launcher.sh"
   check_bash_syntax "tools/scripts/capture_frame.sh"
   check_bash_syntax "tools/scripts/doctor.sh"
-  check_bash_syntax "tools/scripts/engine_runner.sh"
+	check_bash_syntax "tools/scripts/game.sh"
+	check_bash_syntax "tools/scripts/dev_workflow.sh"
   check_bash_syntax "tools/scripts/input_trace.sh"
   check_bash_syntax "tools/scripts/logs.sh"
   check_bash_syntax "tools/scripts/package_lint.sh"
@@ -541,10 +494,8 @@ check_scripts() {
   check_bash_syntax "tools/scripts/shell_runner.sh"
   check_bash_syntax "tools/scripts/update_check.sh"
   check_bash_syntax "tools/scripts/observability.sh"
-  check_bash_syntax "tools/scripts/agent_route.sh"
-  check_bash_syntax "tools/scripts/agent_profile.sh"
-  check_bash_syntax "tools/scripts/agent_hygiene.sh"
-  check_bash_syntax "tools/scripts/agent_dispatcher.sh"
+	check_abs_python_syntax "$ROOT/tools/scripts/agent_router.py"
+	check_abs_python_syntax "$ROOT/tools/scripts/agent_hygiene.py"
   check_bash_syntax "tools/scripts/validate_builder.sh"
   check_bash_syntax "tools/scripts/validate_repo.sh"
   check_bash_syntax "tools/scripts/validate_engine.sh"
@@ -568,8 +519,15 @@ check_scripts() {
 
 check_repo() {
   local pkg
+  local credential_file
   local packages=()
   local package_lint_args=()
+
+  shopt -s nullglob
+  for credential_file in "$ROOT"/pat_token*; do
+    fail "plaintext repository credential must be removed and revoked: ${credential_file#$ROOT/}"
+  done
+  shopt -u nullglob
 
   engineos_select_packages REQUESTED_PACKAGES packages
   while IFS= read -r arg; do
@@ -635,7 +593,7 @@ check_iso() {
     require_profile_package "$profile_dir" "ttf-dejavu"
     require_profile_package "$profile_dir" "engineos-cube"
     require_profile_package "$profile_dir" "engineos-shell"
-    require_profile_package "$profile_dir" "engineos-engine-runner"
+		require_profile_package "$profile_dir" "engineos-dgen"
     require_profile_package "$profile_dir" "engineos-quakespasm"
     require_profile_package "$profile_dir" "engineos-quake-template"
     require_profile_package "$profile_dir" "engineos-ericw-tools"
@@ -737,7 +695,7 @@ check_iso() {
     fi
     if grep -F 'chown root:wheel /var/log/engineos /var/lib/engineos' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null &&
         grep -F 'chmod 2775 /var/log/engineos /var/lib/engineos' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null &&
-        grep -F '/var/log/engineos/engine-runner.log' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null &&
+				grep -F '/var/log/engineos/engine.log' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null &&
         grep -F 'chmod 0664' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null; then
       ok "$profile_dir live setup repairs EngineOS state/log permissions"
     else
@@ -754,8 +712,7 @@ check_iso() {
     require_profile_package "$profile_dir" "ttf-dejavu"
     require_profile_package "$profile_dir" "engineos-cube"
     require_profile_package "$profile_dir" "engineos-shell"
-    require_profile_package "$profile_dir" "engineos-engine-runner"
-    require_profile_package "$profile_dir" "engineos-quakespasm"
+		require_profile_package "$profile_dir" "engineos-quakespasm"
     require_profile_package "$profile_dir" "engineos-quake-template"
     require_file "$profile_dir/airootfs/etc/issue"
     require_file "$profile_dir/airootfs/etc/udev/rules.d/70-engineos-device-access.rules"
@@ -831,7 +788,7 @@ check_iso() {
     fi
     if grep -F 'chown root:wheel /var/log/engineos /var/lib/engineos' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null &&
         grep -F 'chmod 2775 /var/log/engineos /var/lib/engineos' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null &&
-        grep -F '/var/log/engineos/engine-runner.log' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null &&
+				grep -F '/var/log/engineos/engine.log' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null &&
         grep -F 'chmod 0664' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-setup" >/dev/null; then
       ok "$profile_dir live setup repairs EngineOS state/log permissions"
     else
@@ -850,16 +807,16 @@ check_iso() {
     else
       fail "$profile_dir runtime service is not configured for the engineos user seat"
     fi
-    if grep -Fx 'Before=engineos-engine-runner.service engineos-runtime.service' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-live-setup.service" >/dev/null; then
+		if grep -Fx 'Before=engineos-runtime.service' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-live-setup.service" >/dev/null; then
       ok "$profile_dir live setup runs before runtime services"
     else
       fail "$profile_dir live setup ordering can block runtime services"
     fi
-    if ! grep -F 'ENGINEOS_STATE_DIR=/run/engineos' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-runtime.service" >/dev/null &&
-        grep -F 'ENGINEOS_ENGINE_SOCKET=/run/engineos/engine-runner.sock' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-runtime.service" >/dev/null; then
-      ok "$profile_dir runtime service separates app state from shared engine runner socket"
-    else
-      fail "$profile_dir runtime service couples app state to the shared engine runner socket"
+		if ! grep -F 'ENGINEOS_STATE_DIR=/run/engineos' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-runtime.service" >/dev/null &&
+				! grep -F 'ENGINEOS_ENGINE_SOCKET=' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-runtime.service" >/dev/null; then
+			ok "$profile_dir runtime service has no root engine-runner coupling"
+		else
+			fail "$profile_dir runtime service still couples app state to the removed engine runner"
     fi
     if grep -F 'systemctl enable getty@tty2.service' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null; then
       ok "$profile_dir enables recovery getty@tty2.service"
