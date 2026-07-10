@@ -198,6 +198,7 @@ struct engineos_shell_server {
 	int mux_terminal_height;
 	uint32_t mux_terminal_glyph_cells;
 	struct wl_event_source *pane_binding_timer;
+	struct wl_event_source *mux_event_source;
 	struct wl_list outputs;
 	struct wl_list views;
 	struct wl_list keyboards;
@@ -2346,6 +2347,52 @@ static bool setup_native_terminal_scene(struct engineos_shell_server *server) {
 		server->mux_terminal_width, server->mux_terminal_height,
 		server->mux_terminal_glyph_cells);
 	return true;
+}
+
+static int native_mux_event(int fd, uint32_t mask, void *data) {
+	(void)fd;
+	struct engineos_shell_server *server = data;
+	if (mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) {
+		wlr_log(WLR_ERROR, "native mux connection failed event_mask=0x%x", mask);
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+		return 0;
+	}
+	bool changed = false;
+	char error[256] = {0};
+	if (!engineos_mux_client_handle_event(&server->mux_client, &changed,
+			error, sizeof(error))) {
+		wlr_log(WLR_ERROR, "native mux update failed: %s", error);
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+		return 0;
+	}
+	if (!changed) return 0;
+	int width = 0, height = 0;
+	uint32_t glyph_cells = 0;
+	struct wlr_buffer *buffer = engineos_terminal_render(&server->mux_client,
+		&width, &height, &glyph_cells, error, sizeof(error));
+	if (buffer == NULL) {
+		wlr_log(WLR_ERROR, "native terminal damage render failed: %s", error);
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+		return 0;
+	}
+	wlr_scene_buffer_set_buffer(server->mux_terminal_scene, buffer);
+	if (server->mux_terminal_buffer != NULL)
+		wlr_buffer_drop(server->mux_terminal_buffer);
+	server->mux_terminal_buffer = buffer;
+	server->mux_terminal_width = width;
+	server->mux_terminal_height = height;
+	server->mux_terminal_glyph_cells = glyph_cells;
+	wlr_log(WLR_DEBUG,
+		"native terminal damage pane=%%%u grid_revision=%llu pixels=%dx%d glyph_cells=%u",
+		server->mux_client.pane_id,
+		(unsigned long long)server->mux_client.grid_revision,
+		width, height, glyph_cells);
+	schedule_outputs(server);
+	write_shell_state(server, "native-grid-damage");
+	return 0;
 }
 
 static void hide_image_preview(struct engineos_shell_server *server,
@@ -5846,6 +5893,10 @@ static void destroy_server(struct engineos_shell_server *server) {
 		wl_event_source_remove(server->pane_binding_timer);
 		server->pane_binding_timer = NULL;
 	}
+	if (server->mux_event_source != NULL) {
+		wl_event_source_remove(server->mux_event_source);
+		server->mux_event_source = NULL;
+	}
 	if (!wl_list_empty(&server->pane_bindings)) {
 		struct engineos_pane_binding *binding;
 		struct engineos_pane_binding *tmp;
@@ -6091,6 +6142,17 @@ int main(int argc, char **argv) {
 	}
 
 	struct wl_event_loop *event_loop = wl_display_get_event_loop(server.display);
+	if (server.mux_mode == ENGINEOS_MUX_NATIVE) {
+		server.mux_event_source = wl_event_loop_add_fd(event_loop,
+			server.mux_client.fd,
+			WL_EVENT_READABLE | WL_EVENT_HANGUP | WL_EVENT_ERROR,
+			native_mux_event, &server);
+		if (server.mux_event_source == NULL) {
+			wlr_log(WLR_ERROR, "failed to register native mux event source");
+			destroy_server(&server);
+			return 1;
+		}
+	}
 	wl_event_loop_add_signal(event_loop, SIGINT, terminate_from_signal, &server);
 	wl_event_loop_add_signal(event_loop, SIGTERM, terminate_from_signal, &server);
 	wl_event_loop_add_signal(event_loop, SIGHUP, relayout_from_signal, &server);

@@ -32,8 +32,10 @@ Native mode also selects the active tmux pane, validates and retains its full
 binary terminal grid, and records pane identity, grid revision, dimensions,
 cursor, and nonblank-cell evidence in `shell-state.json`. A pane-local scene
 subtree displays a CPU-rasterized FreeType terminal buffer through wlroots
-composition. Damage refresh, glyph-atlas caching, and live hardware acceptance
-remain before native mode becomes the default.
+composition. Flow-controlled server invalidations drive sparse grid updates
+through the compositor event loop; no polling process is involved. Glyph-atlas
+caching, native input, and live hardware acceptance remain before native mode
+becomes the default.
 
 ## Surface Model
 

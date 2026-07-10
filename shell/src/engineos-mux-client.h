@@ -25,6 +25,8 @@ struct engineos_mux_client {
 
 bool engineos_mux_client_connect(struct engineos_mux_client *client,
 	const char *socket_path, char *error, size_t error_size);
+bool engineos_mux_client_handle_event(struct engineos_mux_client *client,
+	bool *grid_changed, char *error, size_t error_size);
 void engineos_mux_client_destroy(struct engineos_mux_client *client);
 
 #endif

@@ -57,6 +57,10 @@ The migration is side by side and disabled by default:
   wlroots composes the buffer. The headless contract proves a nonblank frame,
   including wide/combining source cells. Ongoing damage consumption, an atlas,
   and bare-metal GPU acceptance are still required.
+- Grid subscriptions are event-driven. The server allows one outstanding
+  invalidation per client, the shell requests and applies the corresponding
+  sparse damage through the Wayland event loop, and stale revisions resync with
+  a full grid. Bursty writes cannot queue invalidations out of order.
 
 The in-server frontend exposes `layout-snapshot`, `terminal-grid-v1`,
 revisioned grid damage, paged scrollback, and copy-mode state. Command

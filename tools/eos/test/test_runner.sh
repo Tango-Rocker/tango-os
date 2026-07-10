@@ -159,6 +159,7 @@ run_mux() {
 	local first_revision second_revision focus_revision pane_count pane_id
 	local grid_revision damage_revision
 	local history_rows history_start
+	local shell_pid="" initial_native_revision updated_native_revision
 
 	if [[ -z "$mux_bin" ]]; then
 		mux_bin="$ROOT/artifacts/build/engineos-mux/engineos-mux/src/tmux-$mux_commit/tmux"
@@ -174,6 +175,10 @@ run_mux() {
 	mkdir -p "$fixture"
 	chmod 0700 "$fixture"
 	cleanup_mux_test() {
+		if [[ -n "$shell_pid" ]]; then
+			kill "$shell_pid" >/dev/null 2>&1 || true
+			wait "$shell_pid" 2>/dev/null || true
+		fi
 		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 			kill-server >/dev/null 2>&1 || true
 		rm -rf "$fixture"
@@ -346,17 +351,42 @@ run_mux() {
 	XDG_RUNTIME_DIR="$fixture" ENGINEOS_STATE_DIR="$fixture/engineos" \
 		ENGINEOS_MUX_SOCKET="$fixture/engineos/mux.sock" \
 		WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 WLR_RENDERER=pixman \
-		"$shell_build_dir/engineos-shell" --headless --smoke-ms 100 \
-		--bootstrap none --mux native >"$fixture/shell-native.log" 2>&1 ||
-		die "engineos-shell did not start after a valid native mux snapshot"
+		"$shell_build_dir/engineos-shell" --headless --smoke-ms 1000 \
+		--bootstrap none --mux native >"$fixture/shell-native.log" 2>&1 &
+	shell_pid=$!
+	for _ in {1..100}; do
+		[[ -f "$fixture/engineos/shell-state.json" ]] &&
+			jq -e '.mux.grid.rendered == true' \
+				"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	[[ -f "$fixture/engineos/shell-state.json" ]] ||
+		die "engineos-shell did not publish native grid state"
+	initial_native_revision="$(jq -er '.mux.grid.revision' \
+		"$fixture/engineos/shell-state.json")"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -t contract:0.1 "printf EVENT-DRIVEN-DAMAGE" Enter
+	updated_native_revision="$initial_native_revision"
+	for _ in {1..100}; do
+		updated_native_revision="$(jq -er '.mux.grid.revision' \
+			"$fixture/engineos/shell-state.json")"
+		[[ "$updated_native_revision" -gt "$initial_native_revision" ]] && break
+		sleep 0.02
+	done
+	[[ "$updated_native_revision" -gt "$initial_native_revision" ]] ||
+		die "native shell did not consume event-driven grid damage"
+	wait "$shell_pid" || die "engineos-shell native damage run failed"
+	shell_pid=""
 	jq -e '.mux.mode == "native" and .mux.connected == true and
 		.mux.revision >= 1 and .mux.generation == 1 and
 		.mux.grid.revision >= 1 and .mux.grid.columns > 0 and
 		.mux.grid.rows > 0 and .mux.grid.nonblank_cells > 0 and
 		.mux.grid.rendered == true and .mux.grid.pixel_width > 0 and
 		.mux.grid.pixel_height > 0 and .mux.grid.glyph_cells > 0' \
-		"$fixture/engineos/shell-state.json" >/dev/null ||
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '.mux' "$fixture/engineos/shell-state.json" >&2 || true
 		die "shell state did not expose native mux revision evidence"
+	}
 
 	printf 'engine-mux protocol contract test passed\n'
 }
