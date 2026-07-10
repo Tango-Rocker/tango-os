@@ -10,8 +10,9 @@ session, window, and pane structures.
 `engine-mux` exposes a private `SOCK_SEQPACKET` socket at
 `$XDG_RUNTIME_DIR/engineos/mux.sock`. Frames have a fixed network-byte-order
 header and a bounded payload. The implemented v1 messages are handshake,
-complete layout snapshot, and explicit errors. Unsupported command or grid
-messages fail; they are not reported as successful.
+complete layout snapshot, full binary terminal-grid snapshot, and explicit
+errors. Unsupported command and grid-damage messages fail; they are not
+reported as successful.
 
 Run a local contract proof:
 
@@ -21,5 +22,5 @@ meson compile -C build/mux
 ./tools/engineos/eos-test mux
 ```
 
-The next migration proof is to export terminal grid snapshots and damage
-before the shell renders a terminal pane.
+The next migration proof is to export revisioned terminal-grid damage before
+the shell renders a terminal pane.

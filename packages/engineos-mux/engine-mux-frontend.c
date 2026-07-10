@@ -217,6 +217,63 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 	return (result);
 }
 
+static u_char *
+engine_mux_build_grid(struct window_pane *pane, size_t *size)
+{
+	struct screen *screen = pane->screen;
+	struct engine_mux_grid_header *header;
+	struct engine_mux_grid_cell *wire_cell;
+	struct grid_cell cell;
+	u_char *payload;
+	u_int x, y, columns, rows;
+	size_t cell_count;
+	uint16_t flags = 0;
+
+	columns = screen_size_x(screen);
+	rows = screen_size_y(screen);
+	if (columns != 0 && rows > SIZE_MAX / columns)
+		return (NULL);
+	cell_count = (size_t)columns * rows;
+	if (cell_count > (ENGINE_MUX_MAX_PAYLOAD - sizeof *header) /
+	    sizeof *wire_cell)
+		return (NULL);
+	*size = sizeof *header + cell_count * sizeof *wire_cell;
+	payload = xcalloc(1, *size);
+	header = (struct engine_mux_grid_header *)payload;
+	if (SCREEN_IS_ALTERNATE(&pane->base))
+		flags |= ENGINE_MUX_GRID_ALTERNATE;
+	if (screen->mode & MODE_CURSOR)
+		flags |= ENGINE_MUX_GRID_CURSOR_VISIBLE;
+	header->version = htons(ENGINE_MUX_GRID_VERSION);
+	header->flags = htons(flags);
+	header->pane_id = htonl(pane->id);
+	header->generation = htonl(1);
+	header->columns = htonl(columns);
+	header->rows = htonl(rows);
+	header->cursor_x = htonl(screen->cx);
+	header->cursor_y = htonl(screen->cy);
+	header->cursor_style = htons(screen->cstyle);
+	header->cursor_colour = htonl((uint32_t)screen->ccolour);
+	header->screen_mode = htonl((uint32_t)screen->mode);
+	header->cell_count = htonl((uint32_t)cell_count);
+	wire_cell = (struct engine_mux_grid_cell *)(header + 1);
+	for (y = 0; y < rows; y++) {
+		for (x = 0; x < columns; x++, wire_cell++) {
+			grid_view_get_cell(screen->grid, x, y, &cell);
+			wire_cell->attributes = htons(cell.attr);
+			wire_cell->flags = cell.flags;
+			wire_cell->width = cell.data.width;
+			wire_cell->text_length = cell.data.have;
+			wire_cell->foreground = htonl((uint32_t)cell.fg);
+			wire_cell->background = htonl((uint32_t)cell.bg);
+			wire_cell->underline_colour = htonl((uint32_t)cell.us);
+			wire_cell->hyperlink = htonl(cell.link);
+			memcpy(wire_cell->text, cell.data.data, cell.data.have);
+		}
+	}
+	return (payload);
+}
+
 void
 engine_mux_frontend_sync(void)
 {
@@ -323,9 +380,13 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	uint32_t payload_size;
 	uint16_t type;
 	uint64_t request_id, request_revision;
+	struct engine_mux_grid_request grid_request;
+	struct window_pane *pane;
+	u_char *grid_payload;
+	size_t grid_size;
 	const char *hello =
 	    "{\"schema\":\"engine-mux/hello-v1\",\"server\":\"engine-mux\","
-	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\"]}";
+	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\"]}";
 
 	packet_size = sizeof header + ENGINE_MUX_MAX_PAYLOAD;
 	packet = xmalloc(packet_size);
@@ -367,16 +428,17 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 			engine_mux_client_free(client);
 		return;
 	}
-	free(packet);
 	type = ntohs(header.type);
 	request_revision = engine_mux_be64_to_host(header.state_revision);
 	if (type == ENGINE_MUX_CLIENT_HELLO) {
+		free(packet);
 		if (engine_mux_send_frame(client->fd, ENGINE_MUX_SERVER_HELLO,
 		    request_id, engine_mux_revision, hello, strlen(hello)) != 0)
 			engine_mux_client_free(client);
 		return;
 	}
 	if (type == ENGINE_MUX_SNAPSHOT_REQUEST) {
+		free(packet);
 		engine_mux_frontend_sync();
 		if (engine_mux_send_frame(client->fd, ENGINE_MUX_SNAPSHOT,
 		    request_id, engine_mux_revision, engine_mux_snapshot,
@@ -384,6 +446,44 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 			engine_mux_client_free(client);
 		return;
 	}
+	if (type == ENGINE_MUX_GRID_REQUEST) {
+		if (payload_size != sizeof grid_request) {
+			free(packet);
+			if (engine_mux_send_error(client->fd, request_id,
+			    "malformed-grid-request", "grid request has the wrong size") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		memcpy(&grid_request, packet + sizeof header, sizeof grid_request);
+		free(packet);
+		if (ntohl(grid_request.generation) != 1) {
+			if (engine_mux_send_error(client->fd, request_id,
+			    "stale-generation", "pane generation is not current") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		pane = window_pane_find_by_id(ntohl(grid_request.pane_id));
+		if (pane == NULL) {
+			if (engine_mux_send_error(client->fd, request_id,
+			    "pane-not-found", "pane does not exist") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		grid_payload = engine_mux_build_grid(pane, &grid_size);
+		if (grid_payload == NULL) {
+			if (engine_mux_send_error(client->fd, request_id,
+			    "grid-too-large", "pane grid exceeds the protocol payload limit") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		if (engine_mux_send_frame(client->fd, ENGINE_MUX_GRID_SNAPSHOT,
+		    request_id, engine_mux_revision, (char *)grid_payload,
+		    grid_size) != 0)
+			engine_mux_client_free(client);
+		free(grid_payload);
+		return;
+	}
+	free(packet);
 	if (type == ENGINE_MUX_COMMAND_REQUEST &&
 	    request_revision != engine_mux_revision) {
 		if (engine_mux_send_error(client->fd, request_id,

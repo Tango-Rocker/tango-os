@@ -99,7 +99,7 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration stage 1 is installed side by side as
-  `engineos-mux 3.6b-2`, but native mode is not yet the live desktop default.
+  `engineos-mux 3.6b-3`, but native mode is not yet the live desktop default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
   fork server now owns the same-user `SOCK_SEQPACKET` frontend and constructs
@@ -112,8 +112,11 @@ These are historical proof artifacts only; they are not the active work path:
   and user unit are absent from the live package. `engineos-shell
   --mux native` requires that handshake and snapshot before compositor startup,
   exposes the observed revision in `shell-state.json`, and fails instead of
-  falling back when the mux service is absent. This is a protocol foundation;
-  terminal grid transport/rendering remains unimplemented.
+  falling back when the mux service is absent. The server now exports full
+  visible terminal grids as bounded binary cell frames preserving UTF-8,
+  combining and wide characters, colour, attributes, hyperlinks, cursor, and
+  alternate-screen metadata. Grid damage, scrollback, and native shell
+  rendering remain unimplemented.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 

@@ -106,8 +106,124 @@ static int exchange(int fd, uint16_t type, uint64_t request_id,
 	return 0;
 }
 
+static int request_grid(int fd, uint32_t pane_id) {
+	struct engine_mux_grid_request request = {
+		.pane_id = htonl(pane_id),
+		.generation = htonl(1),
+	};
+	struct engine_mux_frame_header frame = {
+		.magic = htonl(ENGINE_MUX_MAGIC),
+		.version = htons(ENGINE_MUX_PROTOCOL_VERSION),
+		.type = htons(ENGINE_MUX_GRID_REQUEST),
+		.request_id = host_to_be64(3),
+		.payload_length = htonl(sizeof(request)),
+	};
+	struct iovec parts[] = {
+		{.iov_base = &frame, .iov_len = sizeof(frame)},
+		{.iov_base = &request, .iov_len = sizeof(request)},
+	};
+	struct msghdr message = {.msg_iov = parts, .msg_iovlen = 2};
+	if (sendmsg(fd, &message, MSG_NOSIGNAL) < 0) {
+		return -1;
+	}
+	size_t capacity = sizeof(frame) + ENGINE_MUX_MAX_PAYLOAD;
+	unsigned char *packet = malloc(capacity);
+	if (packet == NULL) {
+		return -1;
+	}
+	ssize_t count = recv(fd, packet, capacity, 0);
+	if (count < (ssize_t)(sizeof(frame) + sizeof(struct engine_mux_grid_header))) {
+		free(packet);
+		errno = EPROTO;
+		return -1;
+	}
+	memcpy(&frame, packet, sizeof(frame));
+	uint32_t payload_length = ntohl(frame.payload_length);
+	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
+			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
+			ntohs(frame.type) != ENGINE_MUX_GRID_SNAPSHOT ||
+			payload_length > ENGINE_MUX_MAX_PAYLOAD ||
+			sizeof(frame) + payload_length != (size_t)count) {
+		free(packet);
+		errno = EPROTO;
+		return -1;
+	}
+	struct engine_mux_grid_header header;
+	memcpy(&header, packet + sizeof(frame), sizeof(header));
+	uint32_t columns = ntohl(header.columns);
+	uint32_t rows = ntohl(header.rows);
+	uint32_t cell_count = ntohl(header.cell_count);
+	if (ntohs(header.version) != ENGINE_MUX_GRID_VERSION ||
+			(columns != 0 && rows > UINT32_MAX / columns) ||
+			cell_count != columns * rows ||
+			payload_length != sizeof(header) +
+				(size_t)cell_count * sizeof(struct engine_mux_grid_cell)) {
+		free(packet);
+		errno = EPROTO;
+		return -1;
+	}
+	const unsigned char *cell_bytes = packet + sizeof(frame) + sizeof(header);
+	struct json_object *root = json_object_new_object();
+	struct json_object *text_rows = json_object_new_array();
+	json_object_object_add(root, "schema", json_object_new_string("engine-mux/grid-v1"));
+	json_object_object_add(root, "pane_id", json_object_new_int64(ntohl(header.pane_id)));
+	json_object_object_add(root, "generation", json_object_new_int64(ntohl(header.generation)));
+	json_object_object_add(root, "columns", json_object_new_int64(columns));
+	json_object_object_add(root, "rows", json_object_new_int64(rows));
+	json_object_object_add(root, "cursor_x", json_object_new_int64(ntohl(header.cursor_x)));
+	json_object_object_add(root, "cursor_y", json_object_new_int64(ntohl(header.cursor_y)));
+	json_object_object_add(root, "cursor_style", json_object_new_int(ntohs(header.cursor_style)));
+	json_object_object_add(root, "flags", json_object_new_int(ntohs(header.flags)));
+	json_object_object_add(root, "cell_count", json_object_new_int64(cell_count));
+	uint32_t styled_cells = 0, coloured_cells = 0, wide_cells = 0;
+	uint32_t hyperlink_cells = 0;
+	for (uint32_t y = 0; y < rows; y++) {
+		size_t row_capacity = (size_t)columns * ENGINE_MUX_GRID_CELL_TEXT_MAX + 1;
+		char *row_text = malloc(row_capacity);
+		if (row_text == NULL) {
+			json_object_put(root);
+			free(packet);
+			return -1;
+		}
+		size_t used = 0;
+		for (uint32_t x = 0; x < columns; x++) {
+			struct engine_mux_grid_cell cell;
+			memcpy(&cell, cell_bytes, sizeof(cell));
+			cell_bytes += sizeof(cell);
+			if (cell.text_length > ENGINE_MUX_GRID_CELL_TEXT_MAX) {
+				free(row_text);
+				json_object_put(root);
+				free(packet);
+				errno = EPROTO;
+				return -1;
+			}
+			if ((cell.flags & ENGINE_MUX_GRID_CELL_PADDING) == 0) {
+				memcpy(row_text + used, cell.text, cell.text_length);
+				used += cell.text_length;
+			}
+			if (ntohs(cell.attributes) != 0) styled_cells++;
+			if ((int32_t)ntohl(cell.foreground) != 8 ||
+					(int32_t)ntohl(cell.background) != 8) coloured_cells++;
+			if (cell.width == 2) wide_cells++;
+			if (ntohl(cell.hyperlink) != 0) hyperlink_cells++;
+		}
+		json_object_array_add(text_rows,
+			json_object_new_string_len(row_text, (int)used));
+		free(row_text);
+	}
+	json_object_object_add(root, "text_rows", text_rows);
+	json_object_object_add(root, "styled_cells", json_object_new_int64(styled_cells));
+	json_object_object_add(root, "coloured_cells", json_object_new_int64(coloured_cells));
+	json_object_object_add(root, "wide_cells", json_object_new_int64(wide_cells));
+	json_object_object_add(root, "hyperlink_cells", json_object_new_int64(hyperlink_cells));
+	printf("%s\n", json_object_to_json_string_ext(root, JSON_C_TO_STRING_PRETTY));
+	json_object_put(root);
+	free(packet);
+	return 0;
+}
+
 static void usage(FILE *stream, const char *program) {
-	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command\n", program);
+	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -126,7 +242,13 @@ int main(int argc, char **argv) {
 		default: usage(stderr, argv[0]); return 2;
 		}
 	}
-	if (optind + 1 != argc) {
+	if (optind >= argc) {
+		usage(stderr, argv[0]);
+		return 2;
+	}
+	const char *command = argv[optind];
+	if ((strcmp(command, "grid") == 0 && optind + 2 != argc) ||
+			(strcmp(command, "grid") != 0 && optind + 1 != argc)) {
 		usage(stderr, argv[0]);
 		return 2;
 	}
@@ -144,7 +266,22 @@ int main(int argc, char **argv) {
 		free(owned_socket);
 		return 1;
 	}
-	const char *command = argv[optind];
+	if (strcmp(command, "grid") == 0) {
+		const char *pane_text = argv[optind + 1];
+		if (*pane_text == '%') pane_text++;
+		char *end = NULL;
+		unsigned long pane_id = strtoul(pane_text, &end, 10);
+		if (*pane_text == '\0' || *end != '\0' || pane_id > UINT32_MAX ||
+				request_grid(fd, (uint32_t)pane_id) != 0) {
+			fprintf(stderr, "engine-muxctl: grid request failed: %s\n", strerror(errno));
+			close(fd);
+			free(owned_socket);
+			return 1;
+		}
+		close(fd);
+		free(owned_socket);
+		return 0;
+	}
 	uint16_t request_type = ENGINE_MUX_CLIENT_HELLO;
 	uint64_t request_revision = 0;
 	const char *request_payload = "{\"client\":\"engine-muxctl\"}";

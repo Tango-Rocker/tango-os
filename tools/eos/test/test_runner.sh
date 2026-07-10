@@ -156,7 +156,7 @@ run_mux() {
 	local fixture="${TMPDIR:-/tmp}/engineos-mux-test-$$"
 	local mux_bin="${ENGINEOS_MUX_BIN:-}"
 	local mux_commit="0623d1e968423ad0c192e0d8debf1258671063d5"
-	local first_revision second_revision focus_revision pane_count
+	local first_revision second_revision focus_revision pane_count pane_id
 
 	if [[ -z "$mux_bin" ]]; then
 		mux_bin="$ROOT/artifacts/build/engineos-mux/engineos-mux/src/tmux-$mux_commit/tmux"
@@ -213,7 +213,8 @@ run_mux() {
 		die "engine-mux frontend socket permissions are not private"
 
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" hello >"$fixture/hello.json"
-	jq -e '.server == "engine-mux"' "$fixture/hello.json" >/dev/null ||
+	jq -e '.server == "engine-mux" and (.capabilities | index("terminal-grid-v1"))' \
+		"$fixture/hello.json" >/dev/null ||
 		die "mux protocol was not served by engine-mux"
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot >"$fixture/first.json"
 	first_revision="$(jq -er '.revision' "$fixture/first.json")"
@@ -222,6 +223,23 @@ run_mux() {
 		die "initial mux snapshot did not contain one pane"
 	jq -e '.panes[0].command | contains("/") | not' "$fixture/first.json" >/dev/null ||
 		die "mux snapshot did not normalize pane_current_command metadata"
+	pane_id="$(jq -er '.panes[0].pane_id' "$fixture/first.json")"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -t "$pane_id" "printf 'A\\033[31mR\\033[0m界é'" Enter
+	for _ in {1..100}; do
+		XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" grid "$pane_id" \
+			>"$fixture/grid.json"
+		if jq -e '[.text_rows[] | contains("AR界é")] | any' \
+				"$fixture/grid.json" >/dev/null; then
+			break
+		fi
+		sleep 0.02
+	done
+	jq -e '.schema == "engine-mux/grid-v1" and
+		.cell_count == (.columns * .rows) and .coloured_cells >= 1 and
+		.wide_cells >= 1 and ([.text_rows[] | contains("AR界é")] | any)' \
+		"$fixture/grid.json" >/dev/null ||
+		die "binary terminal grid did not preserve text, colour, and wide cells"
 	for index in {1..8}; do
 		XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot \
 			>"$fixture/concurrent-$index.json" &
