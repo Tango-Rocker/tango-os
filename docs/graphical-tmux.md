@@ -1,5 +1,9 @@
 # Graphical tmux migration
 
+The complete objective, ordered workstreams, and final acceptance contract are
+defined in [graphical-tmux-goal.md](graphical-tmux-goal.md). This document
+records the migration design and current implemented foundation.
+
 EngineOS is migrating from the tmux pane bridge to a native graphical frontend
 for a tmux 3.6b fork. Tmux remains authoritative for sessions, windows, panes,
 PTYs, terminal grids, commands, and layout. `engineos-shell` remains the

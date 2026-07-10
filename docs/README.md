@@ -6,6 +6,8 @@ Use these files by purpose:
 - [../ROADMAP.md](../ROADMAP.md): short phase map
 - [mvp-plan.md](mvp-plan.md): proof ladder from PoC 0 to MVP
 - [architecture.md](architecture.md): stable system layout and build model
+- [graphical-tmux-goal.md](graphical-tmux-goal.md): canonical native graphical tmux objective and acceptance contract
+- [graphical-tmux.md](graphical-tmux.md): current graphical tmux migration design and implemented foundation
 - [builder-vm-hyperv.md](builder-vm-hyperv.md): legacy Windows Hyper-V builder reference
 - [dev-instance.md](dev-instance.md): live bare-metal EngineDev bootstrap and refresh
 - [agent-harness.md](agent-harness.md): command policy for agents

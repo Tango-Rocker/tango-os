@@ -108,6 +108,8 @@ These are historical proof artifacts only; they are not the active work path:
   falling back when the mux service is absent. This is a protocol foundation;
   the fork has only the isolated baseline patch, while in-server frontend
   integration and terminal grid transport/rendering remain unimplemented.
+  The canonical completion contract is
+  [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 
 ## Not Yet Proven
 
