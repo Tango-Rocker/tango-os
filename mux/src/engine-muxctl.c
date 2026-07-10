@@ -410,8 +410,59 @@ static int request_scrollback(int fd, uint32_t pane_id, uint32_t start,
 	return 0;
 }
 
+static int send_input(int fd, uint32_t pane_id, const char *bytes) {
+	size_t length = strlen(bytes);
+	if (length == 0 || length > ENGINE_MUX_INPUT_MAX) {
+		errno = EMSGSIZE;
+		return -1;
+	}
+	struct engine_mux_input_header request = {
+		.pane_id = htonl(pane_id),
+		.generation = htonl(1),
+		.byte_length = htons((uint16_t)length),
+	};
+	struct engine_mux_frame_header frame = {
+		.magic = htonl(ENGINE_MUX_MAGIC),
+		.version = htons(ENGINE_MUX_PROTOCOL_VERSION),
+		.type = htons(ENGINE_MUX_INPUT_REQUEST),
+		.request_id = host_to_be64(6),
+		.payload_length = htonl((uint32_t)(sizeof(request) + length)),
+	};
+	struct iovec parts[] = {
+		{.iov_base = &frame, .iov_len = sizeof(frame)},
+		{.iov_base = &request, .iov_len = sizeof(request)},
+		{.iov_base = (char *)bytes, .iov_len = length},
+	};
+	struct msghdr message = {.msg_iov = parts, .msg_iovlen = 3};
+	if (sendmsg(fd, &message, MSG_NOSIGNAL) < 0) return -1;
+	unsigned char packet[sizeof(frame) + 512];
+	ssize_t count = recv(fd, packet, sizeof(packet), 0);
+	if (count < (ssize_t)sizeof(frame)) { errno = EPROTO; return -1; }
+	memcpy(&frame, packet, sizeof(frame));
+	uint32_t payload_length = ntohl(frame.payload_length);
+	uint16_t type = ntohs(frame.type);
+	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
+			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
+			payload_length > sizeof(packet) - sizeof(frame) ||
+			sizeof(frame) + payload_length != (size_t)count) {
+		errno = EPROTO;
+		return -1;
+	}
+	char *text = malloc((size_t)payload_length + 1);
+	if (text == NULL) return -1;
+	memcpy(text, packet + sizeof(frame), payload_length);
+	text[payload_length] = '\0';
+	struct json_object *root = json_tokener_parse(text);
+	free(text);
+	if (root == NULL) { errno = EPROTO; return -1; }
+	printf("%s\n", json_object_to_json_string_ext(root, JSON_C_TO_STRING_PRETTY));
+	json_object_put(root);
+	if (type != ENGINE_MUX_INPUT_ACK) { errno = EPROTO; return -1; }
+	return 0;
+}
+
 static void usage(FILE *stream, const char *program) {
-	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT\n", program);
+	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT|input PANE_ID BYTES\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -439,11 +490,13 @@ int main(int argc, char **argv) {
 	bool is_damage = strcmp(command, "damage") == 0;
 	bool is_stale_grid = strcmp(command, "stale-grid") == 0;
 	bool is_scrollback = strcmp(command, "scrollback") == 0;
+	bool is_input = strcmp(command, "input") == 0;
 	if ((is_grid && optind + 2 != argc) ||
 			(is_damage && optind + 3 != argc) ||
 			(is_stale_grid && optind + 2 != argc) ||
 			(is_scrollback && optind + 4 != argc) ||
-			(!is_grid && !is_damage && !is_stale_grid && !is_scrollback &&
+			(is_input && optind + 3 != argc) ||
+			(!is_grid && !is_damage && !is_stale_grid && !is_scrollback && !is_input &&
 			 optind + 1 != argc)) {
 		usage(stderr, argv[0]);
 		return 2;
@@ -462,7 +515,7 @@ int main(int argc, char **argv) {
 		free(owned_socket);
 		return 1;
 	}
-	if (is_grid || is_damage || is_stale_grid || is_scrollback) {
+	if (is_grid || is_damage || is_stale_grid || is_scrollback || is_input) {
 		const char *pane_text = argv[optind + 1];
 		if (*pane_text == '%') pane_text++;
 		char *end = NULL;
@@ -481,7 +534,10 @@ int main(int argc, char **argv) {
 			return 2;
 		}
 		int grid_result;
-		if (is_scrollback) {
+		if (is_input) {
+			grid_result = send_input(fd, (uint32_t)pane_id,
+				argv[optind + 2]);
+		} else if (is_scrollback) {
 			char *start_end = NULL, *count_end = NULL;
 			unsigned long start = strtoul(argv[optind + 2], &start_end, 10);
 			unsigned long rows = strtoul(argv[optind + 3], &count_end, 10);
@@ -498,7 +554,7 @@ int main(int argc, char **argv) {
 				grid_revision, is_stale_grid);
 		}
 		if (grid_result != 0) {
-			fprintf(stderr, "engine-muxctl: grid request failed: %s\n", strerror(errno));
+			fprintf(stderr, "engine-muxctl: request failed: %s\n", strerror(errno));
 			close(fd);
 			free(owned_socket);
 			return 1;

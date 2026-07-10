@@ -291,6 +291,8 @@ engine_mux_build_grid(struct window_pane *pane, size_t *size)
 		flags |= ENGINE_MUX_GRID_ALTERNATE;
 	if (screen->mode & MODE_CURSOR)
 		flags |= ENGINE_MUX_GRID_CURSOR_VISIBLE;
+	if (screen->mode & MODE_KCURSOR)
+		flags |= ENGINE_MUX_GRID_CURSOR_KEYS_APPLICATION;
 	header->version = htons(ENGINE_MUX_GRID_VERSION);
 	header->flags = htons(flags);
 	header->pane_id = htonl(pane->id);
@@ -660,14 +662,17 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	struct engine_mux_grid_request grid_request;
 	struct engine_mux_grid_damage_request damage_request;
 	struct engine_mux_scrollback_request scrollback_request;
+	struct engine_mux_input_header input_header;
 	struct window_pane *pane;
 	u_char *scrollback;
 	size_t scrollback_size;
 	const char *hello =
 	    "{\"schema\":\"engine-mux/hello-v1\",\"server\":\"engine-mux\","
-	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\"]}";
+	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\"]}";
 	const char *subscribe_ack =
 	    "{\"schema\":\"engine-mux/grid-subscribe-v1\",\"subscribed\":true}";
+	const char *input_ack =
+	    "{\"schema\":\"engine-mux/pane-input-v1\",\"accepted\":true}";
 
 	packet_size = sizeof header + ENGINE_MUX_MAX_PAYLOAD;
 	packet = xmalloc(packet_size);
@@ -894,6 +899,51 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 		    scrollback_size) != 0)
 			engine_mux_client_free(client);
 		free(scrollback);
+		return;
+	}
+	if (type == ENGINE_MUX_INPUT_REQUEST) {
+		u_int input_length;
+
+		if (payload_size < sizeof input_header) {
+			free(packet);
+			if (engine_mux_send_error(client->fd, request_id,
+			    "malformed-input-request", "pane input header is truncated") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		memcpy(&input_header, packet + sizeof header, sizeof input_header);
+		input_length = ntohs(input_header.byte_length);
+		if (ntohs(input_header.flags) != 0 || input_length == 0 ||
+		    input_length > ENGINE_MUX_INPUT_MAX ||
+		    payload_size != sizeof input_header + input_length) {
+			free(packet);
+			if (engine_mux_send_error(client->fd, request_id,
+			    "malformed-input-request", "pane input payload is invalid") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		if (ntohl(input_header.generation) != 1) {
+			free(packet);
+			if (engine_mux_send_error(client->fd, request_id,
+			    "stale-generation", "pane generation is not current") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		pane = window_pane_find_by_id(ntohl(input_header.pane_id));
+		if (pane == NULL) {
+			free(packet);
+			if (engine_mux_send_error(client->fd, request_id,
+			    "pane-not-found", "pane does not exist") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		window_pane_paste(pane, KEYC_NONE,
+		    (char *)packet + sizeof header + sizeof input_header,
+		    input_length);
+		free(packet);
+		if (engine_mux_send_frame(client->fd, ENGINE_MUX_INPUT_ACK,
+		    request_id, engine_mux_revision, input_ack, strlen(input_ack)) != 0)
+			engine_mux_client_free(client);
 		return;
 	}
 	free(packet);

@@ -203,6 +203,7 @@ static bool request_grid(struct engineos_mux_client *client, char *error,
 	free(client->grid_cells);
 	client->grid_cells = cells;
 	client->grid_revision = be64_to_host(header.grid_revision);
+	client->grid_flags = ntohs(header.flags);
 	client->grid_columns = columns;
 	client->grid_rows = rows;
 	client->grid_cursor_x = ntohl(header.cursor_x);
@@ -338,6 +339,7 @@ static bool receive_grid_damage(struct engineos_mux_client *client,
 	}
 	uint64_t old_revision = client->grid_revision;
 	client->grid_revision = be64_to_host(header.grid.grid_revision);
+	client->grid_flags = ntohs(header.grid.flags);
 	client->grid_cursor_x = ntohl(header.grid.cursor_x);
 	client->grid_cursor_y = ntohl(header.grid.cursor_y);
 	client->revision = be64_to_host(frame.state_revision);
@@ -465,6 +467,93 @@ bool engineos_mux_client_handle_event(struct engineos_mux_client *client,
 		return false;
 	}
 	return receive_grid_damage(client, grid_changed, error, error_size);
+}
+
+bool engineos_mux_client_send_input(struct engineos_mux_client *client,
+		const void *bytes, size_t length, bool *grid_changed,
+		char *error, size_t error_size) {
+	*grid_changed = false;
+	if (!client->ready || bytes == NULL || length == 0 ||
+			length > ENGINE_MUX_INPUT_MAX) {
+		snprintf(error, error_size, "invalid pane input request");
+		return false;
+	}
+	struct engine_mux_input_header request = {
+		.pane_id = htonl(client->pane_id),
+		.generation = htonl(client->pane_generation),
+		.byte_length = htons((uint16_t)length),
+	};
+	struct engine_mux_frame_header frame = {
+		.magic = htonl(ENGINE_MUX_MAGIC),
+		.version = htons(ENGINE_MUX_PROTOCOL_VERSION),
+		.type = htons(ENGINE_MUX_INPUT_REQUEST),
+		.request_id = host_to_be64(6),
+		.state_revision = host_to_be64(client->revision),
+		.payload_length = htonl((uint32_t)(sizeof(request) + length)),
+	};
+	struct iovec parts[] = {
+		{.iov_base = &frame, .iov_len = sizeof(frame)},
+		{.iov_base = &request, .iov_len = sizeof(request)},
+		{.iov_base = (void *)bytes, .iov_len = length},
+	};
+	struct msghdr message = {.msg_iov = parts, .msg_iovlen = 3};
+	if (sendmsg(client->fd, &message, MSG_NOSIGNAL) < 0) {
+		snprintf(error, error_size, "pane input send: %s", strerror(errno));
+		return false;
+	}
+	bool invalidated = false;
+	for (;;) {
+		unsigned char packet[sizeof(frame) + 512];
+		ssize_t count = recv(client->fd, packet, sizeof(packet), 0);
+		if (count < (ssize_t)sizeof(frame)) {
+			snprintf(error, error_size, "truncated pane input response");
+			return false;
+		}
+		memcpy(&frame, packet, sizeof(frame));
+		uint32_t payload_length = ntohl(frame.payload_length);
+		uint16_t type = ntohs(frame.type);
+		if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
+				ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
+				payload_length > sizeof(packet) - sizeof(frame) ||
+				sizeof(frame) + payload_length != (size_t)count) {
+			snprintf(error, error_size, "invalid pane input response");
+			return false;
+		}
+		if (type == ENGINE_MUX_GRID_INVALIDATED && !invalidated) {
+			struct engine_mux_grid_request notice;
+			if (payload_length != sizeof(notice)) {
+				snprintf(error, error_size, "invalid grid invalidation during input");
+				return false;
+			}
+			memcpy(&notice, packet + sizeof(frame), sizeof(notice));
+			if (ntohl(notice.pane_id) != client->pane_id ||
+					ntohl(notice.generation) != client->pane_generation) {
+				snprintf(error, error_size, "grid invalidation pane mismatch");
+				return false;
+			}
+			invalidated = true;
+			continue;
+		}
+		if (type == ENGINE_MUX_ERROR) {
+			size_t copy_length = payload_length;
+			if (copy_length >= error_size) copy_length = error_size - 1;
+			memcpy(error, packet + sizeof(frame), copy_length);
+			error[copy_length] = '\0';
+			return false;
+		}
+		if (type != ENGINE_MUX_INPUT_ACK) {
+			snprintf(error, error_size,
+				"unexpected pane input response type %u", type);
+			return false;
+		}
+		client->revision = be64_to_host(frame.state_revision);
+		break;
+	}
+	if (invalidated && !receive_grid_damage(client, grid_changed,
+			error, error_size)) {
+		return false;
+	}
+	return true;
 }
 
 void engineos_mux_client_destroy(struct engineos_mux_client *client) {

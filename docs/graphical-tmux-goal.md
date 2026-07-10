@@ -18,6 +18,17 @@ The initial baseline was commit `57dfba0`: an isolated tmux 3.6b fork,
 standalone frontend prototype, revisioned layout snapshots, native shell
 handshake, packaging, and contract tests.
 
+## Progress Snapshot
+
+As of 2026-07-10, the in-server frontend, authoritative layout snapshots,
+binary grids, sparse damage, scrollback/copy-mode metadata, headless native
+terminal scene, event-driven refresh, and normal console-mode keyboard input
+are implemented and installed side by side. Native input is acknowledged by
+the server, passes through tmux's pane input path, reaches the pane PTY, and
+drives event-based grid refresh. Status/menu/prompt models, incremental GPU
+glyph-atlas updates, full interaction, compound presentations, process scopes,
+leases, games/images, hardware acceptance, and legacy cutover remain open.
+
 ## Workstream 1: Integrate The Protocol Into Engine Mux
 
 - Move the frontend `SOCK_SEQPACKET` listener into the `engine-mux` server

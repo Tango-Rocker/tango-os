@@ -2349,6 +2349,34 @@ static bool setup_native_terminal_scene(struct engineos_shell_server *server) {
 	return true;
 }
 
+static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
+		const char *reason) {
+	char error[256] = {0};
+	int width = 0, height = 0;
+	uint32_t glyph_cells = 0;
+	struct wlr_buffer *buffer = engineos_terminal_render(&server->mux_client,
+		&width, &height, &glyph_cells, error, sizeof(error));
+	if (buffer == NULL) {
+		wlr_log(WLR_ERROR, "native terminal damage render failed: %s", error);
+		return false;
+	}
+	wlr_scene_buffer_set_buffer(server->mux_terminal_scene, buffer);
+	if (server->mux_terminal_buffer != NULL)
+		wlr_buffer_drop(server->mux_terminal_buffer);
+	server->mux_terminal_buffer = buffer;
+	server->mux_terminal_width = width;
+	server->mux_terminal_height = height;
+	server->mux_terminal_glyph_cells = glyph_cells;
+	wlr_log(WLR_DEBUG,
+		"native terminal refresh pane=%%%u grid_revision=%llu pixels=%dx%d glyph_cells=%u reason=%s",
+		server->mux_client.pane_id,
+		(unsigned long long)server->mux_client.grid_revision,
+		width, height, glyph_cells, reason);
+	schedule_outputs(server);
+	write_shell_state(server, reason);
+	return true;
+}
+
 static int native_mux_event(int fd, uint32_t mask, void *data) {
 	(void)fd;
 	struct engineos_shell_server *server = data;
@@ -2367,31 +2395,11 @@ static int native_mux_event(int fd, uint32_t mask, void *data) {
 		wl_display_terminate(server->display);
 		return 0;
 	}
-	if (!changed) return 0;
-	int width = 0, height = 0;
-	uint32_t glyph_cells = 0;
-	struct wlr_buffer *buffer = engineos_terminal_render(&server->mux_client,
-		&width, &height, &glyph_cells, error, sizeof(error));
-	if (buffer == NULL) {
-		wlr_log(WLR_ERROR, "native terminal damage render failed: %s", error);
+	if (changed && !refresh_native_terminal_scene(server,
+			"native-grid-damage")) {
 		server->mux_client.ready = false;
 		wl_display_terminate(server->display);
-		return 0;
 	}
-	wlr_scene_buffer_set_buffer(server->mux_terminal_scene, buffer);
-	if (server->mux_terminal_buffer != NULL)
-		wlr_buffer_drop(server->mux_terminal_buffer);
-	server->mux_terminal_buffer = buffer;
-	server->mux_terminal_width = width;
-	server->mux_terminal_height = height;
-	server->mux_terminal_glyph_cells = glyph_cells;
-	wlr_log(WLR_DEBUG,
-		"native terminal damage pane=%%%u grid_revision=%llu pixels=%dx%d glyph_cells=%u",
-		server->mux_client.pane_id,
-		(unsigned long long)server->mux_client.grid_revision,
-		width, height, glyph_cells);
-	schedule_outputs(server);
-	write_shell_state(server, "native-grid-damage");
 	return 0;
 }
 
@@ -4642,6 +4650,97 @@ static void keyboard_handle_modifiers(struct wl_listener *listener, void *data) 
 		&keyboard->keyboard->modifiers);
 }
 
+static size_t native_terminal_key_bytes(struct wlr_keyboard *keyboard,
+		xkb_keysym_t sym, uint32_t keycode, uint32_t modifiers,
+		bool application_cursor,
+		unsigned char bytes[ENGINE_MUX_INPUT_MAX]) {
+	const char *sequence = NULL;
+	if (modifiers & WLR_MODIFIER_CTRL) {
+		if (sym >= XKB_KEY_a && sym <= XKB_KEY_z) {
+			bytes[0] = (unsigned char)(sym - XKB_KEY_a + 1);
+			return 1;
+		}
+		if (sym >= XKB_KEY_A && sym <= XKB_KEY_Z) {
+			bytes[0] = (unsigned char)(sym - XKB_KEY_A + 1);
+			return 1;
+		}
+		switch (sym) {
+		case XKB_KEY_space:
+		case XKB_KEY_at: bytes[0] = 0; return 1;
+		case XKB_KEY_bracketleft: bytes[0] = 0x1b; return 1;
+		case XKB_KEY_backslash: bytes[0] = 0x1c; return 1;
+		case XKB_KEY_bracketright: bytes[0] = 0x1d; return 1;
+		case XKB_KEY_asciicircum: bytes[0] = 0x1e; return 1;
+		case XKB_KEY_underscore: bytes[0] = 0x1f; return 1;
+		default: break;
+		}
+	}
+	switch (sym) {
+	case XKB_KEY_Return:
+	case XKB_KEY_KP_Enter: sequence = "\r"; break;
+	case XKB_KEY_BackSpace: sequence = "\x7f"; break;
+	case XKB_KEY_Tab: sequence = "\t"; break;
+	case XKB_KEY_ISO_Left_Tab: sequence = "\x1b[Z"; break;
+	case XKB_KEY_Escape: sequence = "\x1b"; break;
+	case XKB_KEY_Up: sequence = application_cursor ? "\x1bOA" : "\x1b[A"; break;
+	case XKB_KEY_Down: sequence = application_cursor ? "\x1bOB" : "\x1b[B"; break;
+	case XKB_KEY_Right: sequence = application_cursor ? "\x1bOC" : "\x1b[C"; break;
+	case XKB_KEY_Left: sequence = application_cursor ? "\x1bOD" : "\x1b[D"; break;
+	case XKB_KEY_Home: sequence = application_cursor ? "\x1bOH" : "\x1b[H"; break;
+	case XKB_KEY_End: sequence = application_cursor ? "\x1bOF" : "\x1b[F"; break;
+	case XKB_KEY_Page_Up: sequence = "\x1b[5~"; break;
+	case XKB_KEY_Page_Down: sequence = "\x1b[6~"; break;
+	case XKB_KEY_Insert: sequence = "\x1b[2~"; break;
+	case XKB_KEY_Delete: sequence = "\x1b[3~"; break;
+	default: break;
+	}
+	size_t length = 0;
+	if (sequence != NULL) {
+		length = strlen(sequence);
+		memcpy(bytes, sequence, length);
+	} else {
+		int count = xkb_state_key_get_utf8(keyboard->xkb_state, keycode,
+			(char *)bytes + 1, ENGINE_MUX_INPUT_MAX - 1);
+		if (count <= 0 || count >= (int)ENGINE_MUX_INPUT_MAX - 1) return 0;
+		length = (size_t)count;
+		memmove(bytes, bytes + 1, length);
+	}
+	if ((modifiers & WLR_MODIFIER_ALT) && length < ENGINE_MUX_INPUT_MAX) {
+		memmove(bytes + 1, bytes, length);
+		bytes[0] = 0x1b;
+		length++;
+	}
+	return length;
+}
+
+static bool route_native_terminal_key(struct engineos_shell_server *server,
+		struct wlr_keyboard *keyboard, struct wlr_keyboard_key_event *event,
+		xkb_keysym_t sym, uint32_t keycode, uint32_t modifiers) {
+	if (server->mux_mode != ENGINEOS_MUX_NATIVE || !server->mux_client.ready ||
+			server->input_mode != ENGINEOS_INPUT_TERMINAL) return false;
+	if (event->state != WL_KEYBOARD_KEY_STATE_PRESSED) return true;
+	unsigned char bytes[ENGINE_MUX_INPUT_MAX];
+	size_t length = native_terminal_key_bytes(keyboard, sym, keycode,
+		modifiers, (server->mux_client.grid_flags &
+			ENGINE_MUX_GRID_CURSOR_KEYS_APPLICATION) != 0, bytes);
+	if (length == 0) return true;
+	bool grid_changed = false;
+	char error[256] = {0};
+	if (!engineos_mux_client_send_input(&server->mux_client, bytes, length,
+			&grid_changed, error, sizeof(error))) {
+		wlr_log(WLR_ERROR, "native pane input failed: %s", error);
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+		return true;
+	}
+	if (grid_changed && !refresh_native_terminal_scene(server,
+			"native-input-grid-damage")) {
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+	}
+	return true;
+}
+
 static void keyboard_handle_key(struct wl_listener *listener, void *data) {
 	struct engineos_shell_keyboard *keyboard =
 		wl_container_of(listener, keyboard, key);
@@ -4659,6 +4758,10 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
 		for (int i = 0; i < nsyms; i++) {
 			handled = handle_keybinding(server, syms[i], modifiers) || handled;
 		}
+	}
+	if (!handled && nsyms > 0) {
+		handled = route_native_terminal_key(server, keyboard->keyboard, event,
+			syms[0], keycode, modifiers);
 	}
 
 	if (!handled && server->input_mode != ENGINEOS_INPUT_SHELL) {

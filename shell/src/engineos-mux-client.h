@@ -18,6 +18,7 @@ struct engineos_mux_client {
 	uint32_t grid_cursor_x;
 	uint32_t grid_cursor_y;
 	uint32_t grid_nonblank_cells;
+	uint16_t grid_flags;
 	struct engine_mux_grid_cell *grid_cells;
 	char *socket_path;
 	bool ready;
@@ -27,6 +28,9 @@ bool engineos_mux_client_connect(struct engineos_mux_client *client,
 	const char *socket_path, char *error, size_t error_size);
 bool engineos_mux_client_handle_event(struct engineos_mux_client *client,
 	bool *grid_changed, char *error, size_t error_size);
+bool engineos_mux_client_send_input(struct engineos_mux_client *client,
+	const void *bytes, size_t length, bool *grid_changed,
+	char *error, size_t error_size);
 void engineos_mux_client_destroy(struct engineos_mux_client *client);
 
 #endif

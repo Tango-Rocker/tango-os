@@ -220,7 +220,8 @@ run_mux() {
 		die "engine-mux frontend socket permissions are not private"
 
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" hello >"$fixture/hello.json"
-	jq -e '.server == "engine-mux" and (.capabilities | index("terminal-grid-v1"))' \
+	jq -e '.server == "engine-mux" and (.capabilities | index("terminal-grid-v1")) and
+		(.capabilities | index("pane-input-v1"))' \
 		"$fixture/hello.json" >/dev/null ||
 		die "mux protocol was not served by engine-mux"
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot >"$fixture/first.json"
@@ -247,7 +248,24 @@ run_mux() {
 		.wide_cells >= 1 and ([.text_rows[] | contains("AR界é")] | any)' \
 		"$fixture/grid.json" >/dev/null ||
 		die "binary terminal grid did not preserve text, colour, and wide cells"
-	grid_revision="$(jq -er '.grid_revision' "$fixture/grid.json")"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" input "$pane_id" \
+		$'printf NATIVE-INPUT-PROOF\r' >"$fixture/input.json"
+	jq -e '.schema == "engine-mux/pane-input-v1" and .accepted == true' \
+		"$fixture/input.json" >/dev/null ||
+		die "native pane input was not explicitly acknowledged"
+	for _ in {1..100}; do
+		XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" grid "$pane_id" \
+			>"$fixture/input-grid.json"
+		if jq -e '[.text_rows[] | contains("NATIVE-INPUT-PROOF")] | any' \
+				"$fixture/input-grid.json" >/dev/null; then
+			break
+		fi
+		sleep 0.02
+	done
+	jq -e '[.text_rows[] | contains("NATIVE-INPUT-PROOF")] | any' \
+		"$fixture/input-grid.json" >/dev/null ||
+		die "native pane input did not reach the authoritative pane PTY"
+	grid_revision="$(jq -er '.grid_revision' "$fixture/input-grid.json")"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		send-keys -t "$pane_id" "printf DAMAGE" Enter
 	for _ in {1..100}; do

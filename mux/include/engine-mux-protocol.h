@@ -15,6 +15,7 @@ enum engine_mux_message_type {
 	ENGINE_MUX_GRID_DAMAGE_REQUEST = 5,
 	ENGINE_MUX_SCROLLBACK_REQUEST = 6,
 	ENGINE_MUX_GRID_SUBSCRIBE_REQUEST = 7,
+	ENGINE_MUX_INPUT_REQUEST = 8,
 	ENGINE_MUX_SERVER_HELLO = 0x8001,
 	ENGINE_MUX_SNAPSHOT = 0x8002,
 	ENGINE_MUX_GRID_SNAPSHOT = 0x8003,
@@ -22,15 +23,18 @@ enum engine_mux_message_type {
 	ENGINE_MUX_SCROLLBACK = 0x8005,
 	ENGINE_MUX_GRID_INVALIDATED = 0x8006,
 	ENGINE_MUX_GRID_SUBSCRIBE_ACK = 0x8007,
+	ENGINE_MUX_INPUT_ACK = 0x8008,
 	ENGINE_MUX_ERROR = 0xffff,
 };
 
 #define ENGINE_MUX_GRID_VERSION 1u
 #define ENGINE_MUX_GRID_CELL_TEXT_MAX 32u
+#define ENGINE_MUX_INPUT_MAX 64u
 
 enum engine_mux_grid_flags {
 	ENGINE_MUX_GRID_ALTERNATE = 1u << 0,
 	ENGINE_MUX_GRID_CURSOR_VISIBLE = 1u << 1,
+	ENGINE_MUX_GRID_CURSOR_KEYS_APPLICATION = 1u << 2,
 };
 
 enum engine_mux_grid_cell_flags {
@@ -106,6 +110,13 @@ struct engine_mux_scrollback_header {
 	uint32_t start_row;
 	uint32_t row_count;
 	uint32_t cell_count;
+} __attribute__((packed));
+
+struct engine_mux_input_header {
+	uint32_t pane_id;
+	uint32_t generation;
+	uint16_t byte_length;
+	uint16_t flags;
 } __attribute__((packed));
 
 /* All integer fields are encoded in network byte order. */
