@@ -156,6 +156,42 @@ engine_mux_view_find(struct engine_mux_client *client, u_int id)
 	return (NULL);
 }
 
+static int
+engine_mux_presentation_dispatch(struct json_object *root, int map,
+    char **cause)
+{
+	struct window_pane *pane;
+	const char *schema, *pane_id, *role = NULL;
+	u_int generation, pid, surface_id;
+
+	schema = engine_mux_json_string_value(root, "schema", 64);
+	pane_id = engine_mux_json_string_value(root, "pane_id", 32);
+	if (schema == NULL || pane_id == NULL ||
+	    strcmp(schema, map ? "engine-mux/presentation-map-v1" :
+	    "engine-mux/presentation-unmap-v1") != 0 ||
+	    engine_mux_json_u32(root, "generation", 1, UINT32_MAX,
+	    &generation) != 0 ||
+	    engine_mux_json_u32(root, "pid", 1, INT32_MAX, &pid) != 0 ||
+	    engine_mux_json_u32(root, "surface_id", 1, UINT32_MAX,
+	    &surface_id) != 0) {
+		*cause = xstrdup("presentation surface request is invalid");
+		return (-1);
+	}
+	if (map && (role = engine_mux_json_string_value(root, "role", 16)) == NULL) {
+		*cause = xstrdup("presentation surface role is missing");
+		return (-1);
+	}
+	pane = window_pane_find_by_id_str(pane_id);
+	if (pane == NULL || pane->engine_generation != generation) {
+		*cause = xstrdup("presentation pane generation is not current");
+		return (-1);
+	}
+	if (map)
+		return (engine_pane_surface_map(pane, (pid_t)pid, surface_id,
+		    role, cause));
+	return (engine_pane_surface_unmap(pane, (pid_t)pid, surface_id, cause));
+}
+
 static void
 engine_mux_view_focus(struct engine_mux_view *focused)
 {
@@ -842,8 +878,9 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 				    window_active ? "true" : "false");
 				engine_mux_json_string(buffer, layout);
 				evbuffer_add_printf(buffer,
-				    ",\"pane_id\":\"%%%u\",\"generation\":1,\"pid\":%lld,\"tty\":",
-				    pane->id, (long long)pane->pid);
+				    ",\"pane_id\":\"%%%u\",\"generation\":%u,\"pid\":%lld,\"tty\":",
+				    pane->id, pane->engine_generation,
+				    (long long)pane->pid);
 				engine_mux_json_string(buffer, pane->tty);
 				evbuffer_add_printf(buffer,
 				    ",\"columns\":%u,\"rows\":%u,\"history_rows\":%u,\"history_scrolled\":%u,\"copy_mode\":%s,\"active\":%s,\"command\":",
@@ -854,8 +891,21 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 				engine_mux_json_string(buffer, command);
 				evbuffer_add(buffer, ",\"title\":", 9);
 				engine_mux_json_string(buffer, pane->base.title);
+				evbuffer_add(buffer, ",\"presentation\":", 16);
+				engine_mux_json_string(buffer,
+				    engine_pane_presentation_name(pane));
+				evbuffer_add(buffer, ",\"view_mode\":", 13);
+				engine_mux_json_string(buffer,
+				    engine_pane_view_mode_name(pane));
+				evbuffer_add(buffer, ",\"process_scope\":", 17);
+				engine_mux_json_string(buffer, pane->engine_scope);
+				evbuffer_add(buffer, ",\"app_command\":", 15);
+				engine_mux_json_string(buffer, pane->engine_command);
 				evbuffer_add_printf(buffer,
-				    ",\"presentation\":\"terminal\",\"view_mode\":\"presentation\"}");
+				    ",\"app_pid\":%lld,\"mapped\":%s,\"surface_tabs\":%u}",
+				    (long long)pane->engine_app_pgrp,
+				    pane->engine_mapped ? "true" : "false",
+				    pane->engine_surface_count);
 
 				engine_mux_hash_bytes(&hash, &session->id,
 				    sizeof session->id);
@@ -869,6 +919,8 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 				engine_mux_hash_string(&hash, layout);
 				engine_mux_hash_bytes(&hash, &pane->id,
 				    sizeof pane->id);
+				engine_mux_hash_bytes(&hash, &pane->engine_generation,
+				    sizeof pane->engine_generation);
 				engine_mux_hash_bytes(&hash, &pane->pid,
 				    sizeof pane->pid);
 				engine_mux_hash_string(&hash, pane->tty);
@@ -886,6 +938,18 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 				    sizeof pane_active);
 				engine_mux_hash_string(&hash, command);
 				engine_mux_hash_string(&hash, pane->base.title);
+				engine_mux_hash_bytes(&hash, &pane->engine_presentation,
+				    sizeof pane->engine_presentation);
+				engine_mux_hash_bytes(&hash, &pane->engine_view_mode,
+				    sizeof pane->engine_view_mode);
+				engine_mux_hash_string(&hash, pane->engine_scope);
+				engine_mux_hash_string(&hash, pane->engine_command);
+				engine_mux_hash_bytes(&hash, &pane->engine_app_pgrp,
+				    sizeof pane->engine_app_pgrp);
+				engine_mux_hash_bytes(&hash, &pane->engine_mapped,
+				    sizeof pane->engine_mapped);
+				engine_mux_hash_bytes(&hash, &pane->engine_surface_count,
+				    sizeof pane->engine_surface_count);
 				free(command);
 			}
 			free(layout);
@@ -1216,6 +1280,7 @@ engine_mux_frontend_sync(void)
 
 	if (engine_mux_listener == -1)
 		return;
+	engine_pane_sync_all();
 
 	candidate = engine_mux_build_snapshot(engine_mux_revision,
 	    &content_hash, &candidate_size);
@@ -1330,7 +1395,7 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	size_t scrollback_size;
 	const char *hello =
 	    "{\"schema\":\"engine-mux/hello-v1\",\"server\":\"engine-mux\","
-	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\",\"ui-model-v1\",\"ui-invalidate-v1\",\"tmux-mouse-v1\"]}";
+	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\",\"ui-model-v1\",\"ui-invalidate-v1\",\"tmux-mouse-v1\",\"pane-presentation-v1\"]}";
 	const char *subscribe_ack =
 	    "{\"schema\":\"engine-mux/grid-subscribe-v1\",\"subscribed\":true}";
 	const char *input_ack =
@@ -1345,6 +1410,10 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	    "{\"schema\":\"engine-mux/key-v1\",\"queued\":true}";
 	const char *mouse_ack =
 	    "{\"schema\":\"engine-mux/mouse-v1\",\"queued\":true}";
+	const char *presentation_map_ack =
+	    "{\"schema\":\"engine-mux/presentation-map-v1\",\"mapped\":true}";
+	const char *presentation_unmap_ack =
+	    "{\"schema\":\"engine-mux/presentation-unmap-v1\",\"unmapped\":true}";
 
 	packet_size = sizeof header + ENGINE_MUX_MAX_PAYLOAD;
 	packet = xmalloc(packet_size);
@@ -1401,6 +1470,41 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 		if (engine_mux_send_frame(client->fd, ENGINE_MUX_SNAPSHOT,
 		    request_id, engine_mux_revision, engine_mux_snapshot,
 		    engine_mux_snapshot_size) != 0)
+			engine_mux_client_free(client);
+		return;
+	}
+	if (type == ENGINE_MUX_PRESENTATION_MAP_REQUEST ||
+	    type == ENGINE_MUX_PRESENTATION_UNMAP_REQUEST) {
+		struct json_object *root;
+		char *cause = NULL;
+		const char *ack;
+		uint16_t ack_type;
+		int map = type == ENGINE_MUX_PRESENTATION_MAP_REQUEST;
+
+		root = engine_mux_parse_json(packet + sizeof header, payload_size);
+		free(packet);
+		if (root == NULL) {
+			if (engine_mux_send_error(client->fd, request_id,
+			    "malformed-json", "presentation request is not valid JSON") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		if (engine_mux_presentation_dispatch(root, map, &cause) != 0) {
+			json_object_put(root);
+			if (engine_mux_send_error(client->fd, request_id,
+			    "request-rejected", cause == NULL ? "request failed" : cause) != 0)
+				engine_mux_client_free(client);
+			free(cause);
+			return;
+		}
+		json_object_put(root);
+		free(cause);
+		engine_mux_frontend_sync();
+		ack_type = map ? ENGINE_MUX_PRESENTATION_MAP_ACK :
+		    ENGINE_MUX_PRESENTATION_UNMAP_ACK;
+		ack = map ? presentation_map_ack : presentation_unmap_ack;
+		if (engine_mux_send_frame(client->fd, ack_type, request_id,
+		    engine_mux_revision, ack, strlen(ack)) != 0)
 			engine_mux_client_free(client);
 		return;
 	}

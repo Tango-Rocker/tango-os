@@ -1,6 +1,6 @@
 pkgname=engineos-mux
 pkgver=3.6b
-pkgrel=14
+pkgrel=15
 _commit=0623d1e968423ad0c192e0d8debf1258671063d5
 pkgdesc="EngineOS tmux 3.6b graphical frontend protocol foundation"
 arch=('x86_64')
@@ -14,16 +14,22 @@ source=(
   '0001-engine-mux-default-socket.patch'
   '0002-engine-mux-in-server-frontend.patch'
   '0003-engine-mux-graphical-client.patch'
+  '0004-engine-pane-presentations.patch'
   'engine-mux-frontend.c'
   'engine-mux-frontend.h'
+  'engine-pane.c'
+  'engine-pane-host.c'
 )
 sha256sums=(
   '2c212f7ee2d925b01ec20ab5bb3a906c17b6a8652fe521fcaaf498f800b4d1fa'
   '377d8420eb6bf2103bfc429829d90ed542fd9e9202c6780d122cb5ce4665cb5f'
   'e2ff73579fc5ba57b35d212fb4f23b77983383bd1c933c491d7bc265d2396d90'
   '4d2036cb8ecd35d1d14d97147d68db1ca3f92e8fd7b7785b5cc79603553b34fc'
-  'c19c2508cae7847d0371715ffaa81898f3630a4f78831b997ffafc03b5324c46'
+  'f1ffc93df20a39b37bc2aed9a118a01926fcc73e51689b736d76bafea038a726'
+  '5fc0cd03f3ed3338428d12a59831aa3389dc1c384d91b05cfdddd888a31a643b'
   '38db77244832b7e2abe5e57f28dd4b08907ca400a5e815fd7db8713206e0ae3d'
+  '6da830e2ea00334fcdbce52060d5004465ea3c1752930f660f02ba364303f63c'
+  'ebfa4c5ca40656cfac4a883f98fc6ff81177af16d9fe6bc4c0de93b6558a8553'
 )
 
 prepare() {
@@ -34,8 +40,10 @@ prepare() {
 	patch -d "$_source_dir" -Np1 -i "$startdir/0001-engine-mux-default-socket.patch"
 	patch -d "$_source_dir" -Np1 -i "$startdir/0002-engine-mux-in-server-frontend.patch"
 	patch -d "$_source_dir" -Np1 -i "$startdir/0003-engine-mux-graphical-client.patch"
+	patch -d "$_source_dir" -Np1 -i "$startdir/0004-engine-pane-presentations.patch"
 	install -m0644 "$srcdir/engine-mux-frontend.c" "$_source_dir/engine-mux-frontend.c"
 	install -m0644 "$srcdir/engine-mux-frontend.h" "$_source_dir/engine-mux-frontend.h"
+	install -m0644 "$srcdir/engine-pane.c" "$_source_dir/engine-pane.c"
 	install -m0644 "$_engineos_root/mux/include/engine-mux-protocol.h" "$_source_dir/engine-mux-protocol.h"
 	cd "$_source_dir"
 	autoreconf -fi
@@ -49,6 +57,8 @@ build() {
 	cd "$_source_dir"
 	./configure --prefix=/usr --enable-utempter --enable-systemd
 	make
+	${CC:-cc} ${CFLAGS} ${CPPFLAGS} ${LDFLAGS} \
+	  -o "$srcdir/engine-pane-host" "$srcdir/engine-pane-host.c"
 
   meson setup "$srcdir/mux-build" "$_engineos_root/mux" \
     --prefix=/usr \
@@ -62,6 +72,7 @@ package() {
   _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
 
 	install -Dm755 "$_source_dir/tmux" "$pkgdir/usr/bin/engine-mux"
+	install -Dm755 "$srcdir/engine-pane-host" "$pkgdir/usr/bin/engine-pane-host"
 	install -Dm644 "$_source_dir/tmux.1" "$pkgdir/usr/share/man/man1/engine-mux.1"
 	install -Dm644 "$_source_dir/COPYING" "$pkgdir/usr/share/licenses/$pkgname/COPYING.tmux"
   DESTDIR="$pkgdir" meson install -C "$srcdir/mux-build"

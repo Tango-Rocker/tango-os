@@ -99,7 +99,7 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration stage 1 is installed side by side as
-  `engineos-mux 3.6b-14` with the decoder/renderer/control boundary in
+  `engineos-mux 3.6b-15` with the decoder/renderer/control boundary in
   `engineos-shell 0.1.0-29`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
@@ -175,6 +175,22 @@ These are historical proof artifacts only; they are not the active work path:
   full grid; pixman is explicitly labeled `cpu-pixman-smoke` rather than
   silently accepted as hardware. Direct-KMS native-mode clipping across
   multiple panes, resize, and zoom remains part of final hardware acceptance.
+  The mux server now also owns compound pane presentation and view state,
+  stable pane generations, globally unique transient user scopes, mapped
+  surface roles, and pane-local toplevel counts. The installed native commands
+  are `launch-pane-app`, `split-pane-app`, `pane-presentation`,
+  `signal-pane-app`, and `respawn-pane-app`; `prefix+v` is a native default
+  binding. Existing panes launch the graphical command as their foreground PTY
+  job, while new graphical splits use `engine-pane-host` and become login-shell
+  panes after the application exits. The presentation protocol resolves mapped
+  client PIDs through the registered systemd scope, rejects unrelated PIDs,
+  rejects stale pane generations and duplicate surface IDs, distinguishes
+  toplevel tabs from transient/popup surfaces, and restores the console after
+  exit. The installed mux contract proves stdout/stderr retention, foreground
+  process groups, signal and respawn behavior, scope isolation, presentation
+  toggling, split-host restoration, and the required 15-second unmapped-surface
+  failure in the pane console. Compositor-side XDG surface binding is the next
+  acceptance boundary; the shell does not yet issue these map/unmap frames.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 

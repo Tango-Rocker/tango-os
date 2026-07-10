@@ -917,8 +917,52 @@ static int request_ui(int fd, uint32_t pane_id, char **keys,
 	return 0;
 }
 
+static int request_presentation_surface(int fd, bool map, uint32_t pane_id,
+		uint32_t generation, pid_t pid, uint32_t surface_id,
+		const char *role) {
+	struct json_object *request = json_object_new_object();
+	json_object_object_add(request, "schema", json_object_new_string(map ?
+		"engine-mux/presentation-map-v1" :
+		"engine-mux/presentation-unmap-v1"));
+	char pane_name[32];
+	snprintf(pane_name, sizeof(pane_name), "%%%u", pane_id);
+	json_object_object_add(request, "pane_id", json_object_new_string(pane_name));
+	json_object_object_add(request, "generation", json_object_new_int64(generation));
+	json_object_object_add(request, "pid", json_object_new_int64(pid));
+	json_object_object_add(request, "surface_id", json_object_new_int64(surface_id));
+	if (map)
+		json_object_object_add(request, "role", json_object_new_string(role));
+	const char *payload = json_object_to_json_string_ext(request,
+		JSON_C_TO_STRING_PLAIN);
+	uint16_t response_type = 0;
+	uint64_t response_revision = 0;
+	char *response = NULL;
+	int result = exchange(fd, map ? ENGINE_MUX_PRESENTATION_MAP_REQUEST :
+		ENGINE_MUX_PRESENTATION_UNMAP_REQUEST, 3001, 0, payload,
+		&response_type, &response_revision, &response);
+	json_object_put(request);
+	if (result != 0)
+		return -1;
+	struct json_object *parsed = json_tokener_parse(response);
+	free(response);
+	if (parsed == NULL) {
+		errno = EPROTO;
+		return -1;
+	}
+	printf("%s\n", json_object_to_json_string_ext(parsed,
+		JSON_C_TO_STRING_PRETTY));
+	json_object_put(parsed);
+	uint16_t expected = map ? ENGINE_MUX_PRESENTATION_MAP_ACK :
+		ENGINE_MUX_PRESENTATION_UNMAP_ACK;
+	if (response_type != expected) {
+		errno = EPERM;
+		return -1;
+	}
+	return 0;
+}
+
 static void usage(FILE *stream, const char *program) {
-	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT|input PANE_ID BYTES|keys PANE_ID KEY...|focus-proof PANE_ID|ui PANE_ID [KEY...]|mouse PANE_ID EVENT BUTTON X Y MODIFIERS|mouse-sequence PANE_ID (EVENT BUTTON X Y MODIFIERS)...|mouse-ui PANE_ID (EVENT BUTTON X Y MODIFIERS)...\n", program);
+	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT|input PANE_ID BYTES|keys PANE_ID KEY...|focus-proof PANE_ID|ui PANE_ID [KEY...]|mouse PANE_ID EVENT BUTTON X Y MODIFIERS|mouse-sequence PANE_ID (EVENT BUTTON X Y MODIFIERS)...|mouse-ui PANE_ID (EVENT BUTTON X Y MODIFIERS)...|presentation-map PANE_ID GENERATION PID SURFACE_ID ROLE|presentation-unmap PANE_ID GENERATION PID SURFACE_ID\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -953,6 +997,8 @@ int main(int argc, char **argv) {
 	bool is_mouse = strcmp(command, "mouse") == 0;
 	bool is_mouse_sequence = strcmp(command, "mouse-sequence") == 0;
 	bool is_mouse_ui = strcmp(command, "mouse-ui") == 0;
+	bool is_presentation_map = strcmp(command, "presentation-map") == 0;
+	bool is_presentation_unmap = strcmp(command, "presentation-unmap") == 0;
 	size_t mouse_action_arguments = argc > optind + 2 ?
 		(size_t)(argc - optind - 2) : 0;
 	if ((is_grid && optind + 2 != argc) ||
@@ -964,9 +1010,11 @@ int main(int argc, char **argv) {
 			(is_focus_proof && optind + 2 != argc) ||
 			(is_ui && optind + 2 > argc) ||
 			(is_mouse && optind + 7 != argc) ||
+			(is_presentation_map && optind + 6 != argc) ||
+			(is_presentation_unmap && optind + 5 != argc) ||
 			((is_mouse_sequence || is_mouse_ui) &&
 				(mouse_action_arguments == 0 || mouse_action_arguments % 5 != 0)) ||
-			(!is_grid && !is_damage && !is_stale_grid && !is_scrollback && !is_input && !is_keys && !is_focus_proof && !is_ui && !is_mouse && !is_mouse_sequence && !is_mouse_ui &&
+			(!is_grid && !is_damage && !is_stale_grid && !is_scrollback && !is_input && !is_keys && !is_focus_proof && !is_ui && !is_mouse && !is_mouse_sequence && !is_mouse_ui && !is_presentation_map && !is_presentation_unmap &&
 			 optind + 1 != argc)) {
 		usage(stderr, argv[0]);
 		return 2;
@@ -985,7 +1033,7 @@ int main(int argc, char **argv) {
 		free(owned_socket);
 		return 1;
 	}
-	if (is_grid || is_damage || is_stale_grid || is_scrollback || is_input || is_keys || is_focus_proof || is_ui || is_mouse || is_mouse_sequence || is_mouse_ui) {
+	if (is_grid || is_damage || is_stale_grid || is_scrollback || is_input || is_keys || is_focus_proof || is_ui || is_mouse || is_mouse_sequence || is_mouse_ui || is_presentation_map || is_presentation_unmap) {
 		const char *pane_text = argv[optind + 1];
 		if (*pane_text == '%') pane_text++;
 		char *end = NULL;
@@ -1004,7 +1052,22 @@ int main(int argc, char **argv) {
 			return 2;
 		}
 		int grid_result;
-		if (is_mouse || is_mouse_sequence || is_mouse_ui) {
+		if (is_presentation_map || is_presentation_unmap) {
+			char *generation_end = NULL, *pid_end = NULL, *surface_end = NULL;
+			unsigned long generation = strtoul(argv[optind + 2], &generation_end, 10);
+			long pid = strtol(argv[optind + 3], &pid_end, 10);
+			unsigned long surface_id = strtoul(argv[optind + 4], &surface_end, 10);
+			if (*generation_end != '\0' || *pid_end != '\0' ||
+					*surface_end != '\0' || generation == 0 ||
+					generation > UINT32_MAX || pid <= 0 || pid > INT32_MAX ||
+					surface_id == 0 || surface_id > UINT32_MAX) {
+				close(fd); free(owned_socket); return 2;
+			}
+			grid_result = request_presentation_surface(fd,
+				is_presentation_map, (uint32_t)pane_id,
+				(uint32_t)generation, (pid_t)pid, (uint32_t)surface_id,
+				is_presentation_map ? argv[optind + 5] : NULL);
+		} else if (is_mouse || is_mouse_sequence || is_mouse_ui) {
 			grid_result = request_mouse_actions(fd, (uint32_t)pane_id,
 				&argv[optind + 2], mouse_action_arguments, is_mouse_ui);
 		} else if (is_ui) {

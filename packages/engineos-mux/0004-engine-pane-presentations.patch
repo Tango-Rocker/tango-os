@@ -1,0 +1,160 @@
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -150,0 +151 @@ dist_tmux_SOURCES = \
++	engine-pane.c \
+--- a/tmux.h
++++ b/tmux.h
+@@ -1164,0 +1165,26 @@ TAILQ_HEAD(window_pane_resizes, window_pane_resize);
++enum engine_pane_presentation {
++	ENGINE_PANE_TERMINAL,
++	ENGINE_PANE_WAYLAND,
++	ENGINE_PANE_GAME,
++	ENGINE_PANE_STREAM
++};
++
++enum engine_pane_view_mode {
++	ENGINE_PANE_VIEW_PRESENTATION,
++	ENGINE_PANE_VIEW_CONSOLE
++};
++
++enum engine_pane_surface_role {
++	ENGINE_PANE_SURFACE_TOPLEVEL,
++	ENGINE_PANE_SURFACE_TRANSIENT,
++	ENGINE_PANE_SURFACE_POPUP
++};
++
++struct engine_pane_surface {
++	u_int		 id;
++	pid_t		 pid;
++	enum engine_pane_surface_role role;
++	TAILQ_ENTRY(engine_pane_surface) entry;
++};
++TAILQ_HEAD(engine_pane_surfaces, engine_pane_surface);
++
+@@ -1170,0 +1197,12 @@ struct window_pane {
++	enum engine_pane_presentation engine_presentation;
++	enum engine_pane_view_mode engine_view_mode;
++	struct engine_pane_surfaces engine_surfaces;
++	u_int		 engine_generation;
++	u_int		 engine_launch_serial;
++	char		*engine_scope;
++	char		*engine_command;
++	pid_t		 engine_app_pgrp;
++	time_t		 engine_launch_deadline;
++	u_int		 engine_surface_count;
++	int		 engine_mapped;
++
+@@ -2888,0 +2928,8 @@ void	 engine_mux_frontend_free(void);
++/* engine-pane.c */
++const char *engine_pane_presentation_name(const struct window_pane *);
++const char *engine_pane_view_mode_name(const struct window_pane *);
++int	 engine_pane_surface_map(struct window_pane *, pid_t, u_int,
++	     const char *, char **);
++int	 engine_pane_surface_unmap(struct window_pane *, pid_t, u_int, char **);
++void	 engine_pane_surface_clear(struct window_pane *);
++void	 engine_pane_sync_all(void);
++
+--- a/window.c
++++ b/window.c
+@@ -936,0 +937,2 @@ window_pane_create(struct window *w, u_int sx, u_int sy, u_int hlimit)
++	wp->engine_generation = 1;
++	TAILQ_INIT(&wp->engine_surfaces);
+@@ -1013,0 +1016,3 @@ window_pane_destroy(struct window_pane *wp)
++	engine_pane_surface_clear(wp);
++	free(wp->engine_scope);
++	free(wp->engine_command);
+--- a/cmd.c
++++ b/cmd.c
+@@ -119,0 +120,5 @@ extern const struct cmd_entry cmd_wait_for_entry;
++extern const struct cmd_entry cmd_launch_pane_app_entry;
++extern const struct cmd_entry cmd_pane_presentation_entry;
++extern const struct cmd_entry cmd_respawn_pane_app_entry;
++extern const struct cmd_entry cmd_signal_pane_app_entry;
++extern const struct cmd_entry cmd_split_pane_app_entry;
+@@ -151,0 +157 @@ const struct cmd_entry *cmd_table[] = {
++	&cmd_launch_pane_app_entry,
+@@ -169,0 +176 @@ const struct cmd_entry *cmd_table[] = {
++	&cmd_pane_presentation_entry,
+@@ -179,0 +187 @@ const struct cmd_entry *cmd_table[] = {
++	&cmd_respawn_pane_app_entry,
+@@ -201,0 +210 @@ const struct cmd_entry *cmd_table[] = {
++	&cmd_signal_pane_app_entry,
+@@ -202,0 +212 @@ const struct cmd_entry *cmd_table[] = {
++	&cmd_split_pane_app_entry,
+--- a/format.c
++++ b/format.c
+@@ -888,0 +889,48 @@ format_cb_current_command(struct format_tree *ft)
++static void *
++format_cb_pane_presentation(struct format_tree *ft)
++{
++	if (ft->wp == NULL)
++		return (NULL);
++	return (xstrdup(engine_pane_presentation_name(ft->wp)));
++}
++
++static void *
++format_cb_pane_view_mode(struct format_tree *ft)
++{
++	if (ft->wp == NULL)
++		return (NULL);
++	return (xstrdup(engine_pane_view_mode_name(ft->wp)));
++}
++
++static void *
++format_cb_pane_scope(struct format_tree *ft)
++{
++	if (ft->wp == NULL || ft->wp->engine_scope == NULL)
++		return (NULL);
++	return (xstrdup(ft->wp->engine_scope));
++}
++
++static void *
++format_cb_pane_app_pid(struct format_tree *ft)
++{
++	if (ft->wp == NULL || ft->wp->engine_app_pgrp <= 0)
++		return (NULL);
++	return (format_printf("%lld", (long long)ft->wp->engine_app_pgrp));
++}
++
++static void *
++format_cb_pane_surface_count(struct format_tree *ft)
++{
++	if (ft->wp == NULL)
++		return (NULL);
++	return (format_printf("%u", ft->wp->engine_surface_count));
++}
++
++static void *
++format_cb_pane_presentation_mapped(struct format_tree *ft)
++{
++	if (ft->wp == NULL)
++		return (NULL);
++	return (format_printf("%d", ft->wp->engine_mapped));
++}
++
+@@ -3229,0 +3278,3 @@ static const struct format_table_entry format_table[] = {
++	{ "pane_app_pid", FORMAT_TABLE_STRING,
++	  format_cb_pane_app_pid
++	},
+@@ -3313,0 +3365,9 @@ static const struct format_table_entry format_table[] = {
++	{ "pane_presentation", FORMAT_TABLE_STRING,
++	  format_cb_pane_presentation
++	},
++	{ "pane_presentation_mapped", FORMAT_TABLE_STRING,
++	  format_cb_pane_presentation_mapped
++	},
++	{ "pane_presentation_scope", FORMAT_TABLE_STRING,
++	  format_cb_pane_scope
++	},
+@@ -3325,0 +3389,3 @@ static const struct format_table_entry format_table[] = {
++	{ "pane_surface_count", FORMAT_TABLE_STRING,
++	  format_cb_pane_surface_count
++	},
+@@ -3343,0 +3410,3 @@ static const struct format_table_entry format_table[] = {
++	{ "pane_view_mode", FORMAT_TABLE_STRING,
++	  format_cb_pane_view_mode
++	},
+--- a/key-bindings.c
++++ b/key-bindings.c
+@@ -400,0 +401 @@ key_bindings_init(void)
++		"bind -N 'Toggle graphical pane presentation' v { pane-presentation toggle }",

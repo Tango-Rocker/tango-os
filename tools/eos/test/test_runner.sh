@@ -169,6 +169,9 @@ run_mux() {
 	local shell_pid="" overlay_pid="" prompt_pid="" shell_client_name=""
 	local initial_native_revision updated_native_revision stable_revision=""
 	local stable_count=0
+	local pane_scope="" pane_app_pid="" pane_state="" split_pane_id=""
+	local user_runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+	local user_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$user_runtime/bus}"
 
 	if [[ -z "$mux_bin" ]]; then
 		mux_bin="$ROOT/artifacts/build/engineos-mux/engineos-mux/src/tmux-$mux_commit/tmux"
@@ -181,8 +184,14 @@ run_mux() {
 	"$mux_bin" -V | grep -Fx 'tmux 3.6b' >/dev/null ||
 		die "mux contract requires the pinned tmux 3.6b baseline"
 	rm -rf "$fixture"
-	mkdir -p "$fixture"
+	mkdir -p "$fixture/bin"
 	chmod 0700 "$fixture"
+	cc -std=c11 -Wall -Wextra -Werror -O2 \
+		"$ROOT/packages/engineos-mux/engine-pane-host.c" \
+		-o "$fixture/bin/engine-pane-host"
+	local PATH="$fixture/bin:$PATH"
+	export PATH DBUS_SESSION_BUS_ADDRESS="$user_bus"
+	export ENGINEOS_USER_RUNTIME_DIR="$user_runtime"
 	cleanup_mux_test() {
 		[[ -z "$overlay_pid" ]] || kill "$overlay_pid" >/dev/null 2>&1 || true
 		[[ -z "$prompt_pid" ]] || kill "$prompt_pid" >/dev/null 2>&1 || true
@@ -194,7 +203,7 @@ run_mux() {
 			kill-server >/dev/null 2>&1 || true
 		rm -rf "$fixture"
 	}
-	trap cleanup_mux_test RETURN
+	trap cleanup_mux_test EXIT RETURN
 
 	if [[ -f "$build_dir/build.ninja" ]]; then
 		meson setup "$build_dir" "$ROOT/mux" --reconfigure >/dev/null
@@ -219,7 +228,7 @@ run_mux() {
 		"$mux_bin" -L custom kill-server
 
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" -f /dev/null \
-		new-session -d -s contract
+		new-session -d -s contract '/bin/bash --noprofile --norc'
 	for _ in {1..100}; do
 		[[ -S "$fixture/engineos/mux.sock" ]] && break
 		sleep 0.02
@@ -238,7 +247,8 @@ run_mux() {
 		(.capabilities | index("view-focus-v1")) and
 		(.capabilities | index("ui-model-v1")) and
 		(.capabilities | index("ui-invalidate-v1")) and
-		(.capabilities | index("tmux-mouse-v1"))' \
+		(.capabilities | index("tmux-mouse-v1")) and
+		(.capabilities | index("pane-presentation-v1"))' \
 		"$fixture/hello.json" >/dev/null ||
 		die "mux protocol was not served by engine-mux"
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot >"$fixture/first.json"
@@ -249,6 +259,139 @@ run_mux() {
 	jq -e '.panes[0].command | contains("/") | not' "$fixture/first.json" >/dev/null ||
 		die "mux snapshot did not normalize pane_current_command metadata"
 	pane_id="$(jq -er '.panes[0].pane_id' "$fixture/first.json")"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		list-keys -T prefix v | grep -F 'pane-presentation toggle' >/dev/null ||
+		die "engine-mux did not bind prefix+v to the native presentation toggle"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		launch-pane-app -t "$pane_id" -- /bin/sh -c \
+		'printf "PRESENTATION-STDOUT\n"; printf "PRESENTATION-STDERR\n" >&2; exec sleep 60'
+	for _ in {1..100}; do
+		pane_state="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+			"$mux_bin" display-message -p -t "$pane_id" \
+			'#{pane_presentation}|#{pane_view_mode}|#{pane_presentation_scope}|#{pane_app_pid}')"
+		[[ "$pane_state" =~ ^wayland\|console\|engine-pane-[0-9]+-[0-9]+-[0-9]+\.scope\|[1-9][0-9]*$ ]] && break
+		sleep 0.02
+	done
+	[[ "$pane_state" =~ ^wayland\|console\|engine-pane-[0-9]+-[0-9]+-[0-9]+\.scope\|[1-9][0-9]*$ ]] ||
+		die "native pane launch did not become a scoped foreground PTY job: $pane_state"
+	pane_scope="$(cut -d'|' -f3 <<<"$pane_state")"
+	pane_app_pid="$(cut -d'|' -f4 <<<"$pane_state")"
+	[[ "$(ps -o tpgid= -p "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" display-message -p -t "$pane_id" '#{pane_pid}')" | tr -d ' ')" == "$pane_app_pid" ]] ||
+		die "native pane application did not own the PTY foreground process group"
+	grep -F "/$pane_scope" "/proc/$pane_app_pid/cgroup" >/dev/null ||
+		die "native pane application was not placed in its registered user scope"
+	if XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		pane-presentation -t "$pane_id" app >"$fixture/unmapped-view.out" 2>&1; then
+		die "pane presentation switched to an application before a surface mapped"
+	fi
+	grep -F 'pane has no mapped graphical presentation' "$fixture/unmapped-view.out" >/dev/null ||
+		die "unmapped presentation rejection was not explicit"
+	if XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" \
+		presentation-map "$pane_id" 1 $$ 9001 toplevel \
+		>"$fixture/wrong-scope.json" 2>"$fixture/wrong-scope.err"; then
+		die "presentation protocol accepted an unrelated process"
+	fi
+	jq -e '.code == "request-rejected" and
+		(.message | contains("outside the pane launch scope"))' \
+		"$fixture/wrong-scope.json" >/dev/null ||
+		die "wrong-scope surface rejection was not explicit"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" \
+		presentation-map "$pane_id" 1 "$pane_app_pid" 1001 toplevel >/dev/null
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" \
+		presentation-map "$pane_id" 1 "$pane_app_pid" 1002 popup >/dev/null
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" \
+		presentation-map "$pane_id" 1 "$pane_app_pid" 1003 toplevel >/dev/null
+	[[ "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		display-message -p -t "$pane_id" \
+		'#{pane_presentation}|#{pane_view_mode}|#{pane_presentation_mapped}|#{pane_surface_count}')" == \
+		'wayland|presentation|1|2' ]] ||
+		die "mapped presentation did not expose two pane-local toplevel tabs"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		pane-presentation -t "$pane_id" toggle
+	[[ "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		display-message -p -t "$pane_id" '#{pane_view_mode}')" == console ]] ||
+		die "native presentation toggle did not reveal the backing console"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		pane-presentation -t "$pane_id" toggle
+	[[ "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		display-message -p -t "$pane_id" '#{pane_view_mode}')" == presentation ]] ||
+		die "native presentation toggle did not restore the mapped application"
+	for _ in {1..100}; do
+		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			capture-pane -p -t "$pane_id" -S -40 >"$fixture/presentation-console.txt"
+		grep -F 'PRESENTATION-STDOUT' "$fixture/presentation-console.txt" >/dev/null &&
+			grep -F 'PRESENTATION-STDERR' "$fixture/presentation-console.txt" >/dev/null && break
+		sleep 0.02
+	done
+	grep -F 'PRESENTATION-STDOUT' "$fixture/presentation-console.txt" >/dev/null &&
+		grep -F 'PRESENTATION-STDERR' "$fixture/presentation-console.txt" >/dev/null ||
+		die "graphical pane stdout and stderr were not retained in its console"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		signal-pane-app -t "$pane_id" TERM
+	for _ in {1..100}; do
+		pane_state="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+			"$mux_bin" display-message -p -t "$pane_id" \
+			'#{pane_presentation}|#{pane_view_mode}|#{pane_app_pid}|#{pane_presentation_scope}|#{pane_surface_count}')"
+		[[ "$pane_state" == 'terminal|presentation|||0' ]] && break
+		sleep 0.02
+	done
+	[[ "$pane_state" == 'terminal|presentation|||0' ]] ||
+		die "graphical process exit did not restore a clean pane console: $pane_state"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		respawn-pane-app -t "$pane_id"
+	for _ in {1..100}; do
+		pane_state="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+			"$mux_bin" display-message -p -t "$pane_id" \
+			'#{pane_presentation_scope}|#{pane_app_pid}')"
+		[[ "$pane_state" =~ ^engine-pane-[0-9]+-[0-9]+-2\.scope\|[1-9][0-9]*$ ]] && break
+		sleep 0.02
+	done
+	[[ "$pane_state" =~ ^engine-pane-[0-9]+-[0-9]+-2\.scope\|[1-9][0-9]*$ ]] ||
+		die "graphical pane respawn did not create a new launch scope"
+	for _ in {1..850}; do
+		pane_state="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+			"$mux_bin" display-message -p -t "$pane_id" \
+			'#{pane_presentation}|#{pane_view_mode}|#{pane_app_pid}|#{pane_presentation_scope}')"
+		[[ "$pane_state" == 'terminal|presentation||' ]] && break
+		sleep 0.02
+	done
+	[[ "$pane_state" == 'terminal|presentation||' ]] ||
+		die "unmapped graphical launch did not time out after 15 seconds"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		capture-pane -p -t "$pane_id" -S -60 >"$fixture/presentation-timeout.txt"
+	grep -F 'graphical launch mapped no surface within 15 seconds' \
+		"$fixture/presentation-timeout.txt" >/dev/null ||
+		die "unmapped graphical launch timeout was not reported in the pane console"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		split-pane-app -h -t "$pane_id" -- /bin/sh -c \
+		'printf "SPLIT-APP-STDOUT\n"; printf "SPLIT-APP-STDERR\n" >&2; exec sleep 60'
+	split_pane_id="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" list-panes -t contract -F '#{pane_id} #{pane_presentation}' |
+		awk '$2 == "wayland" { print $1 }')"
+	[[ -n "$split_pane_id" ]] || die "split-pane-app did not create a graphical pane"
+	for _ in {1..100}; do
+		pane_state="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+			"$mux_bin" display-message -p -t "$split_pane_id" \
+			'#{pane_presentation_scope}|#{pane_app_pid}')"
+		[[ "$pane_state" =~ ^engine-pane-split-[0-9]+-[0-9]+\.scope\|[1-9][0-9]*$ ]] && break
+		sleep 0.02
+	done
+	[[ "$pane_state" =~ ^engine-pane-split-[0-9]+-[0-9]+\.scope\|[1-9][0-9]*$ ]] ||
+		die "split-pane-app host did not expose its foreground scoped process"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		signal-pane-app -t "$split_pane_id" TERM
+	for _ in {1..100}; do
+		pane_state="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+			"$mux_bin" display-message -p -t "$split_pane_id" \
+			'#{pane_presentation}|#{pane_dead}|#{pane_current_command}')"
+		[[ "$pane_state" =~ ^terminal\|0\|.+$ ]] && break
+		sleep 0.02
+	done
+	[[ "$pane_state" =~ ^terminal\|0\|.+$ ]] ||
+		die "engine-pane-host did not preserve the pane and start a login shell"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		kill-pane -t "$split_pane_id"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		set-option -g prefix C-a
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
@@ -715,6 +858,8 @@ run_mux() {
 		die "shell state did not expose native mux revision evidence"
 	}
 
+	cleanup_mux_test
+	trap - EXIT RETURN
 	printf 'engine-mux protocol contract test passed\n'
 }
 
