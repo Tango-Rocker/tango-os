@@ -99,7 +99,7 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration stage 1 is installed side by side as
-  `engineos-mux 3.6b-9` with the decoder/renderer/control boundary in
+  `engineos-mux 3.6b-11` with the decoder/renderer/control boundary in
   `engineos-shell 0.1.0-24`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
@@ -140,10 +140,17 @@ These are historical proof artifacts only; they are not the active work path:
   ownership, keyboard routing follows the promoted view, output loss promotes
   a surviving view, and a temporary graphical client restores the prior shell
   owner when it disconnects. The contract proves an 80x24 to 100x30 canonical
-  resize and cross-client focus restoration. The same proof passes with
-  installed `/usr/bin/engine-mux` and `/usr/bin/engineos-shell`.
-  Status/menu/prompt models, mouse/copy-mode interaction, glyph-atlas updates,
-  and hardware-renderer acceptance remain.
+  resize and cross-client focus restoration. The frontend now exports a
+  bounded semantic UI model for styled status rows, messages, prompts with
+  input and screen cursor positions, and active menus with selection, key, and
+  command metadata. Menu rows, borders, and styles are rendered by tmux before
+  export, so the shell does not need a second tmux-format renderer. Its
+  contract opens the normal tmux command prompt and a
+  configured menu through the native key path and verifies their actual model
+  contents. The same proof passes with installed `/usr/bin/engine-mux` and
+  `/usr/bin/engineos-shell`. Native status/menu/prompt rendering,
+  mouse/copy-mode interaction, glyph-atlas updates, and hardware-renderer
+  acceptance remain.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 

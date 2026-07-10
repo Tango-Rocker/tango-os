@@ -227,7 +227,8 @@ run_mux() {
 		(.capabilities | index("pane-input-v1")) and
 		(.capabilities | index("graphical-view-v1")) and
 		(.capabilities | index("tmux-key-v1")) and
-		(.capabilities | index("view-focus-v1"))' \
+		(.capabilities | index("view-focus-v1")) and
+		(.capabilities | index("ui-model-v1"))' \
 		"$fixture/hello.json" >/dev/null ||
 		die "mux protocol was not served by engine-mux"
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot >"$fixture/first.json"
@@ -267,6 +268,41 @@ run_mux() {
 		die "focused graphical view did not take canonical tmux size ownership"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		set-option -g status on
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		set-option -g 'status-format[0]' 'ENGINE-STATUS #{session_name}'
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" ui "$pane_id" \
+		>"$fixture/ui-status.json"
+	jq -e '.schema == "engine-mux/ui-model-v1" and
+		.columns == 80 and .rows == 24 and
+		.status.enabled == true and .status.mode == "status" and
+		.status.rendered_line_count == 1 and
+		([.status.rows[].text | contains("ENGINE-STATUS contract")] | any) and
+		([.status.rows[].spans | length > 0] | all) and
+		.prompt.active == false and .message.active == false and
+		.menu.active == false' "$fixture/ui-status.json" >/dev/null ||
+		die "native UI model did not preserve tmux status text and styles"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" ui "$pane_id" \
+		C-b : >"$fixture/ui-prompt.json"
+	jq -e '.schema == "engine-mux/ui-model-v1" and
+		.status.mode == "prompt" and .status.rendered_line_count == 1 and
+		.prompt.active == true and .prompt.label == ":" and
+		.prompt.input == "" and .prompt.cursor == 0 and
+		.prompt.screen_cursor_x == 1 and
+		.menu.active == false' "$fixture/ui-prompt.json" >/dev/null ||
+		die "native UI model did not expose the tmux command prompt"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		bind-key -T prefix m display-menu -T ENGINE-MENU \
+		Pick p 'set-option -g @engineos-menu picked'
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" ui "$pane_id" \
+		C-b m >"$fixture/ui-menu.json"
+	jq -e '.schema == "engine-mux/ui-model-v1" and
+		.menu.active == true and .menu.title == "ENGINE-MENU" and
+		.menu.height == (.menu.rows | length) and
+		([.menu.rows[].text | contains("Pick")] | any) and
+		([.menu.items[] | select((.name | startswith("Pick")) and .key == "p" and
+			(.command | contains("@engineos-menu")))] | length) == 1' \
+		"$fixture/ui-menu.json" >/dev/null ||
+		die "native UI model did not expose tmux menu command metadata"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		send-keys -t "$pane_id" "printf 'A\033[31mR\033[0m界é\n'" Enter
 	for _ in {1..100}; do

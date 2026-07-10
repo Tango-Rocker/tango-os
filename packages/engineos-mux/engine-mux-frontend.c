@@ -337,6 +337,201 @@ engine_mux_key_dispatch(struct engine_mux_client *client,
 	return (0);
 }
 
+static int
+engine_mux_status_style_equal(const struct grid_cell *left,
+    const struct grid_cell *right)
+{
+	return (left->attr == right->attr && left->fg == right->fg &&
+	    left->bg == right->bg && left->us == right->us &&
+	    left->link == right->link);
+}
+
+static void
+engine_mux_status_add_span(struct json_object *spans, u_int start, u_int end,
+    const struct grid_cell *cell)
+{
+	struct json_object *span = json_object_new_object();
+
+	json_object_object_add(span, "start", json_object_new_int64(start));
+	json_object_object_add(span, "end", json_object_new_int64(end));
+	json_object_object_add(span, "attributes",
+	    json_object_new_int64(cell->attr));
+	json_object_object_add(span, "foreground",
+	    json_object_new_int64(cell->fg));
+	json_object_object_add(span, "background",
+	    json_object_new_int64(cell->bg));
+	json_object_object_add(span, "underline_colour",
+	    json_object_new_int64(cell->us));
+	json_object_object_add(span, "hyperlink",
+	    json_object_new_int64(cell->link));
+	json_object_array_add(spans, span);
+}
+
+static struct json_object *
+engine_mux_screen_rows(struct screen *screen, u_int rows)
+{
+	struct json_object *result = json_object_new_array();
+	struct grid_cell cell, style;
+	struct evbuffer *text;
+	u_int x, y, columns = screen_size_x(screen), style_start;
+
+	for (y = 0; y < rows; y++) {
+		struct json_object *row = json_object_new_object();
+		struct json_object *spans = json_object_new_array();
+		text = evbuffer_new();
+		style_start = 0;
+		memset(&style, 0, sizeof style);
+		for (x = 0; x < columns; x++) {
+			grid_view_get_cell(screen->grid, x, y, &cell);
+			if (x == 0)
+				memcpy(&style, &cell, sizeof style);
+			else if (!engine_mux_status_style_equal(&style, &cell)) {
+				engine_mux_status_add_span(spans, style_start, x, &style);
+				memcpy(&style, &cell, sizeof style);
+				style_start = x;
+			}
+			if (cell.flags & GRID_FLAG_PADDING)
+				continue;
+			if (cell.data.have == 0)
+				evbuffer_add(text, " ", 1);
+			else
+				evbuffer_add(text, cell.data.data, cell.data.have);
+		}
+		if (columns != 0)
+			engine_mux_status_add_span(spans, style_start, columns, &style);
+		json_object_object_add(row, "text", json_object_new_string_len(
+		    (const char *)EVBUFFER_DATA(text), EVBUFFER_LENGTH(text)));
+		json_object_object_add(row, "spans", spans);
+		json_object_array_add(result, row);
+		evbuffer_free(text);
+	}
+	return (result);
+}
+
+static struct json_object *
+engine_mux_build_ui_model(struct engine_mux_view *view)
+{
+	struct client *client = view->tmux_client;
+	struct status_line *status = &client->status;
+	struct screen *screen, *menu_screen = NULL;
+	struct menu *menu = NULL;
+	struct json_object *root, *status_object, *prompt, *message, *menu_object;
+	struct json_object *items;
+	char *prompt_input;
+	const char *mode = "status";
+	u_int lines, rendered_lines, px = 0, py = 0, index;
+	int choice = -1, menu_active, status_y;
+
+	lines = status_line_size(client);
+	if (client->prompt_string != NULL) {
+		status_prompt_redraw(client);
+		mode = "prompt";
+	} else if (client->message_string != NULL) {
+		status_message_redraw(client);
+		mode = "message";
+	} else
+		status_redraw(client);
+	screen = status->active;
+	rendered_lines = lines;
+	if (rendered_lines == 0 &&
+	    (client->prompt_string != NULL || client->message_string != NULL))
+		rendered_lines = 1;
+	if (rendered_lines > screen_size_y(screen))
+		rendered_lines = screen_size_y(screen);
+	status_y = status_at_line(client);
+	if (status_y < 0 && rendered_lines != 0)
+		status_y = client->tty.sy - rendered_lines;
+
+	root = json_object_new_object();
+	json_object_object_add(root, "schema",
+	    json_object_new_string("engine-mux/ui-model-v1"));
+	json_object_object_add(root, "view_id", json_object_new_int64(view->id));
+	json_object_object_add(root, "columns",
+	    json_object_new_int64(client->tty.sx));
+	json_object_object_add(root, "rows", json_object_new_int64(client->tty.sy));
+	status_object = json_object_new_object();
+	json_object_object_add(status_object, "enabled",
+	    json_object_new_boolean(lines != 0));
+	json_object_object_add(status_object, "line_count",
+	    json_object_new_int64(lines));
+	json_object_object_add(status_object, "rendered_line_count",
+	    json_object_new_int64(rendered_lines));
+	json_object_object_add(status_object, "y", json_object_new_int64(status_y));
+	json_object_object_add(status_object, "mode", json_object_new_string(mode));
+	json_object_object_add(status_object, "rows",
+	    engine_mux_screen_rows(screen, rendered_lines));
+	json_object_object_add(root, "status", status_object);
+
+	prompt = json_object_new_object();
+	json_object_object_add(prompt, "active",
+	    json_object_new_boolean(client->prompt_string != NULL));
+	if (client->prompt_string != NULL) {
+		prompt_input = utf8_tocstr(client->prompt_buffer);
+		json_object_object_add(prompt, "label",
+		    json_object_new_string(client->prompt_string));
+		json_object_object_add(prompt, "input",
+		    json_object_new_string(prompt_input));
+		json_object_object_add(prompt, "cursor",
+		    json_object_new_int64(client->prompt_index));
+		json_object_object_add(prompt, "screen_cursor_x",
+		    json_object_new_int(client->prompt_cursor));
+		json_object_object_add(prompt, "type",
+		    json_object_new_int(client->prompt_type));
+		json_object_object_add(prompt, "flags",
+		    json_object_new_int(client->prompt_flags));
+		free(prompt_input);
+	}
+	json_object_object_add(root, "prompt", prompt);
+
+	message = json_object_new_object();
+	json_object_object_add(message, "active",
+	    json_object_new_boolean(client->message_string != NULL));
+	if (client->message_string != NULL)
+		json_object_object_add(message, "text",
+		    json_object_new_string(client->message_string));
+	json_object_object_add(root, "message", message);
+
+	menu_object = json_object_new_object();
+	menu_active = menu_get_model(client, &menu, &choice, &px, &py,
+	    &menu_screen);
+	json_object_object_add(menu_object, "active",
+	    json_object_new_boolean(menu_active));
+	if (menu != NULL) {
+		json_object_object_add(menu_object, "title",
+		    json_object_new_string(menu->title));
+		json_object_object_add(menu_object, "x", json_object_new_int64(px));
+		json_object_object_add(menu_object, "y", json_object_new_int64(py));
+		json_object_object_add(menu_object, "width",
+		    json_object_new_int64(menu->width + 4));
+		json_object_object_add(menu_object, "height",
+		    json_object_new_int64(menu->count + 2));
+		json_object_object_add(menu_object, "selected",
+		    json_object_new_int(choice));
+		json_object_object_add(menu_object, "rows",
+		    engine_mux_screen_rows(menu_screen, screen_size_y(menu_screen)));
+		items = json_object_new_array();
+		for (index = 0; index < menu->count; index++) {
+			struct menu_item *item = &menu->items[index];
+			struct json_object *item_object = json_object_new_object();
+			json_object_object_add(item_object, "separator",
+			    json_object_new_boolean(item->name == NULL));
+			if (item->name != NULL)
+				json_object_object_add(item_object, "name",
+				    json_object_new_string(item->name));
+			if (item->key != KEYC_NONE)
+				json_object_object_add(item_object, "key",
+				    json_object_new_string(key_string_lookup_key(item->key, 0)));
+			if (item->command != NULL)
+				json_object_object_add(item_object, "command",
+				    json_object_new_string(item->command));
+			json_object_array_add(items, item_object);
+		}
+		json_object_object_add(menu_object, "items", items);
+	}
+	json_object_object_add(root, "menu", menu_object);
+	return (root);
+}
+
 static uint64_t
 engine_mux_host_to_be64(uint64_t value)
 {
@@ -964,7 +1159,7 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	size_t scrollback_size;
 	const char *hello =
 	    "{\"schema\":\"engine-mux/hello-v1\",\"server\":\"engine-mux\","
-	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\"]}";
+	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\",\"ui-model-v1\"]}";
 	const char *subscribe_ack =
 	    "{\"schema\":\"engine-mux/grid-subscribe-v1\",\"subscribed\":true}";
 	const char *input_ack =
@@ -1108,6 +1303,53 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 		    (type == ENGINE_MUX_VIEW_UNREGISTER_REQUEST ?
 		    view_unregister_ack : view_focus_ack)))) != 0)
 			engine_mux_client_free(client);
+		return;
+	}
+	if (type == ENGINE_MUX_UI_REQUEST) {
+		struct json_object *root, *model;
+		struct engine_mux_view *view;
+		const char *schema, *model_text;
+		u_int view_id;
+		size_t model_size;
+
+		root = engine_mux_parse_json(packet + sizeof header, payload_size);
+		free(packet);
+		if (root == NULL) {
+			if (engine_mux_send_error(client->fd, request_id,
+			    "malformed-json", "UI request payload is not valid JSON") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		schema = engine_mux_json_string_value(root, "schema", 64);
+		if (schema == NULL || strcmp(schema, "engine-mux/ui-request-v1") != 0 ||
+		    engine_mux_json_u32(root, "view_id", 1, UINT32_MAX,
+		    &view_id) != 0 ||
+		    (view = engine_mux_view_find(client, view_id)) == NULL) {
+			json_object_put(root);
+			if (engine_mux_send_error(client->fd, request_id,
+			    "request-rejected", "UI request view is invalid") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		json_object_put(root);
+		model = engine_mux_build_ui_model(view);
+		model_text = json_object_to_json_string_ext(model,
+		    JSON_C_TO_STRING_PLAIN);
+		model_size = strlen(model_text);
+		if (model_size > ENGINE_MUX_MAX_PAYLOAD) {
+			json_object_put(model);
+			if (engine_mux_send_error(client->fd, request_id,
+			    "payload-too-large", "UI model exceeds the frame limit") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		if (engine_mux_send_frame(client->fd, ENGINE_MUX_UI_MODEL,
+		    request_id, engine_mux_revision, model_text, model_size) != 0) {
+			json_object_put(model);
+			engine_mux_client_free(client);
+			return;
+		}
+		json_object_put(model);
 		return;
 	}
 	if (type == ENGINE_MUX_GRID_REQUEST) {

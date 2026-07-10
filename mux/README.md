@@ -12,10 +12,13 @@ session, window, and pane structures.
 header and a bounded payload. The implemented v1 messages are handshake,
 complete layout snapshot, full binary terminal-grid snapshot, sparse grid
 damage, scrollback pages, pane input, graphical-view registration, tmux key
-input, focused-view transfer, and explicit errors. Stale revisions fail with an
-explicit complete resynchronization requirement. Unsupported command messages
-fail; they are not reported as successful. Layout snapshots expose
-copy-mode/history state.
+input, focused-view transfer, semantic UI models, and explicit errors. The UI
+model exports styled status rows, prompts and their input/screen cursors,
+messages, and tmux-rendered menu rows with selection, keys, and command
+metadata. Stale
+revisions fail with an explicit complete resynchronization requirement.
+Unsupported command messages fail; they are not reported as successful. Layout
+snapshots expose copy-mode/history state.
 
 Each native shell output registers as a real tmux client attached to the
 selected session. Its grid dimensions participate in tmux's normal canonical
@@ -34,5 +37,5 @@ meson compile -C build/mux
 ./tools/engineos/eos-test mux
 ```
 
-The next migration proof is status, menu, and prompt models, followed by mouse
-and copy-mode interaction.
+The next migration proof is native rendering and interaction for status,
+prompts, menus, mouse, and copy mode.

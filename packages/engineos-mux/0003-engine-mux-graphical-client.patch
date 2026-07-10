@@ -20,3 +20,43 @@
 @@ -3133 +3133 @@
 -	if (c->flags & (CLIENT_CONTROL|CLIENT_SUSPENDED))
 +	if (c->flags & (CLIENT_CONTROL|CLIENT_SUSPENDED|CLIENT_GRAPHICAL))
+--- a/tmux.h
++++ b/tmux.h
+@@ -3598,0 +3599,2 @@
++int		 menu_get_model(struct client *, struct menu **, int *, u_int *,
++		    u_int *, struct screen **);
+--- a/menu.c
++++ b/menu.c
+@@ -181,0 +182,32 @@
++int
++menu_get_model(struct client *c, struct menu **menu, int *choice, u_int *px,
++    u_int *py, struct screen **screen)
++{
++	struct menu_data	*md;
++	struct screen_write_ctx	 ctx;
++
++	if (c->overlay_mode != menu_mode_cb || c->overlay_data == NULL)
++		return (0);
++	md = c->overlay_data;
++	if (menu != NULL)
++		*menu = md->menu;
++	if (choice != NULL)
++		*choice = md->choice;
++	if (px != NULL)
++		*px = md->px;
++	if (py != NULL)
++		*py = md->py;
++
++	screen_write_start(&ctx, &md->s);
++	screen_write_clearscreen(&ctx, 8);
++	if (md->border_lines != BOX_LINES_NONE) {
++		screen_write_box(&ctx, md->menu->width + 4, md->menu->count + 2,
++		    md->border_lines, &md->border_style, md->menu->title);
++	}
++	screen_write_menu(&ctx, md->menu, md->choice, md->border_lines,
++	    &md->style, &md->border_style, &md->selected_style);
++	screen_write_stop(&ctx);
++	if (screen != NULL)
++		*screen = &md->s;
++	return (1);
++}

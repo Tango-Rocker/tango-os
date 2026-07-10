@@ -28,10 +28,13 @@ client with output geometry and canonical rows/columns. Discrete key frames use
 tmux's normal client key path, including configured prefixes and key tables,
 and graphical-client teardown is proven. Pointer focus now transfers the sole
 graphical canonical-size owner, output loss promotes a survivor, and temporary
-frontend clients restore prior ownership on disconnect. Status/menu/prompt
-models, incremental GPU glyph-atlas updates, mouse and full copy-mode
-interaction, compound presentations, process scopes, leases, games/images,
-hardware acceptance, and legacy cutover remain open.
+frontend clients restore prior ownership on disconnect. The server now exports
+styled status rows, messages, command prompts with both input and screen cursor
+positions, and already-rendered menu rows plus item/key/command metadata.
+Native rendering and
+interaction for those models, incremental GPU glyph-atlas updates, mouse and
+full copy-mode interaction, compound presentations, process scopes, leases,
+games/images, hardware acceptance, and legacy cutover remain open.
 
 ## Workstream 1: Integrate The Protocol Into Engine Mux
 
