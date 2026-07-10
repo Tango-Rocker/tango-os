@@ -48,10 +48,16 @@ clipped presentation scenes, state-driven console/application visibility, and
 configured-prefix routing in graphical mode are now implemented. A
 deterministic XDG client proves that an unscoped surface is rejected, a scoped
 surface maps only to its pane, presentation/console toggles reach the
-compositor, and process exit restores the terminal. Multi-pane scene
-construction, complete surface tabs and popup tracking, leases, games/images,
-direct-KMS clipping/resize/zoom, final hardware acceptance, and legacy cutover
-remain open.
+compositor, and process exit restores the terminal. XDG popups and transient
+toplevels now inherit the owning pane and registered scope, remain clipped to
+that pane, and do not inflate its tab count. Extra independent toplevels become
+pane-local tab groups; the shell exposes their roles and visibility, keeps one
+group active, and promotes the primary plus its transient when the active tab
+closes. The installed deterministic contract proves this full surface-set
+lifecycle and protects pending launch scopes across the systemd-run PTY
+handoff. An explicit tab-selection command, multi-pane scene construction,
+leases, games/images, direct-KMS clipping/resize/zoom, final hardware
+acceptance, and legacy cutover remain open.
 
 ## Workstream 1: Integrate The Protocol Into Engine Mux
 

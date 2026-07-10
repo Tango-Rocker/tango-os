@@ -209,6 +209,7 @@ struct engineos_shell_server {
 	uint32_t mux_pointer_button;
 	uint32_t mux_pointer_x;
 	uint32_t mux_pointer_y;
+	uint32_t mux_popup_count;
 	uint32_t keyboard_modifiers;
 	uint32_t mux_consumed_keycode;
 	bool mux_prefix_pending;
@@ -307,9 +308,18 @@ struct engineos_shell_pointer {
 };
 
 struct engineos_shell_popup {
+	struct engineos_shell_server *server;
+	struct engineos_shell_view *owner;
 	struct wlr_xdg_popup *xdg_popup;
+	struct wlr_scene_tree *scene_tree;
+	struct wl_listener map;
+	struct wl_listener unmap;
 	struct wl_listener commit;
 	struct wl_listener destroy;
+	pid_t client_pid;
+	uint32_t surface_id;
+	bool mapped;
+	bool mux_bound;
 };
 
 struct engineos_shell_output {
@@ -354,6 +364,8 @@ struct engineos_shell_view {
 	bool maximized;
 	bool minimized;
 	bool mux_bound;
+	bool mux_transient;
+	struct engineos_shell_view *mux_parent;
 	bool mux_presentation_visible;
 	pid_t mux_client_pid;
 	uint32_t mux_pane_id;
@@ -1737,10 +1749,27 @@ static bool compute_view_geometry(struct engineos_shell_view *view,
 	geometry->fullscreen = view->fullscreen;
 	geometry->layout = "floating";
 	if (view->mux_bound) {
-		geometry->x = 0;
-		geometry->y = 0;
-		geometry->width = view->server->mux_terminal_width;
-		geometry->height = view->server->mux_terminal_height;
+		int pane_width = view->server->mux_terminal_width;
+		int pane_height = view->server->mux_terminal_height;
+		geometry->width = pane_width;
+		geometry->height = pane_height;
+		if (view->mux_transient) {
+			int requested_width = view->xdg_surface->surface->current.width;
+			int requested_height = view->xdg_surface->surface->current.height;
+			geometry->width = requested_width > 0 ? requested_width :
+				(pane_width * 2) / 3;
+			geometry->height = requested_height > 0 ? requested_height :
+				(pane_height * 2) / 3;
+			if (geometry->width > (pane_width * 3) / 4)
+				geometry->width = (pane_width * 3) / 4;
+			if (geometry->height > (pane_height * 3) / 4)
+				geometry->height = (pane_height * 3) / 4;
+			geometry->x = (pane_width - geometry->width) / 2;
+			geometry->y = (pane_height - geometry->height) / 2;
+		} else {
+			geometry->x = 0;
+			geometry->y = 0;
+		}
 		geometry->fullscreen = false;
 		geometry->layout = "native-mux-presentation";
 		return geometry->width > 0 && geometry->height > 0;
@@ -3459,9 +3488,10 @@ static void write_shell_state(struct engineos_shell_server *server,
 	json_write_string(file, server->mux_client.pane_presentation);
 	fprintf(file, ", \"view_mode\": ");
 	json_write_string(file, server->mux_client.pane_view_mode);
-	fprintf(file, ", \"mapped\": %s, \"surface_tabs\": %u, \"terminal_visible\": %s}}",
+	fprintf(file, ", \"mapped\": %s, \"surface_tabs\": %u, \"popups\": %u, \"terminal_visible\": %s}}",
 		server->mux_client.pane_presentation_mapped ? "true" : "false",
 		server->mux_client.pane_surface_tabs,
+		server->mux_popup_count,
 		strcmp(server->mux_client.pane_view_mode, "presentation") == 0 &&
 			server->mux_client.pane_presentation_mapped ? "false" : "true");
 	fprintf(file, ",\n  \"active_slot\": ");
@@ -3562,9 +3592,10 @@ static void write_shell_state(struct engineos_shell_server *server,
 			json_write_string(file, view->mux_bound ? native_pane_id :
 				(pane_binding != NULL ? pane_binding->pane_id : ""));
 			fprintf(file,
-				", \"mux_generation\": %u, \"surface_id\": %u, \"client_pid\": %ld, \"presentation_visible\": %s",
+				", \"mux_generation\": %u, \"surface_id\": %u, \"surface_role\": \"%s\", \"client_pid\": %ld, \"presentation_visible\": %s",
 				view->mux_bound ? view->mux_pane_generation : 0,
 				view->mux_bound ? view->view_id : 0,
+				view->mux_transient ? "transient" : "toplevel",
 				view->mux_bound ? (long)view->mux_client_pid : 0L,
 				view->mux_bound && view->mux_presentation_visible ?
 					"true" : "false");
@@ -5908,15 +5939,85 @@ static bool view_client_credentials(struct engineos_shell_view *view,
 	return *pid > 0 && uid == getuid();
 }
 
+static bool xdg_surface_client_credentials(struct wlr_xdg_surface *surface,
+		pid_t *pid) {
+	if (surface == NULL || surface->surface == NULL ||
+			surface->surface->resource == NULL || pid == NULL)
+		return false;
+	struct wl_client *client = wl_resource_get_client(surface->surface->resource);
+	if (client == NULL)
+		return false;
+	uid_t uid = 0;
+	gid_t gid = 0;
+	wl_client_get_credentials(client, pid, &uid, &gid);
+	return *pid > 0 && uid == getuid();
+}
+
+static struct engineos_shell_view *native_owner_view_for_xdg(
+		struct engineos_shell_server *server, struct wlr_xdg_surface *surface) {
+	if (surface == NULL)
+		return NULL;
+	struct engineos_shell_view *view;
+	wl_list_for_each(view, &server->views, link) {
+		if (view->xdg_surface == surface)
+			return view;
+	}
+	if (surface->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL &&
+			surface->toplevel != NULL && surface->toplevel->parent != NULL)
+		return native_owner_view_for_xdg(server,
+			surface->toplevel->parent->base);
+	if (surface->role == WLR_XDG_SURFACE_ROLE_POPUP &&
+			surface->popup != NULL && surface->popup->parent != NULL)
+		return native_owner_view_for_xdg(server,
+			wlr_xdg_surface_try_from_wlr_surface(surface->popup->parent));
+	return NULL;
+}
+
 static struct engineos_shell_view *native_presentation_other_view(
 		struct engineos_shell_view *view) {
 	struct engineos_shell_view *candidate;
 	wl_list_for_each(candidate, &view->server->views, link) {
 		if (candidate != view && candidate->mapped && candidate->mux_bound &&
+				!candidate->mux_transient &&
+				candidate->mux_presentation_visible &&
 				candidate->mux_pane_id == view->mux_pane_id)
 			return candidate;
 	}
 	return NULL;
+}
+
+static struct engineos_shell_view *native_presentation_any_tab(
+		struct engineos_shell_view *view) {
+	struct engineos_shell_view *candidate;
+	wl_list_for_each(candidate, &view->server->views, link) {
+		if (candidate != view && candidate->mapped && candidate->mux_bound &&
+				!candidate->mux_transient &&
+				candidate->mux_pane_id == view->mux_pane_id)
+			return candidate;
+	}
+	return NULL;
+}
+
+static struct engineos_shell_view *native_presentation_root(
+		struct engineos_shell_view *view) {
+	while (view != NULL && view->mux_transient && view->mux_parent != NULL)
+		view = view->mux_parent;
+	return view;
+}
+
+static void native_presentation_set_tab_visible(
+		struct engineos_shell_server *server,
+		struct engineos_shell_view *root, bool visible) {
+	struct engineos_shell_view *candidate;
+	wl_list_for_each(candidate, &server->views, link) {
+		if (!candidate->mapped || !candidate->mux_bound ||
+				native_presentation_root(candidate) != root)
+			continue;
+		candidate->mux_presentation_visible = visible;
+		wlr_scene_node_set_enabled(&candidate->scene_tree->node, visible &&
+			server->mux_client.pane_presentation_mapped &&
+			strcmp(server->mux_client.pane_view_mode, "presentation") == 0);
+	}
 }
 
 static bool native_presentation_map(struct engineos_shell_view *view) {
@@ -5925,6 +6026,8 @@ static bool native_presentation_map(struct engineos_shell_view *view) {
 	char error[256] = {0};
 	bool grid_changed = false;
 	struct engineos_mux_presentation_target target = {0};
+	struct engineos_shell_view *parent = NULL;
+	const char *surface_role = "toplevel";
 
 	if (!view_client_credentials(view, &pid) || pid > INT32_MAX) {
 		snprintf(error, sizeof(error), "Wayland client credentials are invalid");
@@ -5933,14 +6036,28 @@ static bool native_presentation_map(struct engineos_shell_view *view) {
 	if (!engineos_mux_client_resolve_presentation(&server->mux_client,
 			(int32_t)pid, &target, &grid_changed, error, sizeof(error)))
 		goto reject;
+	if (view->xdg_surface->toplevel != NULL &&
+			view->xdg_surface->toplevel->parent != NULL) {
+		parent = native_owner_view_for_xdg(server,
+			view->xdg_surface->toplevel->parent->base);
+		if (parent == NULL || !parent->mux_bound ||
+				parent->mux_pane_id != target.pane_id ||
+				parent->mux_pane_generation != target.generation) {
+			snprintf(error, sizeof(error),
+				"transient parent is not bound to the resolved pane");
+			goto reject;
+		}
+		surface_role = "transient";
+	}
 	if (!engineos_mux_client_map_presentation(&server->mux_client, &target,
-			(int32_t)pid, view->view_id, "toplevel", &grid_changed,
+			(int32_t)pid, view->view_id, surface_role, &grid_changed,
 			error, sizeof(error)))
 		goto reject;
 	strcpy(server->mux_client.pane_presentation, target.presentation);
 	strcpy(server->mux_client.pane_view_mode, "presentation");
 	server->mux_client.pane_presentation_mapped = true;
-	server->mux_client.pane_surface_tabs++;
+	if (parent == NULL)
+		server->mux_client.pane_surface_tabs++;
 	if (!engineos_mux_client_refresh_presentation(&server->mux_client,
 			error, sizeof(error))) {
 		wlr_log(WLR_ERROR, "native presentation map state refresh failed: %s",
@@ -5951,12 +6068,19 @@ static bool native_presentation_map(struct engineos_shell_view *view) {
 	view->mux_client_pid = pid;
 	view->mux_pane_id = target.pane_id;
 	view->mux_pane_generation = target.generation;
-	view->mux_presentation_visible = target.pane_id == server->mux_client.pane_id;
+	view->mux_transient = parent != NULL;
+	view->mux_parent = parent;
+	view->mux_presentation_visible = parent != NULL ?
+		parent->mux_presentation_visible :
+		target.pane_id == server->mux_client.pane_id;
+	/* Keep transient trees as pane siblings: wlroots recursively destroys
+	 * child scene nodes with their parent, while XDG destroys each toplevel
+	 * independently. The logical parent still owns placement and lifecycle. */
 	wlr_scene_node_reparent(&view->scene_tree->node, server->mux_pane_tree);
-	struct engineos_shell_view *other = native_presentation_other_view(view);
-	if (other != NULL) {
-		other->mux_presentation_visible = false;
-		wlr_scene_node_set_enabled(&other->scene_tree->node, false);
+	if (parent == NULL) {
+		struct engineos_shell_view *other = native_presentation_other_view(view);
+		if (other != NULL)
+			native_presentation_set_tab_visible(server, other, false);
 	}
 	apply_view_layout(view);
 	wlr_scene_node_set_enabled(&view->scene_tree->node,
@@ -5971,9 +6095,10 @@ static bool native_presentation_map(struct engineos_shell_view *view) {
 		wl_display_terminate(server->display);
 	}
 	wlr_log(WLR_INFO,
-		"native presentation mapped pane=%%%u generation=%u pid=%ld surface=%u visible=%s title=%s app_id=%s",
+		"native presentation mapped pane=%%%u generation=%u pid=%ld surface=%u role=%s visible=%s title=%s app_id=%s",
 		view->mux_pane_id, view->mux_pane_generation, (long)pid,
-		view->view_id, view->mux_presentation_visible ? "true" : "false",
+		view->view_id, surface_role,
+		view->mux_presentation_visible ? "true" : "false",
 		view_title(view), view_app_id(view));
 	return true;
 
@@ -6016,16 +6141,27 @@ static void native_presentation_unmap(struct engineos_shell_view *view) {
 		}
 	}
 	uint32_t pane_id = view->mux_pane_id;
+	bool transient = view->mux_transient;
+	bool was_visible = view->mux_presentation_visible;
+	struct engineos_shell_view *parent = view->mux_parent;
 	view->mux_bound = false;
 	view->mux_presentation_visible = false;
-	struct engineos_shell_view *other = native_presentation_other_view(view);
-	if (other != NULL && pane_id == server->mux_client.pane_id) {
-		other->mux_presentation_visible = true;
-		wlr_scene_node_set_enabled(&other->scene_tree->node, true);
-		activate_view(other, "native-presentation-tab-promoted");
-	} else if (pane_id == server->mux_client.pane_id) {
-		wlr_scene_node_set_enabled(&server->mux_terminal_scene->node, true);
-		server->input_mode = ENGINEOS_INPUT_TERMINAL;
+	view->mux_transient = false;
+	view->mux_parent = NULL;
+	if (transient) {
+		if (parent != NULL && parent->mapped && parent->mux_bound &&
+				pane_id == server->mux_client.pane_id)
+			activate_view(parent, "native-transient-unmapped");
+	} else if (was_visible) {
+		struct engineos_shell_view *other =
+			native_presentation_any_tab(view);
+		if (other != NULL && pane_id == server->mux_client.pane_id) {
+			native_presentation_set_tab_visible(server, other, true);
+			activate_view(other, "native-presentation-tab-promoted");
+		} else if (pane_id == server->mux_client.pane_id) {
+			wlr_scene_node_set_enabled(&server->mux_terminal_scene->node, true);
+			server->input_mode = ENGINEOS_INPUT_TERMINAL;
+		}
 	}
 	if (grid_changed && !refresh_native_terminal_scene(server,
 			"native-presentation-unmap")) {
@@ -6413,21 +6549,96 @@ static void xdg_popup_commit(struct wl_listener *listener, void *data) {
 	}
 }
 
+static void xdg_popup_unmap_mux(struct engineos_shell_popup *popup) {
+	if (!popup->mux_bound)
+		return;
+	bool grid_changed = false;
+	char error[256] = {0};
+	if (!engineos_mux_client_unmap_presentation(&popup->server->mux_client,
+			popup->owner->mux_pane_id, popup->owner->mux_pane_generation,
+			(int32_t)popup->client_pid, popup->surface_id, &grid_changed,
+			error, sizeof(error))) {
+		wlr_log(WLR_INFO,
+			"native popup unmap already retired pane=%%%u surface=%u reason=%s",
+			popup->owner->mux_pane_id, popup->surface_id,
+			error[0] != '\0' ? error : "unknown");
+	}
+	popup->mux_bound = false;
+	if (popup->server->mux_popup_count > 0)
+		popup->server->mux_popup_count--;
+}
+
+static void xdg_popup_map(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct engineos_shell_popup *popup =
+		wl_container_of(listener, popup, map);
+	popup->mapped = true;
+	if (popup->server->mux_mode != ENGINEOS_MUX_NATIVE)
+		return;
+	char error[256] = {0};
+	bool grid_changed = false;
+	if (popup->owner == NULL || !popup->owner->mux_bound ||
+			!xdg_surface_client_credentials(popup->xdg_popup->base,
+				&popup->client_pid) || popup->client_pid > INT32_MAX) {
+		snprintf(error, sizeof(error),
+			"popup parent or client credentials are not bound");
+		goto reject;
+	}
+	struct engineos_mux_presentation_target target = {
+		.pane_id = popup->owner->mux_pane_id,
+		.generation = popup->owner->mux_pane_generation,
+	};
+	if (!engineos_mux_client_map_presentation(&popup->server->mux_client,
+			&target, (int32_t)popup->client_pid, popup->surface_id, "popup",
+			&grid_changed, error, sizeof(error)))
+		goto reject;
+	popup->mux_bound = true;
+	popup->server->mux_popup_count++;
+	wlr_log(WLR_INFO,
+		"native popup mapped pane=%%%u generation=%u pid=%ld surface=%u",
+		target.pane_id, target.generation, (long)popup->client_pid,
+		popup->surface_id);
+	write_shell_state(popup->server, "native-popup-mapped");
+	return;
+
+reject:
+	wlr_log(WLR_ERROR,
+		"native popup rejected surface=%u reason=%s",
+		popup->surface_id, error[0] != '\0' ? error : "unknown");
+	popup->mapped = false;
+	wlr_xdg_popup_destroy(popup->xdg_popup);
+}
+
+static void xdg_popup_unmap(struct wl_listener *listener, void *data) {
+	(void)data;
+	struct engineos_shell_popup *popup =
+		wl_container_of(listener, popup, unmap);
+	popup->mapped = false;
+	if (popup->server->mux_mode == ENGINEOS_MUX_NATIVE)
+		xdg_popup_unmap_mux(popup);
+	write_shell_state(popup->server, "native-popup-unmapped");
+}
+
 static void xdg_popup_destroy(struct wl_listener *listener, void *data) {
 	(void)data;
 	struct engineos_shell_popup *popup =
 		wl_container_of(listener, popup, destroy);
+	if (popup->server->mux_mode == ENGINEOS_MUX_NATIVE)
+		xdg_popup_unmap_mux(popup);
 
 	if (popup->xdg_popup != NULL && popup->xdg_popup->base != NULL) {
 		popup->xdg_popup->base->data = NULL;
 	}
+	wl_list_remove(&popup->map.link);
+	wl_list_remove(&popup->unmap.link);
 	wl_list_remove(&popup->commit.link);
 	wl_list_remove(&popup->destroy.link);
 	free(popup);
 }
 
 static void server_new_xdg_popup(struct wl_listener *listener, void *data) {
-	(void)listener;
+	struct engineos_shell_server *server =
+		wl_container_of(listener, server, new_xdg_popup);
 	struct wlr_xdg_popup *xdg_popup = data;
 	struct wlr_xdg_surface *parent =
 		wlr_xdg_surface_try_from_wlr_surface(xdg_popup->parent);
@@ -6453,7 +6664,17 @@ static void server_new_xdg_popup(struct wl_listener *listener, void *data) {
 	}
 
 	popup->xdg_popup = xdg_popup;
+	popup->server = server;
+	popup->scene_tree = popup_tree;
+	popup->owner = native_owner_view_for_xdg(server, parent);
+	if (server->next_view_id == 0)
+		server->next_view_id = 1;
+	popup->surface_id = server->next_view_id++;
 	xdg_popup->base->data = popup_tree;
+	popup->map.notify = xdg_popup_map;
+	wl_signal_add(&xdg_popup->base->surface->events.map, &popup->map);
+	popup->unmap.notify = xdg_popup_unmap;
+	wl_signal_add(&xdg_popup->base->surface->events.unmap, &popup->unmap);
 	popup->commit.notify = xdg_popup_commit;
 	wl_signal_add(&xdg_popup->base->surface->events.commit, &popup->commit);
 	popup->destroy.notify = xdg_popup_destroy;

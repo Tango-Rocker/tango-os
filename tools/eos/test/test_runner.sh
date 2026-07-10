@@ -171,7 +171,7 @@ run_mux() {
 	local stable_count=0
 	local pane_scope="" pane_app_pid="" pane_state="" split_pane_id=""
 	local pane_shell_pid="" pane_foreground_pid=""
-	local wayland_display="" unscoped_pid=""
+	local wayland_display="" unscoped_pid="" scoped_client_pid=""
 	local user_runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 	local user_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$user_runtime/bus}"
 
@@ -809,16 +809,27 @@ run_mux() {
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		launch-pane-app -t "$shell_pane_id" -- env \
 		ENGINEOS_WAYLAND_TEST_DELAY_MS=250 \
+		ENGINEOS_WAYLAND_TEST_POPUP=1 \
+		ENGINEOS_WAYLAND_TEST_TRANSIENT=1 \
+		ENGINEOS_WAYLAND_TEST_TAB=1 \
 		WAYLAND_DISPLAY="$fixture/$wayland_display" \
 		"$fixture/bin/engineos-wayland-presentation-client"
 	for _ in {1..150}; do
 		jq -e --arg pane "$shell_pane_id" \
-			'.mux.presentation.type == "wayland" and
+			'.mux.grid.pixel_width as $width |
+			 .mux.grid.pixel_height as $height |
+			 .mux.presentation.type == "wayland" and
 			 .mux.presentation.view_mode == "presentation" and
 			 .mux.presentation.mapped == true and
-			 .mux.presentation.surface_tabs == 1 and
+			 .mux.presentation.surface_tabs == 2 and
+			 .mux.presentation.popups == 1 and
 			 .mux.presentation.terminal_visible == false and
 			 .input.mode == "graphical" and
+			 ([.windows[] | select(.bound == true)] | length) == 3 and
+			 any(.windows[]; .bound == true and .surface_role == "transient" and
+			   .width < $width and .height < $height and .visible == false) and
+			 ([.windows[] | select(.bound == true and
+			   .surface_role == "toplevel" and .visible == true)] | length) == 1 and
 			 any(.windows[]; .bound == true and .pane_id == $pane and
 			   .presentation_visible == true and .visible == true)' \
 			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
@@ -826,11 +837,41 @@ run_mux() {
 	done
 	jq -e --arg pane "$shell_pane_id" \
 		'.mux.presentation.view_mode == "presentation" and
-		 any(.windows[]; .bound == true and .pane_id == $pane and .visible == true)' \
+		 .mux.presentation.popups == 1 and
+		 .mux.presentation.surface_tabs == 2 and
+		 ([.windows[] | select(.bound == true and .pane_id == $pane)] | length) == 3 and
+		 any(.windows[]; .bound == true and .app_id ==
+		   "engineos.presentation-tab-proof" and .visible == true) and
+		 all(.windows[]; .bound == false or .surface_role != "transient" or
+		   .visible == false)' \
 		"$fixture/engineos/shell-state.json" >/dev/null || {
 		jq '{mux,input,windows}' "$fixture/engineos/shell-state.json" >&2 || true
 		tail -100 "$fixture/shell-native.log" >&2 || true
 		die "scoped Wayland client did not bind to its native mux pane"
+	}
+	scoped_client_pid="$(jq -er '.windows[] | select(.bound == true and
+		.app_id == "engineos.presentation-tab-proof") | .client_pid' \
+		"$fixture/engineos/shell-state.json")"
+	[[ "$scoped_client_pid" =~ ^[1-9][0-9]*$ ]] ||
+		die "native shell did not expose the scoped Wayland client PID"
+	kill -USR1 "$scoped_client_pid"
+	for _ in {1..100}; do
+		jq -e '.mux.presentation.surface_tabs == 1 and
+			([.windows[] | select(.bound == true)] | length) == 2 and
+			any(.windows[]; .bound == true and .surface_role == "toplevel" and
+			  .app_id == "engineos.presentation-proof" and .visible == true) and
+			any(.windows[]; .bound == true and .surface_role == "transient" and
+			  .visible == true)' "$fixture/engineos/shell-state.json" \
+			>/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '.mux.presentation.surface_tabs == 1 and
+		([.windows[] | select(.bound == true)] | length) == 2 and
+		all(.windows[]; .bound == false or .visible == true)' \
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '{mux,input,windows}' "$fixture/engineos/shell-state.json" >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
+		die "closing the active pane-local tab did not promote its sibling"
 	}
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		pane-presentation -t "$shell_pane_id" console
@@ -870,6 +911,7 @@ run_mux() {
 			'#{pane_presentation}|#{pane_view_mode}|#{pane_surface_count}')"
 		jq -e '.mux.presentation.type == "terminal" and
 			.mux.presentation.terminal_visible == true and
+			.mux.presentation.popups == 0 and
 			.input.mode == "terminal" and
 			all(.windows[]; .bound == false)' \
 			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 &&

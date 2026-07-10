@@ -528,7 +528,16 @@ engine_pane_sync_all(void)
 			engine_pane_reset_runtime(wp, 1);
 			continue;
 		}
-		if (wp->engine_app_pgrp > 0 && foreground == wp->pid) {
+		/* systemd-run may briefly return the terminal to the shell before the
+		 * first surface maps. A nonzero deadline identifies that pending state;
+		 * only retire a previously mapped launch after its process group is
+		 * actually gone. A split-pane host is the exception: it intentionally
+		 * becomes the pane's login shell when its initial app exits. */
+		if (wp->engine_app_pgrp > 0 && foreground == wp->pid &&
+		    (wp->engine_launch_deadline == 0 ||
+		    (wp->engine_scope != NULL && strncmp(wp->engine_scope,
+		    "engine-pane-split-", 18) == 0)) &&
+		    kill(-wp->engine_app_pgrp, 0) != 0 && errno == ESRCH) {
 			engine_pane_reset_runtime(wp, 1);
 			continue;
 		}

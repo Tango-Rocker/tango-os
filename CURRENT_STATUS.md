@@ -162,7 +162,7 @@ These are historical proof artifacts only; they are not the active work path:
   resizing, ranged status-window selection, status-menu opening, and menu-item
   command activation. The shell routes pointer motion, buttons, and vertical
   scroll through that same boundary. The contract passes against the exact
-  `engineos-mux 3.6b-18` and `engineos-shell 0.1.0-31` package binaries. The
+  `engineos-mux 3.6b-20` and `engineos-shell 0.1.0-32` package binaries. The
   native renderer now keeps FreeType-rasterized, colour-keyed glyphs in a GPU
   texture atlas and draws them into double-buffered per-pane GPU targets.
   Sparse tmux cell damage is retained through the mux client, expanded only
@@ -200,9 +200,17 @@ These are historical proof artifacts only; they are not the active work path:
   directly to the Wayland seat. The deterministic headless XDG contract proves
   wrong-scope rejection, scoped binding, console/application toggling, scene
   observability, app exit, and terminal restoration against installed package
-  binaries. Complete multi-pane scene construction, transient/popup
-  registration, selectable surface tabs, and graphical presentation leases
-  are the next acceptance boundary.
+  binaries. Native XDG popups now inherit their owning pane and scope;
+  transient toplevels retain logical parentage and pane-local clipping without
+  inflating the tab count. Independent toplevels become pane-local tabs, only
+  one tab group is visible, and closing the active tab promotes its sibling and
+  associated transient group. `shell-state.json` exposes popup counts, surface
+  roles, tab counts, and per-surface visibility. The mux also preserves pending
+  launch scopes across systemd-run PTY handoff while retaining immediate
+  split-pane-host shell restoration and the 15-second unmapped failure. The
+  installed contract proves the complete popup/transient/two-tab lifecycle.
+  Complete multi-pane scene construction, an explicit selectable-tab command,
+  and graphical presentation leases are the next acceptance boundary.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 
