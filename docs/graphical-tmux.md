@@ -98,14 +98,15 @@ Its GitHub commit archive is pinned in `packages/engineos-mux/PKGBUILD` with a
 SHA-256 checksum. The commit archive is used because the release archive omits
 the upstream `regress/` directory.
 
-The unchanged upstream regression scripts were run against both a pristine
-build and the patched fork on the Arch EngineDev host. Both matrices matched:
-21 scripts passed and the same 11 scripts failed (`combine-test`,
-`command-order`, `copy-mode-test-vi`, `cursor-test1` through `cursor-test4`,
-`if-shell-TERM`, `input-keys`, `tty-keys`, and `utf8-test`). This is baseline
-parity, not a claim that the host passes tests which also fail in pristine
-tmux. In particular, `new-session-environment` passes in both builds and guards
-normal custom-socket behavior when `XDG_RUNTIME_DIR` is absent.
+The unchanged upstream regression scripts are run against both a pristine
+build and the patched fork on the Arch EngineDev host. The original matrix was
+21 pass and 11 host failures. The 2026-07-10 rerun matched at 23 pass and 9
+failures for both builds. `copy-mode-test-vi` and `cursor-test4` vary across
+repeated runs in both trees, so the acceptance signal is no fork-only stable
+failure rather than one lucky invocation. This is baseline parity, not a claim
+that the host passes tests which also fail in pristine tmux. In particular,
+`new-session-environment` passes in both builds and guards normal custom-socket
+behavior when `XDG_RUNTIME_DIR` is absent.
 
 For an upstream rebase:
 

@@ -1,6 +1,6 @@
 pkgname=engineos-mux
 pkgver=3.6b
-pkgrel=7
+pkgrel=8
 _commit=0623d1e968423ad0c192e0d8debf1258671063d5
 pkgdesc="EngineOS tmux 3.6b graphical frontend protocol foundation"
 arch=('x86_64')
@@ -13,6 +13,7 @@ source=(
   "tmux-3.6b-$_commit.tar.gz::https://github.com/tmux/tmux/archive/$_commit.tar.gz"
   '0001-engine-mux-default-socket.patch'
   '0002-engine-mux-in-server-frontend.patch'
+  '0003-engine-mux-graphical-client.patch'
   'engine-mux-frontend.c'
   'engine-mux-frontend.h'
 )
@@ -20,7 +21,8 @@ sha256sums=(
   '2c212f7ee2d925b01ec20ab5bb3a906c17b6a8652fe521fcaaf498f800b4d1fa'
   '377d8420eb6bf2103bfc429829d90ed542fd9e9202c6780d122cb5ce4665cb5f'
   'e2ff73579fc5ba57b35d212fb4f23b77983383bd1c933c491d7bc265d2396d90'
-  '95658cabf8a503b3a32a548606e8e3356d39e4b6fc15c00a0eba5fc73a7418aa'
+  '34b31c5ea3548b128dbecee0aaddeb03337fce0a39125de474585e1275dfe1b0'
+  'ae6fb5898db0fbc27b09759f7493a828c2fab91c6dc6241a4d6f66ebbe4a9f28'
   '38db77244832b7e2abe5e57f28dd4b08907ca400a5e815fd7db8713206e0ae3d'
 )
 
@@ -31,6 +33,7 @@ prepare() {
 
 	patch -d "$_source_dir" -Np1 -i "$startdir/0001-engine-mux-default-socket.patch"
 	patch -d "$_source_dir" -Np1 -i "$startdir/0002-engine-mux-in-server-frontend.patch"
+	patch -d "$_source_dir" -Np1 -i "$startdir/0003-engine-mux-graphical-client.patch"
 	install -m0644 "$srcdir/engine-mux-frontend.c" "$_source_dir/engine-mux-frontend.c"
 	install -m0644 "$srcdir/engine-mux-frontend.h" "$_source_dir/engine-mux-frontend.h"
 	install -m0644 "$_engineos_root/mux/include/engine-mux-protocol.h" "$_source_dir/engine-mux-protocol.h"

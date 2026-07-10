@@ -99,8 +99,8 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration stage 1 is installed side by side as
-  `engineos-mux 3.6b-7` with the decoder/renderer/input boundary in
-  `engineos-shell 0.1.0-22`, but native mode is not yet the live desktop
+  `engineos-mux 3.6b-8` with the decoder/renderer/control boundary in
+  `engineos-shell 0.1.0-23`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
@@ -108,9 +108,11 @@ These are historical proof artifacts only; they are not the active work path:
   revisioned snapshots directly from tmux's session, window, and pane trees;
   the standalone `engine-muxd` and its `list-panes` subprocess path are removed.
   Its v1 handshake and atomic layout snapshots are exercised against real split
-  panes and focus changes. The upstream regression scripts match an identically
-  configured pristine build (21 pass and the same 11 host-baseline failures),
-  including a passing environment-isolation test. The retired daemon binary
+  panes and focus changes. The unchanged upstream regression scripts match an
+  identically configured pristine build at 23 pass and 9 host failures on the
+  current run; `copy-mode-test-vi` and `cursor-test4` remain timing-sensitive in
+  repeated runs, while `new-session-environment` passes consistently. The
+  retired daemon binary
   and user unit are absent from the live package. `engineos-shell
   --mux native` requires that handshake and snapshot before compositor startup,
   exposes the observed revision in `shell-state.json`, and fails instead of
@@ -127,15 +129,17 @@ These are historical proof artifacts only; they are not the active work path:
   pixels in the headless compositor. The server now pushes one flow-controlled
   invalidation per client; the shell consumes sparse damage through its Wayland
   event loop, advances the grid revision, and refreshes the scene without a
-  polling daemon. Native terminal mode now converts keyboard presses to UTF-8,
-  control bytes, and terminal escape sequences and sends them to the selected
-  pane through an acknowledged binary protocol request. The server uses tmux's
-  own pane input path, preserving input-off and synchronized-pane semantics.
-  The source contract and installed `/usr/bin` proof both show the input
-  reaching the authoritative PTY, appearing in the exported grid, and driving
-  the shell from grid revision 2 to 3. Status/menu/prompt models, prefix command
-  routing, mouse/copy-mode interaction, glyph-atlas updates, and
-  hardware-renderer acceptance remain.
+  polling daemon. Each native shell output now registers as a real tmux client
+  with its output identity, pixel bounds, scale, and canonical rows/columns;
+  secondary views do not participate in canonical size. Native terminal mode
+  sends tmux key names through that client, so normal keys, configurable
+  prefixes, key tables, copy-mode tables, and plugin bindings retain tmux
+  semantics. The contract proves a custom `C-a` prefix binding, real
+  `list-clients` registration, event-driven PTY/grid damage, and graphical
+  client cleanup. The same proof passes with installed `/usr/bin/engine-mux`
+  and `/usr/bin/engineos-shell`. Focus transfer between graphical outputs,
+  status/menu/prompt models, mouse/copy-mode interaction, glyph-atlas updates,
+  and hardware-renderer acceptance remain.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 

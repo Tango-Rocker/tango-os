@@ -279,6 +279,7 @@ check_package_inputs() {
 		require_file "packages/engineos-mux/PKGBUILD"
 		require_file "packages/engineos-mux/0001-engine-mux-default-socket.patch"
 		require_file "packages/engineos-mux/0002-engine-mux-in-server-frontend.patch"
+		require_file "packages/engineos-mux/0003-engine-mux-graphical-client.patch"
 		require_file "packages/engineos-mux/engine-mux-frontend.c"
 		require_file "packages/engineos-mux/engine-mux-frontend.h"
 		;;

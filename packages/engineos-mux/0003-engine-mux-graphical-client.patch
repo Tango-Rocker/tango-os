@@ -1,0 +1,22 @@
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -19 +19 @@
+-LDADD = $(LIBOBJS)
++LDADD = $(LIBOBJS) -ljson-c
+--- a/tmux.h
++++ b/tmux.h
+@@ -2019,2 +2019,3 @@
+ #define CLIENT_NO_DETACH_ON_DESTROY 0x8000000000ULL
++#define CLIENT_GRAPHICAL 0x10000000000ULL
+ #define CLIENT_ALLREDRAWFLAGS		\
+--- a/server-client.c
++++ b/server-client.c
+@@ -2912 +2912 @@
+-	if (c->flags & (CLIENT_CONTROL|CLIENT_SUSPENDED))
++	if (c->flags & (CLIENT_CONTROL|CLIENT_SUSPENDED|CLIENT_GRAPHICAL))
+@@ -3106 +3106 @@
+-	if (c->flags & (CLIENT_CONTROL|CLIENT_SUSPENDED))
++	if (c->flags & (CLIENT_CONTROL|CLIENT_SUSPENDED|CLIENT_GRAPHICAL))
+@@ -3133 +3133 @@
+-	if (c->flags & (CLIENT_CONTROL|CLIENT_SUSPENDED))
++	if (c->flags & (CLIENT_CONTROL|CLIENT_SUSPENDED|CLIENT_GRAPHICAL))

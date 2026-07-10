@@ -461,8 +461,108 @@ static int send_input(int fd, uint32_t pane_id, const char *bytes) {
 	return 0;
 }
 
+static int request_keys(int fd, uint32_t pane_id, char **keys,
+		size_t key_count) {
+	uint16_t response_type = 0;
+	uint64_t response_revision = 0;
+	char *response = NULL;
+	if (exchange(fd, ENGINE_MUX_SNAPSHOT_REQUEST, 10, 0, "{}",
+			&response_type, &response_revision, &response) != 0 ||
+			response_type != ENGINE_MUX_SNAPSHOT) return -1;
+	struct json_object *snapshot = json_tokener_parse(response);
+	free(response);
+	if (snapshot == NULL) { errno = EPROTO; return -1; }
+	struct json_object *panes = NULL;
+	json_object_object_get_ex(snapshot, "panes", &panes);
+	const char *session_id = NULL;
+	for (size_t index = 0; panes != NULL &&
+			index < json_object_array_length(panes); index++) {
+		struct json_object *pane = json_object_array_get_idx(panes, index);
+		struct json_object *id_object = NULL, *session_object = NULL;
+		if (!json_object_object_get_ex(pane, "pane_id", &id_object) ||
+				!json_object_object_get_ex(pane, "session_id", &session_object)) continue;
+		const char *id_text = json_object_get_string(id_object);
+		char expected[32];
+		snprintf(expected, sizeof(expected), "%%%u", pane_id);
+		if (strcmp(id_text, expected) == 0) {
+			session_id = json_object_get_string(session_object);
+			break;
+		}
+	}
+	if (session_id == NULL) {
+		json_object_put(snapshot);
+		errno = ENOENT;
+		return -1;
+	}
+	struct json_object *request = json_object_new_object();
+	json_object_object_add(request, "schema",
+		json_object_new_string("engine-mux/view-register-v1"));
+	json_object_object_add(request, "view_id", json_object_new_int(1));
+	json_object_object_add(request, "session_id", json_object_new_string(session_id));
+	json_object_object_add(request, "output", json_object_new_string("engine-muxctl"));
+	json_object_object_add(request, "pixel_width", json_object_new_int(800));
+	json_object_object_add(request, "pixel_height", json_object_new_int(480));
+	json_object_object_add(request, "scale_milli", json_object_new_int(1000));
+	json_object_object_add(request, "columns", json_object_new_int(80));
+	json_object_object_add(request, "rows", json_object_new_int(24));
+	json_object_object_add(request, "focused", json_object_new_boolean(true));
+	const char *payload = json_object_to_json_string_ext(request,
+		JSON_C_TO_STRING_PLAIN);
+	if (exchange(fd, ENGINE_MUX_VIEW_REGISTER_REQUEST, 11,
+			response_revision, payload, &response_type, &response_revision,
+			&response) != 0 || response_type != ENGINE_MUX_VIEW_REGISTER_ACK) {
+		json_object_put(request);
+		json_object_put(snapshot);
+		free(response);
+		errno = EPROTO;
+		return -1;
+	}
+	free(response);
+	json_object_put(request);
+	for (size_t index = 0; index < key_count; index++) {
+		request = json_object_new_object();
+		char pane_text[32];
+		snprintf(pane_text, sizeof(pane_text), "%%%u", pane_id);
+		json_object_object_add(request, "schema",
+			json_object_new_string("engine-mux/key-v1"));
+		json_object_object_add(request, "view_id", json_object_new_int(1));
+		json_object_object_add(request, "pane_id", json_object_new_string(pane_text));
+		json_object_object_add(request, "generation", json_object_new_int(1));
+		json_object_object_add(request, "key", json_object_new_string(keys[index]));
+		payload = json_object_to_json_string_ext(request, JSON_C_TO_STRING_PLAIN);
+		if (exchange(fd, ENGINE_MUX_KEY_REQUEST, 12 + index,
+				response_revision, payload, &response_type, &response_revision,
+				&response) != 0 || response_type != ENGINE_MUX_KEY_ACK) {
+			json_object_put(request);
+			json_object_put(snapshot);
+			free(response);
+			errno = EPROTO;
+			return -1;
+		}
+		free(response);
+		json_object_put(request);
+	}
+	if (exchange(fd, ENGINE_MUX_SNAPSHOT_REQUEST, 100,
+			response_revision, "{}", &response_type, &response_revision,
+			&response) != 0 || response_type != ENGINE_MUX_SNAPSHOT) {
+		json_object_put(snapshot);
+		free(response);
+		errno = EPROTO;
+		return -1;
+	}
+	free(response);
+	json_object_put(snapshot);
+	struct json_object *result = json_object_new_object();
+	json_object_object_add(result, "schema",
+		json_object_new_string("engine-mux/keys-v1"));
+	json_object_object_add(result, "queued", json_object_new_int64((int64_t)key_count));
+	printf("%s\n", json_object_to_json_string_ext(result, JSON_C_TO_STRING_PRETTY));
+	json_object_put(result);
+	return 0;
+}
+
 static void usage(FILE *stream, const char *program) {
-	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT|input PANE_ID BYTES\n", program);
+	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT|input PANE_ID BYTES|keys PANE_ID KEY...\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -491,12 +591,14 @@ int main(int argc, char **argv) {
 	bool is_stale_grid = strcmp(command, "stale-grid") == 0;
 	bool is_scrollback = strcmp(command, "scrollback") == 0;
 	bool is_input = strcmp(command, "input") == 0;
+	bool is_keys = strcmp(command, "keys") == 0;
 	if ((is_grid && optind + 2 != argc) ||
 			(is_damage && optind + 3 != argc) ||
 			(is_stale_grid && optind + 2 != argc) ||
 			(is_scrollback && optind + 4 != argc) ||
 			(is_input && optind + 3 != argc) ||
-			(!is_grid && !is_damage && !is_stale_grid && !is_scrollback && !is_input &&
+			(is_keys && optind + 3 > argc) ||
+			(!is_grid && !is_damage && !is_stale_grid && !is_scrollback && !is_input && !is_keys &&
 			 optind + 1 != argc)) {
 		usage(stderr, argv[0]);
 		return 2;
@@ -515,7 +617,7 @@ int main(int argc, char **argv) {
 		free(owned_socket);
 		return 1;
 	}
-	if (is_grid || is_damage || is_stale_grid || is_scrollback || is_input) {
+	if (is_grid || is_damage || is_stale_grid || is_scrollback || is_input || is_keys) {
 		const char *pane_text = argv[optind + 1];
 		if (*pane_text == '%') pane_text++;
 		char *end = NULL;
@@ -534,7 +636,10 @@ int main(int argc, char **argv) {
 			return 2;
 		}
 		int grid_result;
-		if (is_input) {
+		if (is_keys) {
+			grid_result = request_keys(fd, (uint32_t)pane_id,
+				&argv[optind + 2], (size_t)(argc - optind - 2));
+		} else if (is_input) {
 			grid_result = send_input(fd, (uint32_t)pane_id,
 				argv[optind + 2]);
 		} else if (is_scrollback) {

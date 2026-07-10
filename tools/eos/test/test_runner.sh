@@ -155,10 +155,12 @@ run_mux() {
 	local shell_build_dir="$ROOT/build/shell"
 	local fixture="${TMPDIR:-/tmp}/engineos-mux-test-$$"
 	local mux_bin="${ENGINEOS_MUX_BIN:-}"
+	local shell_bin="${ENGINEOS_SHELL_BIN:-$shell_build_dir/engineos-shell}"
 	local mux_commit="0623d1e968423ad0c192e0d8debf1258671063d5"
 	local first_revision second_revision focus_revision pane_count pane_id
 	local grid_revision damage_revision
 	local history_rows history_start
+	local key_proof=""
 	local shell_pid="" initial_native_revision updated_native_revision
 
 	if [[ -z "$mux_bin" ]]; then
@@ -221,7 +223,9 @@ run_mux() {
 
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" hello >"$fixture/hello.json"
 	jq -e '.server == "engine-mux" and (.capabilities | index("terminal-grid-v1")) and
-		(.capabilities | index("pane-input-v1"))' \
+		(.capabilities | index("pane-input-v1")) and
+		(.capabilities | index("graphical-view-v1")) and
+		(.capabilities | index("tmux-key-v1"))' \
 		"$fixture/hello.json" >/dev/null ||
 		die "mux protocol was not served by engine-mux"
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot >"$fixture/first.json"
@@ -232,6 +236,25 @@ run_mux() {
 	jq -e '.panes[0].command | contains("/") | not' "$fixture/first.json" >/dev/null ||
 		die "mux snapshot did not normalize pane_current_command metadata"
 	pane_id="$(jq -er '.panes[0].pane_id' "$fixture/first.json")"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		set-option -g prefix C-a
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		bind-key -T prefix x set-option -g @engineos-key-proof accepted
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" keys "$pane_id" \
+		C-a x >"$fixture/keys.json"
+	jq -e '.schema == "engine-mux/keys-v1" and .queued == 2' \
+		"$fixture/keys.json" >/dev/null ||
+		die "graphical key sequence was not queued through the native protocol"
+	for _ in {1..100}; do
+		key_proof="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+			"$mux_bin" show-option -gv @engineos-key-proof 2>/dev/null || true)"
+		[[ "$key_proof" == accepted ]] && break
+		sleep 0.02
+	done
+	[[ "$key_proof" == accepted ]] ||
+		die "graphical tmux client did not honor the configured prefix key table"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		set-option -g prefix C-b
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		send-keys -t "$pane_id" "printf 'A\\033[31mR\\033[0m界é'" Enter
 	for _ in {1..100}; do
@@ -355,7 +378,7 @@ run_mux() {
 
 	local shell_status=0
 	if ENGINEOS_MUX_SOCKET="$fixture/missing.sock" \
-			"$shell_build_dir/engineos-shell" --headless --smoke --mux native \
+			"$shell_bin" --headless --smoke --mux native \
 			>"$fixture/shell-fail.log" 2>&1; then
 		die "engineos-shell native mux mode silently fell back without a server"
 	else
@@ -368,8 +391,8 @@ run_mux() {
 
 	XDG_RUNTIME_DIR="$fixture" ENGINEOS_STATE_DIR="$fixture/engineos" \
 		ENGINEOS_MUX_SOCKET="$fixture/engineos/mux.sock" \
-		WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 WLR_RENDERER=pixman \
-		"$shell_build_dir/engineos-shell" --headless --smoke-ms 1000 \
+		WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=2 WLR_RENDERER=pixman \
+		"$shell_bin" --headless --smoke-ms 1000 \
 		--bootstrap none --mux native >"$fixture/shell-native.log" 2>&1 &
 	shell_pid=$!
 	for _ in {1..100}; do
@@ -380,6 +403,23 @@ run_mux() {
 	done
 	[[ -f "$fixture/engineos/shell-state.json" ]] ||
 		die "engineos-shell did not publish native grid state"
+	jq -e '.mux.session_id | startswith("$")' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "shell state did not identify the attached mux session"
+	jq -e '.mux.client_view_id == 1' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "shell state did not identify its graphical mux client view"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		list-clients -F '#{client_name} #{client_flags}' \
+		>"$fixture/graphical-clients.txt"
+	[[ "$(grep -Ec '^engineos-view-[0-9]+ .*focused' \
+		"$fixture/graphical-clients.txt")" == 1 ]] &&
+		[[ "$(grep -Ec '^engineos-view-[0-9]+ .*ignore-size' \
+			"$fixture/graphical-clients.txt")" == 1 ]] &&
+		[[ "$(cut -d' ' -f1 "$fixture/graphical-clients.txt" | \
+			sort -u | wc -l)" == 2 ]] &&
+		[[ "$(wc -l <"$fixture/graphical-clients.txt")" == 2 ]] ||
+		die "native shell output clients did not preserve focused size ownership"
 	initial_native_revision="$(jq -er '.mux.grid.revision' \
 		"$fixture/engineos/shell-state.json")"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
@@ -395,7 +435,12 @@ run_mux() {
 		die "native shell did not consume event-driven grid damage"
 	wait "$shell_pid" || die "engineos-shell native damage run failed"
 	shell_pid=""
+	if XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			list-clients -F '#{client_name}' | grep -F 'engineos-view-' >/dev/null; then
+		die "graphical tmux clients survived shell output teardown"
+	fi
 	jq -e '.mux.mode == "native" and .mux.connected == true and
+		(.mux.session_id | startswith("$")) and .mux.client_view_id == 1 and
 		.mux.revision >= 1 and .mux.generation == 1 and
 		.mux.grid.revision >= 1 and .mux.grid.columns > 0 and
 		.mux.grid.rows > 0 and .mux.grid.nonblank_cells > 0 and

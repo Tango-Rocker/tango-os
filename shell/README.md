@@ -33,9 +33,12 @@ binary terminal grid, and records pane identity, grid revision, dimensions,
 cursor, and nonblank-cell evidence in `shell-state.json`. A pane-local scene
 subtree displays a CPU-rasterized FreeType terminal buffer through wlroots
 composition. Flow-controlled server invalidations drive sparse grid updates
-through the compositor event loop; no polling process is involved. Glyph-atlas
-caching, native input, and live hardware acceptance remain before native mode
-becomes the default.
+through the compositor event loop; no polling process is involved. Every
+native output registers as a real tmux client, with one focused size owner, and
+keyboard events use tmux key names so prefixes and key tables remain
+authoritative in the server. Focused-output transfer, mouse/status/copy-mode
+interaction, glyph-atlas caching, and live hardware acceptance remain before
+native mode becomes the default.
 
 ## Surface Model
 

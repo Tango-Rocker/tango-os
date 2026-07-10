@@ -22,12 +22,14 @@ handshake, packaging, and contract tests.
 
 As of 2026-07-10, the in-server frontend, authoritative layout snapshots,
 binary grids, sparse damage, scrollback/copy-mode metadata, headless native
-terminal scene, event-driven refresh, and normal console-mode keyboard input
-are implemented and installed side by side. Native input is acknowledged by
-the server, passes through tmux's pane input path, reaches the pane PTY, and
-drives event-based grid refresh. Status/menu/prompt models, incremental GPU
-glyph-atlas updates, full interaction, compound presentations, process scopes,
-leases, games/images, hardware acceptance, and legacy cutover remain open.
+terminal scene, event-driven refresh, and native keyboard control are
+implemented side by side. Every shell output now registers as a real tmux
+client with output geometry and canonical rows/columns. Discrete key frames use
+tmux's normal client key path, including configured prefixes and key tables,
+and graphical-client teardown is proven. Focused-view transfer,
+status/menu/prompt models, incremental GPU glyph-atlas updates, mouse and full
+copy-mode interaction, compound presentations, process scopes, leases,
+games/images, hardware acceptance, and legacy cutover remain open.
 
 ## Workstream 1: Integrate The Protocol Into Engine Mux
 
