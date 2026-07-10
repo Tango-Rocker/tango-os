@@ -30,7 +30,7 @@ Options:
   --all-packages        Rebuild all EngineOS packages.
   --test <scope>        Run an eos-test scope. Repeatable. Default: smoke.
   --install             Reinstall rebuilt packages with sudo pacman -U.
-  --clean-generated     Remove packages/<name>/{pkg,src} after a successful run.
+  --clean-generated     Remove package build dirs and local package archives after success.
   --no-preflight        Skip preflight.
   --no-validate-repo    Skip repo validation.
 
@@ -232,6 +232,7 @@ install_rebuilt_packages() {
   done
 
   [[ ${#artifacts[@]} -gt 0 ]] || return 0
+  remove_retired_packages
   run_or_print sudo -n pacman -U --noconfirm "${artifacts[@]}"
   if [[ "$DRY_RUN" != true ]]; then
     for artifact in "${artifacts[@]}"; do
@@ -241,8 +242,32 @@ install_rebuilt_packages() {
   fi
 }
 
+remove_retired_packages() {
+  local package
+  local installed=()
+  local retired=(engineos-engine-runner engineos-engine-runner-debug)
+
+  if [[ "$DRY_RUN" == true ]]; then
+    run_or_print sudo -n systemctl disable --now engineos-engine-runner.service
+    run_or_print sudo -n pacman -R --noconfirm "${retired[@]}"
+    run_or_print sudo -n systemctl daemon-reload
+    return 0
+  fi
+
+  for package in "${retired[@]}"; do
+    pacman -Q "$package" >/dev/null 2>&1 && installed+=("$package")
+  done
+  [[ ${#installed[@]} -gt 0 ]] || return 0
+
+  if pacman -Q engineos-engine-runner >/dev/null 2>&1; then
+    run_or_print sudo -n systemctl disable --now engineos-engine-runner.service
+  fi
+  run_or_print sudo -n pacman -R --noconfirm "${installed[@]}"
+  run_or_print sudo -n systemctl daemon-reload
+}
+
 clean_generated_package_dirs() {
-  local pkg dir
+  local pkg dir archive
   for pkg in "${PACKAGES[@]}"; do
     for dir in "$ROOT/packages/$pkg/pkg" "$ROOT/packages/$pkg/src"; do
       [[ -e "$dir" ]] || continue
@@ -255,6 +280,10 @@ clean_generated_package_dirs() {
           ;;
       esac
     done
+    while IFS= read -r -d '' archive; do
+      run_or_print rm -f "$archive" "$archive.sig"
+    done < <(find "$ROOT/packages/$pkg" -maxdepth 1 -type f \
+      \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' -o -name '*.pkg.tar.gz' \) -print0)
   done
 }
 

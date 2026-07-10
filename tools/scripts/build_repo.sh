@@ -267,6 +267,9 @@ for pkg in "${selected_packages[@]}"; do
   check_local_runtime_deps_ready "$pkg"
   (
     cd "$pkg_dir"
+    find . -maxdepth 1 -type f \
+      \( -name '*.pkg.tar.zst' -o -name '*.pkg.tar.xz' -o -name '*.pkg.tar.gz' \) \
+      -delete
     ENGINEOS_ROOT="$ROOT" \
       ENGINEOS_LOG_DIR="$PACKAGE_LOG_DIR" \
       ENGINEOS_REAL_PACMAN="$REAL_PACMAN" \
