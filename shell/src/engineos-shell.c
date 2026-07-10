@@ -3213,7 +3213,13 @@ static void write_shell_state(struct engineos_shell_server *server,
 		server->mux_client.ready ? "true" : "false",
 		(unsigned long long)server->mux_client.revision);
 	json_write_string(file, server->mux_client.socket_path);
-	fprintf(file, "}");
+	fprintf(file,
+		", \"pane_id\": \"%%%u\", \"generation\": %u, \"grid\": {\"revision\": %llu, \"columns\": %u, \"rows\": %u, \"cursor_x\": %u, \"cursor_y\": %u, \"nonblank_cells\": %u}}",
+		server->mux_client.pane_id, server->mux_client.pane_generation,
+		(unsigned long long)server->mux_client.grid_revision,
+		server->mux_client.grid_columns, server->mux_client.grid_rows,
+		server->mux_client.grid_cursor_x, server->mux_client.grid_cursor_y,
+		server->mux_client.grid_nonblank_cells);
 	fprintf(file, ",\n  \"active_slot\": ");
 	json_write_string(file, surface_role_name(server->active_slot));
 	fprintf(file, ",\n  \"pending_slot\": ");
@@ -6086,11 +6092,16 @@ int main(int argc, char **argv) {
 		server.startup_cmd != NULL ? server.startup_cmd : "(none)");
 	wlr_log(WLR_INFO, "bootstrap mode=%s",
 		bootstrap_mode_name(server.bootstrap_mode));
-	wlr_log(WLR_INFO, "mux mode=%s connected=%s revision=%llu socket=%s",
+	wlr_log(WLR_INFO,
+		"mux mode=%s connected=%s revision=%llu socket=%s pane=%%%u generation=%u grid_revision=%llu grid=%ux%u nonblank=%u",
 		mux_mode_name(server.mux_mode),
 		server.mux_client.ready ? "true" : "false",
 		(unsigned long long)server.mux_client.revision,
-		server.mux_client.socket_path != NULL ? server.mux_client.socket_path : "(none)");
+		server.mux_client.socket_path != NULL ? server.mux_client.socket_path : "(none)",
+		server.mux_client.pane_id, server.mux_client.pane_generation,
+		(unsigned long long)server.mux_client.grid_revision,
+		server.mux_client.grid_columns, server.mux_client.grid_rows,
+		server.mux_client.grid_nonblank_cells);
 	wlr_log(WLR_INFO,
 		"client launch environment wayland_display=%s xdg_session_type=wayland display=unset sdl=wayland gdk=wayland qt=wayland",
 		socket);

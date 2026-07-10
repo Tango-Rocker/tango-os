@@ -321,6 +321,8 @@ run_mux() {
 	jq -e '[.panes[] | select(.window_active and .active)] | length == 1' \
 		"$fixture/focus.json" >/dev/null ||
 		die "mux snapshot did not identify the active pane in the active window"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -t contract:0.1 "printf NATIVE-GRID" Enter
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" stale-command >"$fixture/stale.json"
 	jq -e '.code == "stale-revision"' "$fixture/stale.json" >/dev/null ||
 		die "mux server did not reject a stale revision"
@@ -347,7 +349,10 @@ run_mux() {
 		"$shell_build_dir/engineos-shell" --headless --smoke-ms 100 \
 		--bootstrap none --mux native >"$fixture/shell-native.log" 2>&1 ||
 		die "engineos-shell did not start after a valid native mux snapshot"
-	jq -e '.mux.mode == "native" and .mux.connected == true and .mux.revision >= 1' \
+	jq -e '.mux.mode == "native" and .mux.connected == true and
+		.mux.revision >= 1 and .mux.generation == 1 and
+		.mux.grid.revision >= 1 and .mux.grid.columns > 0 and
+		.mux.grid.rows > 0 and .mux.grid.nonblank_cells > 0' \
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "shell state did not expose native mux revision evidence"
 

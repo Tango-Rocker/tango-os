@@ -99,7 +99,9 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration stage 1 is installed side by side as
-  `engineos-mux 3.6b-5`, but native mode is not yet the live desktop default.
+  `engineos-mux 3.6b-5` with the decoder boundary in
+  `engineos-shell 0.1.0-19`, but native mode is not yet the live desktop
+  default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
   fork server now owns the same-user `SOCK_SEQPACKET` frontend and constructs
@@ -118,8 +120,10 @@ These are historical proof artifacts only; they are not the active work path:
   alternate-screen metadata. Per-pane grid revisions now produce sparse cell
   damage and force complete resynchronization after stale revisions. Paged
   scrollback and copy-mode metadata are exported without exceeding bounded
-  frames. Status/menu/prompt models and native shell rendering remain
-  unimplemented.
+  frames. Native shell startup now selects the active pane, validates and
+  retains its binary grid, and reports pane/grid/nonblank evidence in
+  `shell-state.json`. Status/menu/prompt models, ongoing damage consumption,
+  and native shell rendering remain unimplemented.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 

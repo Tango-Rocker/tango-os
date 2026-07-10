@@ -49,6 +49,10 @@ The migration is side by side and disabled by default:
   successful v1 handshake and snapshot before compositor setup. Failure does
   not fall back to the bridge. The observed mode, socket, connection state, and
   mux revision are written to `shell-state.json`.
+- Native shell startup selects the active pane from the authoritative snapshot,
+  validates and retains its full binary grid, and records pane identity, grid
+  revision, dimensions, cursor, and nonblank-cell evidence. Scene rendering and
+  ongoing damage consumption are the next shell-side steps.
 
 The in-server frontend exposes `layout-snapshot`, `terminal-grid-v1`,
 revisioned grid damage, paged scrollback, and copy-mode state. Command

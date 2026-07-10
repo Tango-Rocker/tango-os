@@ -28,6 +28,11 @@ receive a valid versioned snapshot before compositor setup. The default remains
 `legacy` until the terminal-grid renderer reaches live acceptance. See
 [`docs/graphical-tmux.md`](../docs/graphical-tmux.md).
 
+Native mode also selects the active tmux pane, validates and retains its full
+binary terminal grid, and records pane identity, grid revision, dimensions,
+cursor, and nonblank-cell evidence in `shell-state.json`. The grid is not yet
+drawn into the scene; retaining it is the decoder boundary for that renderer.
+
 ## Surface Model
 
 Toplevels are classified as `terminal`, `cube`, `engine`, or `unknown`.

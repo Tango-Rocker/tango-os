@@ -30,7 +30,7 @@ static uint64_t be64_to_host(uint64_t value) {
 
 static bool exchange(int fd, uint16_t request_type, uint64_t request_id,
 		uint16_t expected_type, uint64_t *revision, const char *payload,
-		char *error, size_t error_size) {
+		struct json_object **response, char *error, size_t error_size) {
 	size_t payload_length = strlen(payload);
 	struct engine_mux_frame_header header = {
 		.magic = htonl(ENGINE_MUX_MAGIC),
@@ -105,7 +105,103 @@ static bool exchange(int fd, uint16_t request_type, uint64_t request_id,
 		}
 	}
 	*revision = be64_to_host(header.state_revision);
-	json_object_put(root);
+	if (response != NULL) {
+		*response = root;
+	} else {
+		json_object_put(root);
+	}
+	return true;
+}
+
+static bool request_grid(struct engineos_mux_client *client, char *error,
+		size_t error_size) {
+	struct engine_mux_grid_request request = {
+		.pane_id = htonl(client->pane_id),
+		.generation = htonl(client->pane_generation),
+	};
+	struct engine_mux_frame_header frame = {
+		.magic = htonl(ENGINE_MUX_MAGIC),
+		.version = htons(ENGINE_MUX_PROTOCOL_VERSION),
+		.type = htons(ENGINE_MUX_GRID_REQUEST),
+		.request_id = host_to_be64(3),
+		.state_revision = host_to_be64(client->revision),
+		.payload_length = htonl(sizeof(request)),
+	};
+	struct iovec parts[] = {
+		{.iov_base = &frame, .iov_len = sizeof(frame)},
+		{.iov_base = &request, .iov_len = sizeof(request)},
+	};
+	struct msghdr message = {.msg_iov = parts, .msg_iovlen = 2};
+	if (sendmsg(client->fd, &message, MSG_NOSIGNAL) < 0) {
+		snprintf(error, error_size, "grid send: %s", strerror(errno));
+		return false;
+	}
+	size_t capacity = sizeof(frame) + ENGINE_MUX_MAX_PAYLOAD;
+	unsigned char *packet = malloc(capacity);
+	if (packet == NULL) {
+		snprintf(error, error_size, "out of memory");
+		return false;
+	}
+	ssize_t count = recv(client->fd, packet, capacity, 0);
+	if (count < (ssize_t)(sizeof(frame) + sizeof(struct engine_mux_grid_header))) {
+		free(packet);
+		snprintf(error, error_size, "truncated terminal grid");
+		return false;
+	}
+	memcpy(&frame, packet, sizeof(frame));
+	uint32_t payload_length = ntohl(frame.payload_length);
+	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
+			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
+			ntohs(frame.type) != ENGINE_MUX_GRID_SNAPSHOT ||
+			payload_length > ENGINE_MUX_MAX_PAYLOAD ||
+			sizeof(frame) + payload_length != (size_t)count) {
+		free(packet);
+		snprintf(error, error_size, "invalid terminal grid frame");
+		return false;
+	}
+	struct engine_mux_grid_header header;
+	memcpy(&header, packet + sizeof(frame), sizeof(header));
+	uint32_t columns = ntohl(header.columns);
+	uint32_t rows = ntohl(header.rows);
+	uint32_t cell_count = ntohl(header.cell_count);
+	if (ntohs(header.version) != ENGINE_MUX_GRID_VERSION ||
+			ntohl(header.pane_id) != client->pane_id ||
+			ntohl(header.generation) != client->pane_generation ||
+			(columns != 0 && rows > UINT32_MAX / columns) ||
+			cell_count != columns * rows ||
+			payload_length != sizeof(header) +
+				(size_t)cell_count * sizeof(struct engine_mux_grid_cell)) {
+		free(packet);
+		snprintf(error, error_size, "terminal grid contract is invalid");
+		return false;
+	}
+	struct engine_mux_grid_cell *cells = malloc(
+		(size_t)cell_count * sizeof(*cells));
+	if (cells == NULL && cell_count != 0) {
+		free(packet);
+		snprintf(error, error_size, "out of memory");
+		return false;
+	}
+	memcpy(cells, packet + sizeof(frame) + sizeof(header),
+		(size_t)cell_count * sizeof(*cells));
+	free(packet);
+	uint32_t nonblank = 0;
+	for (uint32_t index = 0; index < cell_count; index++) {
+		if ((cells[index].flags & ENGINE_MUX_GRID_CELL_PADDING) == 0 &&
+				cells[index].text_length != 0 &&
+				!(cells[index].text_length == 1 &&
+				  (cells[index].text[0] == 0 || cells[index].text[0] == ' '))) {
+			nonblank++;
+		}
+	}
+	free(client->grid_cells);
+	client->grid_cells = cells;
+	client->grid_revision = be64_to_host(header.grid_revision);
+	client->grid_columns = columns;
+	client->grid_rows = rows;
+	client->grid_cursor_x = ntohl(header.cursor_x);
+	client->grid_cursor_y = ntohl(header.cursor_y);
+	client->grid_nonblank_cells = nonblank;
 	return true;
 }
 
@@ -136,9 +232,58 @@ bool engineos_mux_client_connect(struct engineos_mux_client *client,
 	}
 	if (!exchange(client->fd, ENGINE_MUX_CLIENT_HELLO, 1,
 			ENGINE_MUX_SERVER_HELLO, &client->revision,
-			"{\"client\":\"engineos-shell\"}", error, error_size) ||
-			!exchange(client->fd, ENGINE_MUX_SNAPSHOT_REQUEST, 2,
-			ENGINE_MUX_SNAPSHOT, &client->revision, "{}", error, error_size)) {
+			"{\"client\":\"engineos-shell\"}", NULL, error, error_size)) {
+		engineos_mux_client_destroy(client);
+		return false;
+	}
+	struct json_object *snapshot = NULL;
+	if (!exchange(client->fd, ENGINE_MUX_SNAPSHOT_REQUEST, 2,
+			ENGINE_MUX_SNAPSHOT, &client->revision, "{}", &snapshot,
+			error, error_size)) {
+		engineos_mux_client_destroy(client);
+		return false;
+	}
+	struct json_object *panes = NULL;
+	struct json_object *selected = NULL;
+	json_object_object_get_ex(snapshot, "panes", &panes);
+	for (size_t index = 0; panes != NULL &&
+			index < json_object_array_length(panes); index++) {
+		struct json_object *pane = json_object_array_get_idx(panes, index);
+		struct json_object *window_active = NULL, *active = NULL;
+		json_object_object_get_ex(pane, "window_active", &window_active);
+		json_object_object_get_ex(pane, "active", &active);
+		if (json_object_get_boolean(window_active) &&
+				json_object_get_boolean(active)) {
+			selected = pane;
+			break;
+		}
+	}
+	if (selected == NULL && panes != NULL && json_object_array_length(panes) > 0) {
+		selected = json_object_array_get_idx(panes, 0);
+	}
+	struct json_object *pane_id = NULL, *generation = NULL;
+	if (selected == NULL || !json_object_object_get_ex(selected, "pane_id", &pane_id) ||
+			!json_object_object_get_ex(selected, "generation", &generation)) {
+		json_object_put(snapshot);
+		snprintf(error, error_size, "snapshot has no selectable pane");
+		engineos_mux_client_destroy(client);
+		return false;
+	}
+	const char *pane_text = json_object_get_string(pane_id);
+	if (pane_text[0] == '%') pane_text++;
+	char *pane_end = NULL;
+	unsigned long parsed_pane = strtoul(pane_text, &pane_end, 10);
+	client->pane_generation = (uint32_t)json_object_get_int64(generation);
+	if (*pane_text == '\0' || *pane_end != '\0' || parsed_pane > UINT32_MAX ||
+			client->pane_generation == 0) {
+		json_object_put(snapshot);
+		snprintf(error, error_size, "snapshot pane identity is invalid");
+		engineos_mux_client_destroy(client);
+		return false;
+	}
+	client->pane_id = (uint32_t)parsed_pane;
+	json_object_put(snapshot);
+	if (!request_grid(client, error, error_size)) {
 		engineos_mux_client_destroy(client);
 		return false;
 	}
@@ -152,6 +297,8 @@ void engineos_mux_client_destroy(struct engineos_mux_client *client) {
 	}
 	client->fd = -1;
 	free(client->socket_path);
+	free(client->grid_cells);
+	client->grid_cells = NULL;
 	client->socket_path = NULL;
 	client->ready = false;
 }
