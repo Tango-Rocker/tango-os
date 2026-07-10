@@ -75,6 +75,11 @@ native session chooser opens; double-click a session or select it and press
 Enter. The move uses the destination's next free index and runs a pane-bridge
 sync.
 
+Right-clicking the session name keeps tmux's session menu, but `New Session`
+uses an EngineOS-safe sequence: create an auto-named session detached, capture
+its stable ID, then switch only the invoking client. A shell-owned terminal
+therefore remains open while its tmux client changes sessions.
+
 ## Image Preview
 
 The shell listens on `$XDG_RUNTIME_DIR/engineos/preview.sock`, or the equivalent

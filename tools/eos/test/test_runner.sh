@@ -3569,6 +3569,12 @@ run_post_first_deploy() {
     die "post-first-deploy tmux window menu does not offer session moves"
   grep -F 'engineos-tmux-window-move choose' "$payload_dir/assets/tmux.conf" >/dev/null ||
     die "post-first-deploy tmux window menu does not invoke the move helper"
+  grep -F 'engineos-tmux-window-move session-create "#{client_name}"' \
+      "$payload_dir/assets/tmux.conf" >/dev/null ||
+    die "post-first-deploy tmux session menu does not preserve the invoking client"
+  if grep -F '"New Session" s { new-session }' "$payload_dir/assets/tmux.conf" >/dev/null; then
+    die "post-first-deploy tmux session menu still uses client-terminating new-session"
+  fi
   if grep -F 'engineos-tmux-window-sync --daemon' "$payload_dir/assets/tmux.conf" >/dev/null ||
       grep -F 'engineos-tmux-window-focus' "$payload_dir/assets/tmux.conf" >/dev/null; then
     die "post-first-deploy tmux config still wires legacy GUI proxy helpers"
@@ -3597,6 +3603,12 @@ run_post_first_deploy() {
   grep -F '"$TMUX_BIN" choose-tree -N -s' \
       "$payload_dir/scripts/engineos-tmux-window-move" >/dev/null ||
     die "tmux window move helper does not use the native multi-session chooser"
+  grep -F '"$TMUX_BIN" new-session -d -P -F' \
+      "$payload_dir/scripts/engineos-tmux-window-move" >/dev/null ||
+    die "tmux window move helper does not create sessions detached"
+  grep -F '"$TMUX_BIN" switch-client -c "$client" -t "$session_id"' \
+      "$payload_dir/scripts/engineos-tmux-window-move" >/dev/null ||
+    die "tmux window move helper does not switch the invoking client by stable session id"
   grep -F '"$BRIDGE_BIN" sync' "$payload_dir/scripts/engineos-tmux-window-move" >/dev/null ||
     die "tmux window move helper does not resync EngineOS pane state"
   if command -v tmux >/dev/null 2>&1; then

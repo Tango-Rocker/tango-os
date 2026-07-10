@@ -66,7 +66,7 @@ These are historical proof artifacts only; they are not the active work path:
   `engineos-tmux-pane-bridge` reports focus and geometry from tmux hooks
   without proxy tabs or a polling daemon. Cube/engine pane launches still use
   the existing `launch-bounds/*.env` path. The 2026-07-09/10 deploy refreshed
-  `engineos-shell 0.1.0-17`, `engineos-tools 0.1.0-28`, and
+  `engineos-shell 0.1.0-17`, `engineos-tools 0.1.0-29`, and
   `engineos-config 0.1.0-3`; force-installed the managed tmux config and
   `/usr/local/bin/engineos-tmux-pane-bridge`; and left
   `/run/user/1000/engineos/shell-state.json` JSON-readable with
@@ -80,9 +80,11 @@ These are historical proof artifacts only; they are not the active work path:
   pane visual proof is still pending. The managed right-click status-window
   menu now includes `Move to Session...`; with one destination it moves the
   clicked stable window ID immediately, avoiding tmux's unreliable nested
-  mouse menus, and resynchronizes pane geometry.
+  mouse menus, and resynchronizes pane geometry. The managed session-name menu
+  also replaces tmux's client-terminating bare `new-session` action with
+  detached creation followed by an explicit switch of the invoking client.
   The EngineOS command-surface hardening is deployed through
-  `engineos-tools 0.1.0-28`: `eos-source-test` clears installed-session
+  `engineos-tools 0.1.0-29`: `eos-source-test` clears installed-session
   contamination, `eos-proof` fails closed on required evidence, repeatable
   package selection is normalized through `eos-ci local`, and
   `eos-runtime shell restart-live` only reports success when a new

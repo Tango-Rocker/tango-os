@@ -9,8 +9,9 @@ usage() {
   cat <<'HELP'
 Usage: engineos-tmux-window-move choose WINDOW_ID PANE_ID [CLIENT_NAME]
        engineos-tmux-window-move apply WINDOW_ID SESSION_ID [CLIENT_NAME]
+       engineos-tmux-window-move session-create CLIENT_NAME
 
-Move to the only other session, open a chooser, or apply the selected move.
+Move windows between sessions or safely create and switch to a new session.
 HELP
 }
 
@@ -156,6 +157,41 @@ apply_move() {
   notify_client "$client" "Moved $window_name to session $destination_name"
 }
 
+create_session() {
+  local client="$1"
+  local client_name session_id
+
+  [[ -n "$client" ]] || {
+    printf 'engineos-tmux-window-move: session-create requires a client name\n' >&2
+    return 2
+  }
+  client_name="$("$TMUX_BIN" display-message -p -c "$client" '#{client_name}' 2>/dev/null || true)"
+  if [[ "$client_name" != "$client" ]]; then
+    notify_client "$client" "The invoking tmux client no longer exists"
+    return 1
+  fi
+
+  if ! session_id="$("$TMUX_BIN" new-session -d -P -F '#{session_id}')"; then
+    log_event "client=$client status=session-create-failed"
+    notify_client "$client" "Failed to create a new tmux session"
+    return 1
+  fi
+  if ! "$TMUX_BIN" switch-client -c "$client" -t "$session_id"; then
+    "$TMUX_BIN" kill-session -t "$session_id" 2>/dev/null || true
+    log_event "client=$client session=$session_id status=session-switch-failed"
+    notify_client "$client" "Failed to switch to the new tmux session"
+    return 1
+  fi
+
+  log_event "client=$client session=$session_id status=session-created"
+  if ! "$BRIDGE_BIN" sync; then
+    log_event "client=$client session=$session_id status=session-sync-failed"
+    notify_client "$client" "Created tmux session; pane sync failed"
+    return 1
+  fi
+  notify_client "$client" "Created tmux session $session_id"
+}
+
 command="${1:-}"
 case "$command" in
   choose)
@@ -165,6 +201,10 @@ case "$command" in
   apply)
     [[ $# -ge 3 ]] || { usage >&2; exit 2; }
     apply_move "$2" "$3" "${4:-}"
+    ;;
+  session-create)
+    [[ $# -eq 2 ]] || { usage >&2; exit 2; }
+    create_session "$2"
     ;;
   help|--help|-h)
     usage
