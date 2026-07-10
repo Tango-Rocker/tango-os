@@ -147,11 +147,12 @@ engineos_packages() {
 
 engineos_package_known() {
   local needle="$1"
+  local found=false
   local pkg
   while IFS= read -r pkg; do
-    [[ "$pkg" == "$needle" ]] && return 0
+    [[ "$pkg" == "$needle" ]] && found=true
   done < <(engineos_packages)
-  return 1
+  [[ "$found" == true ]]
 }
 
 engineos_add_package_request() {
