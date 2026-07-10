@@ -716,7 +716,7 @@ proof_mc_preview() {
   run_step "preview IPC ping" "$preview_cmd" --ping
   run_step "MC quick-view preview" "$preview_cmd" --quick-view "$preview_image" --panel right
   [[ -r "$shell_log" ]] || die "shell log missing: $shell_log"
-  grep -F "image preview shown path=$preview_image" "$shell_log" |
+  grep -aF "image preview shown path=$preview_image" "$shell_log" |
     grep -F 'owner=mc-quick-view:' |
     grep -F 'image=4x3' >/dev/null ||
     die "shell log does not show MC Quick View preview evidence: $shell_log"
