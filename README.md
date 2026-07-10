@@ -98,9 +98,9 @@ inactive lifecycle hooks.
 ./tools/engineos/eos-observe metrics
 ```
 
-Session extraction is provided by pinned `codex-insights 0.2.0`, using
-`gpt-5.6-luna` with medium reasoning. Raw archives are private and cleanup is
-explicit through `codex-insights prune`.
+The `codex-extractor` checkout provides the pinned `codex-insights 0.2.0`
+command. Reviews use `gpt-5.6-luna` with medium reasoning; raw archives are
+private and cleanup is explicit through `codex-insights prune`.
 
 ## Repository Map
 

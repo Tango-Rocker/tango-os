@@ -1,5 +1,12 @@
 # EngineOS Execution Plan: Windows Host + Arch VM Build Lab
 
+> **Historical reference:** This June 2026 image-lab plan is not the active
+> EngineOS architecture or workflow. Package names such as
+> `engineos-engine-runner`, VM-first proof gates, and generated-image commands
+> below are intentionally preserved as history. Use
+> [CURRENT_STATUS.md](CURRENT_STATUS.md), [README.md](README.md), and
+> [docs/architecture.md](docs/architecture.md) for current work.
+
 **Status:** Draft v0.1  
 **Date:** 2026-06-10  
 **Project:** EngineDev OS first, game-runtime appliance later  

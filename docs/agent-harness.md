@@ -75,7 +75,7 @@ an installed EngineOS session may have exported `/usr` command paths. Direct
 prefer `eos-ci local` for the normal build/test/install loop. Proof commands
 must verify acceptance markers and required evidence files, not diagnostic
 substitutes.
-Use `eos-runtime shell refresh-user` after reinstalling user-space tmux/window
+Use `eos-runtime shell refresh-user` after reinstalling user-space tmux/pane
 helpers, then `eos-runtime shell restart-live` for the live EngineDev shell
 service restart path.
 

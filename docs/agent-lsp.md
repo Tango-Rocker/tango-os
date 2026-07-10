@@ -4,7 +4,7 @@ Use LSP for semantic code navigation when the language server is available and r
 
 ## Current MCP State
 
-Checked on 2026-06-11 with `tool_search` and `lsp_server_status`:
+Current harness state:
 
 - LSP MCP name: `mcp__sdl_scaffoliding_lsp`
 - Exposed tools include `lsp_server_status`, `lsp_start_server`, `lsp_stop_server`, `lsp_document_symbols`, `lsp_file_imports`, `lsp_file_exports`, `lsp_diagnostics`, `lsp_workspace_diagnostics`, `lsp_completions`, `lsp_hover`, `lsp_signature_help`, `lsp_goto_definition`, `lsp_goto_type_definition`, `lsp_find_references`, `lsp_find_implementations`, `lsp_type_hierarchy`, `lsp_call_hierarchy`, `lsp_workspace_symbols`, `lsp_find_symbol`, and `lsp_related_files`
@@ -16,7 +16,9 @@ Checked on 2026-06-11 with `tool_search` and `lsp_server_status`:
 - extensionless Bash entrypoints, such as `tools/engineos/engineos`, are not configured for LSP
 - PKGBUILDs, Markdown, archiso profiles, and package lists should use text/project checks
 
-That means this local harness cannot currently prove semantic C diagnostics. Use syntax checks and shell tooling here, then use compiler output and a working LSP on the Arch builder VM once the shell package is being built there.
+That means this harness cannot currently prove semantic C diagnostics. Use
+syntax checks and shell tooling for navigation, then use real compiler output
+from the live Arch EngineDev package build as acceptance evidence.
 
 ## Preferred LSP Flow
 
@@ -49,7 +51,8 @@ If `shellcheck` is missing, say so and still run `bash -n`.
 
 ## Current C/wlroots Path
 
-For `shell/src/engineos-shell.c`, this Windows/WSL harness can inspect text and run dry-runs, but it cannot currently prove wlroots API compatibility.
+For `shell/src/engineos-shell.c`, text navigation and dry-runs are useful but
+do not prove wlroots API compatibility.
 
 Use locally:
 
@@ -58,7 +61,7 @@ Use locally:
 ./tools/engineos/eos-preflight repo --package engineos-shell
 ```
 
-Use on the Arch builder VM:
+Use on the live Arch EngineDev host:
 
 ```bash
 ./tools/engineos/eos-build shell
@@ -72,9 +75,12 @@ Treat compiler output against Arch `wlroots0.19` as the source of truth until LS
 When source code grows enough to benefit from persistent semantic tooling:
 
 - C/C++: install `clangd`, generate `compile_commands.json`, and document the build command
-- C/wlroots: prefer Arch builder VM compiler output against `wlroots0.19`; LSP is helper context, not acceptance proof until `clangd` and compile commands are working
+- C/wlroots: prefer live EngineDev compiler output against `wlroots0.19`; LSP
+  is helper context, not acceptance proof until `clangd` and compile commands
+  are working
 - Rust: install `rust-analyzer`, keep `Cargo.toml` at the relevant project root
 - Python: add the chosen formatter, test command, and language server expectation
 - TypeScript: add the package manager command and language server expectation if web tooling appears
 
-Do not block PoC 0 on LSP setup. Add stronger LSP support when there is enough real source code and builder VM tooling to benefit from it.
+Do not block the current shell proof on LSP setup. Add stronger LSP support
+when the live build can provide a maintained `compile_commands.json`.

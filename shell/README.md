@@ -1,66 +1,148 @@
 # EngineOS Shell
 
-This directory holds the first wlroots-based shell bootstrap.
+This directory contains the wlroots 0.19 compositor used by the live EngineDev
+installation. `engineos-shell` owns the Wayland display, outputs, scene graph,
+input routing, app surfaces, pane-bound GUI views, and image overlays.
 
-Initial implementation order:
-
-1. headless backend smoke test
-2. nested Wayland or X11 backend
-3. direct TTY/KMS path on bare-metal AMD
-
-Expected CLI entry points:
+## Run And Prove
 
 ```bash
-engineos run shell --headless
-engineos run shell --nested
-engineos validate shell
-engineos test compositor --headless
-engineos logs shell --last 200
-engineos proof shell-launch --dry-run
+eos-runtime shell --headless
+eos-runtime shell --nested
+eos-runtime shell restart-live
+eos-app manifest validate
+eos-app status --json
+eos-test shell-actions
+eos-test shell
+eos-test input
 ```
 
-Current state:
+The live shell is managed by `engineos-dev-shell.service`. Use
+`eos-runtime shell refresh-user` after changing tmux/user helpers and
+`eos-runtime shell restart-live` for a verified PID-replacing restart.
 
-- `shell/src/engineos-shell.c` creates a Wayland display, starts a wlroots backend, creates a scene graph and xdg-shell global, adds mapped toplevels and child popups to the scene, sends scene frame-done notifications, forwards keyboard input to the focused toplevel, accepts clipboard and primary-selection requests on the seat, exposes data-control for clipboard tools and host bridges, logs toplevel lifecycle and output/input discovery, logs selected connector/mode/refresh/backend evidence for TTY/KMS proof, tracks pointer devices through a wlroots cursor, forwards pointer motion/button/axis/frame events to clients when a toplevel or popup is targeted, handles default/client cursor images, exposes `WAYLAND_DISPLAY`, and can exit via a smoke timer. PNG/JPEG decoding and wlroots pixel-buffer ownership live in `shell/src/engineos-image.c` so media parsing is isolated from compositor state.
-- Keyboard bindings in the real shell path: `Alt+Escape` exits, `Alt+Tab` cycles all mapped toplevel windows, `Alt+1` activates/launches terminal, `Alt+2` activates/launches the cube app, `Alt+3` activates/launches Quake, `Alt+Return` launches the configured terminal command, `Alt+G` launches the configured engine command, `Alt+F1` switches to shell mode, `Alt+F2` switches to terminal mode, `Alt+F3` switches to game mode, `Alt+F9`/`Alt+M` minimizes the focused floating window, `Alt+F10`/`Alt+X` toggles maximize for the focused floating window, `Alt+Arrow` nudges the focused floating window, `Alt+C` toggles game capture, and `Ctrl+Alt+Backspace` performs emergency release. When an image preview is visible, unmodified `F3` closes only that shell-owned preview surface.
-- Toplevels are classified as `terminal`, `cube`, `engine`, or `unknown` from app id/title hints. Known launchpad slots are output-sized by default, inactive non-pane slots are hidden, and ordinary unknown views are managed as floating desktop windows with xdg maximize, minimize, fullscreen, and move request handling so Qt apps and browsers can participate in focus cycling. Mapped windows receive stable session-local ids in `shell-state.json`; `eos-app window list|focus|launch` remains available for diagnostics, while normal pane-bound GUI launch uses `eos-app pane launch -- COMMAND`. The shell reads `ENGINEOS_PANE_LAUNCH_TOKEN` from the mapping Wayland client's process environment and binds only the exact pending token; missing, duplicate, expired, and unknown tokens are rejected. Pane bindings are stored in memory and token-free shell state, laid out as `tmux-pane-gui`, clipped to the owning terminal output's pane rectangle, and focused or hidden from tmux pane focus IPC. Focused floating GUI views are raised above persistent launchpad panels so browser/editor windows do not render behind pane-bound shell panels. Xdg popups are parented under their toplevel scene tree so Qt dropdown menus and selectors render with their owning window. Cube and engine launches can still carry per-role launch-bounds requests under `$ENGINEOS_STATE_DIR/launch-bounds/*.env`; `layout=tmux-pane` requests scale the client to the matching output sub-rectangle and remain visible as panel views while another terminal or pane slot is active. Output/fullscreen cube and engine launches keep the exclusive slot-style behavior.
-- Shell-launched slot commands are tracked by pid. `SIGCHLD` reaping logs process exit status, whether the role mapped before exit, and `reason=process-exited-before-map` when a launchpad slot command dies before creating a surface.
-- Input state is logged as `shell`, `terminal`, or `game` mode with a `game` or `none` capture flag. Shell mode clears keyboard focus and swallows non-shell keys; terminal and game modes forward keyboard input to the focused matching surface.
-- The shell advertises Wayland data-device, primary-selection, and data-control globals. Client copy operations are accepted onto `seat0`, `wl-copy`/`wl-paste` can use data-control, and a Windows-host clipboard bridge should inject text through the shell-owned `WAYLAND_DISPLAY` instead of relying on raw terminal paste. Wayland drag-and-drop requests are validated against pointer grab serials, started as seat pointer drags, and any client-provided drag icon is rendered through the scene graph while following the cursor.
-- Pointer devices update seat capabilities, the wlroots cursor is constrained to the output layout, output scales load an XCursor theme, client cursor image requests are honored only for the pointer-focused client, scene hit-testing updates pointer focus, and button presses can click-focus terminal/engine toplevels. When the engine slot is active and mapped, game capture automatically hides the cursor, ignores client cursor image requests, confines pointer coordinates to the focused engine view, advertises relative-pointer/pointer-constraints support, forwards relative motion deltas for mouselook past window edges, and forwards normal pointer events to the game until `Alt+C`, `Alt+F1/F2`, or `Ctrl+Alt+Backspace` releases capture. Gamepad routing remains later work.
-- `SIGHUP` asks the real shell to re-read launch-bounds, refresh the shell IPC socket, reapply launchpad/window layout, and rewrite shell state. `eos-app pane sync` still uses this for tmux resize/layout updates to mapped pane-bound cube and engine clients. Generic Qt/browser/editor pane geometry is event-driven through `engineos-tmux-pane-bridge`, which sends `pane-focus` and `pane-geometry` IPC instead of polling or creating proxy tmux windows.
-- The shell waits for at least one output after the wlroots backend starts before spawning shell-owned clients, so Qt/Wayland clients do not launch into a compositor that has not advertised outputs yet. The EngineDev shell start wrapper refreshes stale same-user `engineos-shell` processes and `wayland-*` runtime sockets before relaunching the compositor.
-- The shell listens for image preview and recovery requests on `$XDG_RUNTIME_DIR/engineos/preview.sock` by default, or `$ENGINEOS_STATE_DIR/preview.sock` when the state directory is overridden. The socket accepts only same-UID peers, uses newline-framed JSON with bounded reads, and lives in a private state directory. Managed terminals register their real tty and slot before attaching tmux. `engine-image-preview` includes the tmux pane identity and client tty, so preview and wallpaper requests resolve the owning terminal output without session-name guessing; ambiguous pane ownership is rejected. Preview `show` decodes PNG/JPEG with libpng/libjpeg-turbo, clamps decoded dimensions, and renders a contained scene buffer inside the owning terminal/tmux pane bounds. `engine-image-preview --wallpaper IMAGE --opacity 70` renders a shell-owned PNG/JPEG backdrop with cropped cover scaling; `--target pane` confines it to the active tmux pane bounds. MC `View`/`Open` requests return immediately after showing the sidecar and leave a parent watcher for MC-exit cleanup, while MC Quick View should call `engine-image-preview --quick-view %f` so Up/Down selection changes replace the same shell preview in the configured preview-panel half (`--panel left|right|active`, default right). `eos-app recover terminal-secondary` sends an IPC `launch` request so the running shell can relaunch or activate the side terminal with its own Wayland environment, and `eos-app recover preview` refreshes the IPC socket without restarting the compositor service. `F3` closes any visible shell-owned image surface, including previews and wallpaper/pane overlays; owner-scoped hide requests prevent old watcher processes from hiding a newer preview, `engine-image-preview --hide-wallpaper` clears the backdrop, and shell shutdown leaves the shared socket path for the next shell instance.
-- `engineos run shell --headless` prefers an installed `engineos-shell --headless` binary and falls back to an explicit headless smoke log.
-- `engineos run shell --nested` prefers an installed `engineos-shell --nested --startup 'engineos app launch terminal' --terminal 'engineos app launch terminal' --cube 'engineos app launch cube' --engine 'engineos app launch quake'` binary path and falls back to an explicit nested smoke log.
-- `engineos run shell --tty` is the Runtime graphical entry point; with the real binary it passes `--bootstrap launchpad` by default so the shell starts terminal, cube, and engine commands after the Wayland socket is ready, with cube as the active slot.
-- `engineos terminal` launches a Wayland-native terminal (`foot`, then other Wayland-capable fallbacks) and requires `WAYLAND_DISPLAY` by default, so graphical clients stay owned by the EngineOS shell instead of falling back to X11 or a raw TTY path. Runtime sets `ENGINEOS_TERMINAL_SESSION_CMD='engineos-tmux-attach-primary'`, so the bootstrapped terminal reattaches the existing primary tmux session before creating the fallback `engineos` session.
-- `engineos-shell` exports Wayland session hints for spawned terminal/engine clients and unsets `DISPLAY` when its Wayland socket is active. This enforces shell ownership of app surfaces; it does not by itself prove hardware GL acceleration in VMs that expose only llvmpipe/pixman.
-- `engineos proof shell-launch` validates the running shell process, renderer diagnostics, terminal/tmux ownership logs, and app launch ownership markers after a rebuilt ISO boots.
-- `engineos proof launchpad` validates the launchpad MVP contract: launchpad bootstrap, cube as the active slot, shell-owned terminal/cube/Quake app launch markers, cube renderer/frame evidence, and a mapped engine slot. Quake asset/runtime guidance remains useful diagnostics, but it is not proof that the engine slot works.
-- The real shell writes `/run/user/1000/engineos/shell-state.json` by default, or `$ENGINEOS_STATE_DIR/shell-state.json` when overridden. The state file records the schema, bootstrap mode, active/pending slot, input mode/capture, slot mapped/visible state, managed window id/geometry/focus/minimize/maximize state, pane bindings, and live launch records for proofs and `engineos app status`.
-- `/etc/engineos/apps.toml` is the packaged launchpad app registry. In the source tree it lives at `packages/engineos-config/files/etc/engineos/apps.toml`; `engineos app manifest validate` checks the declared terminal, cube, and Quake slot contract.
-- `engineos run shell --headless|--nested|--tty` fails closed when `engineos-shell` is missing; there is no successful shell stub path.
-- `engineos validate shell` checks shell source inputs, build dry-run, missing-binary fail-closed behavior, and fake installed-shell argument pass-through.
-- `engineos outputs list` records DRM connector status and preferred modes before hardware shell attempts; `engineos outputs validate --single` and `--dual-static` provide quick connector-count checks.
-- `ENGINEOS_SHELL_SMOKE=true engineos run shell --headless` asks the real binary to start and self-terminate when the binary is installed.
-- `ENGINEOS_SHELL_STARTUP='foot' engineos run shell --nested` overrides the nested startup command.
-- `ENGINEOS_SHELL_BOOTSTRAP=launchpad engineos run shell --tty` selects startup launch mode: `none`, `terminal`, `engine`, or `launchpad`; `all` remains an alias for `launchpad`.
-- `ENGINEOS_TERMINAL_SLOT_CMD='engineos app launch terminal'` overrides the shell slot command for the terminal role.
-- `ENGINEOS_TERMINAL_CMD='foot'` overrides the terminal emulator selected by `engineos terminal`.
-- `ENGINEOS_TERMINAL_SESSION_CMD='engineos-tmux-attach-primary'` runs a shell command inside the selected terminal.
-- `ENGINEOS_APPS_MANIFEST=/path/to/apps.toml` overrides the app registry used by CLI validation and shell-runner default commands.
-- `engineos app launch terminal|cube|quake` is the app launch contract used by the shell. It enforces the shell-owned Wayland display, sets common Wayland client hints, disables SDL/libdecor for cube to avoid GTK decoration crashes, writes cube output to `cube.log`, and dispatches terminal/Quake to their existing runners.
-- `engineos app pane launch -- COMMAND` requires a registered shell terminal, registers the invoking tmux pane and one-shot token, then execs the GUI command in the shell-owned Wayland client environment. `engineos app pane focus|geometry|unbind|list` report tmux pane focus, update shell-owned pane geometry, remove a binding, and inspect live shell-owned pane state over IPC. `engineos app pane sync` remains for cube/engine launch-bounds refreshes, while `engineos app pane sync --all` refreshes all stored pane-bound cube/engine roles from their recorded tmux pane IDs.
-- `engineos app recover preview` refreshes shell IPC after MC preview connection failures; `engineos app recover terminal-secondary` asks the running shell to relaunch the second-monitor terminal without a service restart.
-- `ENGINEOS_CUBE_CMD='engineos app launch cube'` overrides the cube launch command.
-- `ENGINEOS_ENGINE_CMD='engineos app launch quake'` overrides the engine launch command.
+## Surface Model
 
-Build on the live Arch EngineDev host:
+Toplevels are classified as `terminal`, `cube`, `engine`, or `unknown`.
+Manifest slots are output-sized and shell-owned. Ordinary unknown views are
+managed as floating windows with focus, move, minimize, maximize, and
+fullscreen handling.
+
+The normal tmux-integrated GUI path is explicit:
 
 ```bash
-./tools/engineos/engineos package engineos-shell
-./tools/engineos/engineos build shell
-./tools/engineos/engineos test app
-./tools/engineos/engineos test compositor --headless
+eos-app pane launch -- COMMAND [ARGS...]
+eos-app pane focus
+eos-app pane geometry
+eos-app pane unbind
+eos-app pane list --json
 ```
+
+`pane launch` requires a managed terminal and tmux context. It registers a
+one-shot token with the shell and places the token in the launched client's
+environment. The shell binds only the exact mapped Wayland process carrying
+that pending token. Missing, duplicate, expired, and unknown tokens fail
+explicitly.
+
+Bindings are stored in memory and published without tokens in
+`shell-state.json`. Bound views use `layout=tmux-pane-gui`, are clipped to the
+owning terminal output and pane rectangle, and are rendered/focused from tmux
+focus events. `eos-app window list|focus|launch` remains diagnostic only.
+
+Cube and Quake still support the older role-specific
+`$ENGINEOS_STATE_DIR/launch-bounds/*.env` path for pane/output/fullscreen
+launches. Generic Qt/browser/editor binding does not use those files.
+
+## Tmux Bridge
+
+Managed terminals register their real tty and output slot before attaching to
+tmux. `engineos-tmux-pane-bridge` is called by tmux hooks and reports exact
+socket, session, window, pane, client tty, focus, and geometry over shell IPC.
+It handles every session in the active server.
+
+The bridge is event-driven. It does not create proxy GUI windows, poll every
+few seconds, infer bindings from titles/commands, or store authority in tmux
+options. Shell state is authoritative.
+
+The primary terminal uses `engineos-tmux-attach-primary`, which reattaches an
+existing work session before creating the fallback `engineos` session. The
+secondary terminal uses `engineos-side`. Both clients share one tmux server.
+
+## Image Preview
+
+The shell listens on `$XDG_RUNTIME_DIR/engineos/preview.sock`, or the equivalent
+path under `$ENGINEOS_STATE_DIR`. The socket accepts same-UID peers, uses
+newline-framed bounded JSON, and lives in a private state directory.
+
+`engine-image-preview` includes tmux pane identity and client tty. The shell
+resolves the exact registered terminal output; ambiguous ownership is rejected.
+PNG/JPEG parsing lives in `shell/src/engineos-image.c`, decoded dimensions are
+bounded, and the scene buffer is clipped to the target pane.
+
+```bash
+engine-image-preview --quick-view IMAGE --panel right
+engine-image-preview --wallpaper IMAGE --opacity 70
+engine-image-preview --hide
+eos-app recover preview
+eos-proof mc-preview
+```
+
+MC Quick View replaces the same owner-scoped preview as selection changes.
+Old watcher processes cannot hide a newer preview. Unmodified `F3` closes the
+visible shell-owned preview or wallpaper surface.
+
+## Input And Focus
+
+The shell tracks `shell`, `terminal`, and `game` modes. Keyboard and pointer
+focus follow the selected view. Quake capture hides the cursor, uses relative
+pointer/constraint protocols for mouselook, and releases on `Alt+C`,
+`Alt+F1/F2`, or `Ctrl+Alt+Backspace`.
+
+Core bindings:
+
+- `Alt+Escape`: exit shell
+- `Alt+Tab`: cycle mapped toplevels
+- `Alt+1`, `Alt+2`, `Alt+3`: terminal, cube, Quake slots
+- `Alt+Return`: launch terminal
+- `Alt+G`: launch Quake
+- `Alt+F1/F2/F3`: shell, terminal, game input modes
+- `Alt+F9` or `Alt+M`: minimize focused floating window
+- `Alt+F10` or `Alt+X`: toggle maximize
+- `Alt+Arrow`: move focused floating window
+- `Alt+C`: toggle game capture
+- `Ctrl+Alt+Backspace`: emergency release
+
+The shell also exposes clipboard, primary-selection, data-control,
+drag-and-drop, relative-pointer, and pointer-constraint protocols needed by
+terminal, Qt/editor, and game clients. Xdg popups remain parented to their
+toplevel scene tree.
+
+## State And Logs
+
+```text
+/run/user/1000/engineos/shell-state.json
+/run/user/1000/engineos/preview.sock
+/var/log/engineos/shell.log
+/etc/engineos/apps.toml
+```
+
+State records bootstrap/slot/input state, windows, token-free pane bindings,
+terminal client registrations, and launch records. `eos-app status --json` and
+`eos-app pane list --json` expose the supported diagnostic views.
+
+## Build
+
+Build against the live Arch/wlroots environment:
+
+```bash
+./tools/engineos/eos-build shell
+./tools/engineos/eos-preflight repo --package engineos-shell
+./tools/engineos/eos-ci local \
+  --package engineos-shell \
+  --test shell-actions --test shell --test input \
+  --install --clean-generated --no-validate-repo
+```
+
+The shell fails closed when its real binary, required renderer evidence, IPC
+state, or acceptance artifacts are missing. Dry-run output and metadata-only
+captures do not count as live rendering proof.

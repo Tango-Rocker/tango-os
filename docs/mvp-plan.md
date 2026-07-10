@@ -1,115 +1,137 @@
 # MVP Plan
 
-This is the working plan from the current build lab to the first usable EngineRuntime appliance. Keep it ordered around proofs, not process.
+This plan orders current work around live bare-metal proofs. Historical ISO and
+VM milestones are archived context, not active acceptance gates.
 
 ## Product Shape
 
-EngineOS has two images:
+EngineDev is the current development system: a package-managed Arch install
+running the EngineOS wlroots shell, persistent tmux sessions, shell-owned apps,
+and the Quake development workflow. The later appliance remains a smaller
+EngineRuntime system, but image generation resumes only when the live stack is
+ready to package.
 
-- EngineDev OS: development and diagnostics image for building confidence.
-- EngineRuntime OS: smaller game-runtime image that boots into the EngineOS shell and launches QuakeSpasm.
+## Proven Foundation
 
-The Windows host is the lab controller. The Arch builder VM is the build truth and owns `/srv/engineos`.
+The following foundations are already available:
 
-## Proof Ladder
+- local EngineOS package builds and deterministic committed-range deployment
+- live AMD/radeonsi shell startup and shell-owned Wayland clients
+- terminal, secondary terminal, cube, and Quake app-manifest slots
+- one tmux server with restart-safe primary/secondary session attachment
+- event-driven pane focus/geometry and exact launch-token GUI binding
+- exact MC image-preview routing by pane and terminal client tty
+- QuakeSpasm, dgen, level-agent, and TrenchBroom package integration
+- `eos-game quake` workflow with per-user Quake and level-agent services
+- lean role/skill agent harness and fail-closed Luna session extraction
 
-### PoC 0: Build Lab
+## Current Proof Ladder
 
-Goal: prove that the builder can repeatably build packages, build EngineDev, boot it, and collect diagnostics.
+### 1. Package And Harness Integrity
+
+Goal: every change can be selected, built, installed, and published without
+dirty-tree guessing or hidden fallback success.
 
 Acceptance:
 
-- repo exists on the Arch builder at `/srv/engineos`
-- `eos-validate builder` passes on the builder
-- `eos-build repo` and `eos-validate repo` pass
-- `eos-build iso enginedev` produces `EngineDevOS-*.iso`
-- EngineDev boots in a test VM
-- `eos-proof booted-iso --vm` passes inside the guest
-
-Current status: PoC 0 EngineDev build-lab acceptance is complete. The first-deploy dev environment follow-on is also complete: Codex CLI, tmux defaults, Docker, and the post-install payload were proven in clean EngineDev guests.
+- `eos dev plan` maps committed files to the right packages and dependencies
+- `eos-ci local` runs real preflight/tests/build/install/cleanup
+- retired packages are absent from the live install and repository database
+- agent hygiene, source tests, and package lint pass
 
 Commands:
 
 ```bash
-cd /srv/engineos
-./tools/engineos/eos-validate builder
-./tools/engineos/eos-build repo
-./tools/engineos/eos-validate repo
-./tools/engineos/eos-build iso enginedev
-./tools/engineos/eos-vm boot enginedev --display none --background --ssh-port 2222
-ENGINEOS_GUEST_PASSWORD=dev ./tools/engineos/eos-deploy first --host dev@127.0.0.1 --port 2222
+./tools/engineos/eos-agent hygiene check
+./tools/engineos/eos-source-test agent
+./tools/engineos/eos-preflight all
+./tools/engineos/eos-lint packages
 ```
 
-Inside EngineDev:
+### 2. Shell And Pane Workflow
 
-```bash
-eos-proof booted-iso --vm
-tmux -V
-docker info
-codex --version
-```
-
-### PoC 1: Engine Loop
-
-Goal: prove QuakeSpasm can launch through EngineOS with assets, logs, and crash evidence.
+Goal: developers can keep terminal context while launching GUI tools into the
+correct pane and output.
 
 Acceptance:
 
-- `eos-assets check quake` explains missing assets and passes with user-provided assets
-- `eos-runtime quake --smoke` works in a generated ISO
-- engine logs show launch arguments and audio driver
-- crash bundle includes Quake asset state and engine logs
+- shell restart preserves existing tmux sessions and clients
+- `eos-app pane launch -- COMMAND` binds only the exact launched client
+- pane focus and geometry are event-driven with no proxy windows or polling
+- MC Quick View renders on the invoking terminal output and pane rectangle
+- stale tokens, panes, and ambiguous output ownership fail explicitly
 
-Current status: QuakeSpasm and the Quake template are packaged. Real assets were proven in a hot-patched EngineDev Hyper-V VM, Quake launches through EngineOS, logs the PulseAudio driver, executes generated default controls, and exits cleanly under timeout. Hyper-V basic console exposes only PipeWire/Pulse dummy output, so real audio still needs bare metal or an audio-capable VM/RDP path.
+Commands:
 
-### PoC 2: Shell Loop
+```bash
+eos-app manifest validate
+eos-app pane list --json
+eos-proof mc-preview
+eos-app pane launch -- falkon
+```
 
-Goal: prove the shell can run, display clients, route input, launch terminal, and launch Quake.
+Remaining evidence: a live Falkon focus-switch stress pass and real screenshot
+capture. Screenshot proof is currently blocked because the compositor does not
+expose the screen-capture protocol required by `grim`.
+
+### 3. Quake Development Loop
+
+Goal: a developer can generate, edit, build, reload, and play a level without
+managing service internals or stale runner processes.
 
 Acceptance:
 
-- `eos-build shell` passes on the Arch builder
-- nested shell visibly runs under Wayland or X11
-- TTY shell path starts in Runtime
-- `Alt+Return` launches a terminal
-- `Alt+G` launches Quake through EngineOS
-- emergency release works and logs useful state
+- dgen is built from the exact pinned `quake-generator` release
+- the level agent fails closed on extractor/generator errors
+- Quake runs through `engineos-quake.service`
+- edit/build/play/reload operations share one user-facing command surface
+- user assets remain outside the repository
 
-Current status: the shell compiles against `wlroots0.19`; local tests cover action wiring and source markers. Runtime service/autostart now passes in a generated EngineRuntime ISO, and the shell reaches DRM/libinput under QEMU with keyboard and pointer devices. The next shell slice is visible nested/TTY polish and interactive launch validation.
+Commands:
 
-### PoC 3: Hardware Truth
+```bash
+eos-game quake setup
+eos-game quake create "a compact industrial arena" --wait
+eos-game quake status
+eos-game quake edit <job-id>
+eos-game quake build "a compact industrial arena" --wait
+eos-game quake play
+eos-game quake proof
+```
 
-Goal: prove the runtime image on the AMD target with real DRM/KMS, input, audio, and logs.
+### 4. Bare-Metal Runtime Gate
+
+Goal: close the remaining boot, recovery, input, audio, and renderer gaps on the
+installed AMD system before producing a new appliance image.
 
 Acceptance:
 
-- EngineRuntime boots on the AMD machine
-- startup shell renderer is GL-capable and is not pixman/llvmpipe/softpipe
-- at least one DRM output is connected and validated
-- keyboard/mouse/game input reaches shell and Quake
-- audio works through PipeWire/Pulse
-- recovery TTY and crash bundle work
+- boot validation observes the real startup decision and recovery path
+- the active shell renderer is hardware GL, never pixman/llvmpipe/softpipe
+- keyboard, pointer capture/release, and Quake focus work interactively
+- user-provided Quake assets launch a mapped game surface
+- audible PipeWire/Pulse output is proven on hardware
+- crash bundles contain actionable shell, service, asset, and renderer evidence
 
-Current status: no bare-metal proof yet. Builder-hosted QEMU can expose an emulated ICH9 HDA device with `eos-vm boot --audio hda`; that proves guest ALSA/PipeWire plumbing but not real audible output.
-
-## MVP
-
-MVP is complete when EngineRuntime boots on the AMD machine, starts the shell, launches terminal and QuakeSpasm, recovers input, and leaves useful logs/crash bundles.
-
-Release-candidate commands:
+Commands:
 
 ```bash
-cd /srv/engineos
-./tools/engineos/eos-proof release-candidate
-./tools/engineos/eos-release checklist --out-dir out
+eos-validate boot --bare-metal
+eos-proof shell-launch --bare-metal
+eos-assets check quake
+eos-game quake proof
+eos-crash-bundle --runtime
 ```
 
-Hardware handoff:
+## MVP Exit
 
-```bash
-./tools/engineos/eos-proof hardware-ready --profile engineruntime --device /dev/sdX
-eos-proof booted-iso --bare-metal
-```
+The MVP exits when the installed AMD system reliably starts the accelerated
+shell, preserves developer sessions, launches terminal and Quake through the
+shell-owned app stack, recovers input, handles user assets, produces audible
+audio, and leaves useful failure evidence.
+
+Only then should EngineRuntime image work resume to package the already-proven
+live behavior.
 
 ## Deferred Until After MVP
 
@@ -119,4 +141,4 @@ eos-proof booted-iso --bare-metal
 - dynamic multi-monitor layout
 - rich 3D cockpit
 - package signing
-- read-only live runtime MCP after observability and role routing are stable
+- read-only runtime MCP beyond the current direct CLI/state interfaces

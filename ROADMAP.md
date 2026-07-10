@@ -20,10 +20,10 @@ Historical image-lab PoC is complete and archived:
   confidence
 - VM/ISO evidence is no longer an active acceptance path
 
-Follow-on dev-instance proof is complete:
+Historical first-deploy proof is complete:
 
-- `eos-deploy first` copies the post-install payload to the booted EngineDev guest
-- the guest has Codex CLI, tmux defaults, and Docker available
+- the managed post-install payload configures the EngineDev user
+- the live install has Codex CLI, tmux defaults, and Docker available
 - Docker is enabled/started and `dev` is in the `docker` group
 - the setup log is captured at `/var/log/engineos/post-first-deploy.log`
 
@@ -32,6 +32,8 @@ Current runtime proof command:
 ```bash
 ./tools/engineos/eos-ci local --test agent --install --clean-generated --no-validate-repo
 eos-app manifest validate
+eos-proof mc-preview
+eos-game quake proof
 eos-proof shell-launch --bare-metal
 eos-logs shell --last 200
 ```
@@ -103,10 +105,11 @@ eos-proof shell-launch --bare-metal
 - multi-monitor static layout
 - build hygiene
 
-EngineRuntime image work is archived. Runtime autostart, DRM/libinput shell
-startup, crash-bundle recovery, terminal/cube launchpad mapping, Quake
-missing-asset handling, and shell state JSON now need live bare-metal proof
-through package updates and the installed app stack.
+EngineRuntime image work is archived. Current acceptance runs through package
+updates and the installed bare-metal app stack. The pane bridge, exact MC
+output routing, shell state, and per-user Quake workflow are proven; the
+remaining hardware gate is boot/recovery completeness plus interactive Quake
+assets, input, and audible audio.
 
 The next hardware gate is explicit: `eos-validate boot --bare-metal` and
 `eos-proof shell-launch --bare-metal` must reject pixman/llvmpipe/software

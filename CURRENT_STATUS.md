@@ -37,7 +37,7 @@ These are historical proof artifacts only; they are not the active work path:
   rebuild, including pane-bounds app launch, game cursor capture, MC image
   preview, Quick View preview integration, the Falkon startup crash fix, and
   Wayland drag-and-drop support for Qt/editor clients. The live shell package
-  has since advanced through the tmux-mirrored GUI window tracking work below.
+  now uses the event-driven tmux pane bridge described below.
 - Bare-metal EngineDev has a systemd-boot fallback entry,
   `enginedev-restore-engineos-20260704.conf`, pointing at copied
   `/boot/vmlinuz-linux-restore-engineos-20260704` and
@@ -54,8 +54,9 @@ These are historical proof artifacts only; they are not the active work path:
   is unavailable instead of silently substituting another generator.
 - Agent-pack hygiene currently passes with a smaller role/skill router and no
   dispatch queue or profile indirection. Session extraction is provided by
-  `codex-extractor 0.2.0`, using Luna on medium reasoning, and the autonomy
-  harness pins that exact extractor contract and fails closed. Codex is updated
+  the `codex-extractor` checkout and its `codex-insights 0.2.0` command, using
+  Luna on medium reasoning. The autonomy harness pins that exact extractor
+  contract and fails closed. Codex is updated
   to the verified current release, `codex-cli 0.144.1`; npm updates are handled
   by the managed root-owned install path.
 - Bare-metal EngineDev has the v1 tmux pane bridge deployed through the local

@@ -1,5 +1,8 @@
 # EngineDev Archiso Profile
 
+> **Legacy image profile:** Retained for reference only. Current EngineDev work
+> uses the live bare-metal checkout and package deploy path.
+
 This profile is the first bootable development image. It is intentionally broad: compilers, build tools, Mesa, Wayland, wlroots, PipeWire, SDL2, and local EngineOS packages are included so the test VM can validate the OS workflow before a smaller runtime image exists.
 
 Dry-run:

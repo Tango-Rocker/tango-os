@@ -1,6 +1,6 @@
 # EngineOS Dev Instance Directives
 
-Purpose: make a freshly deployed EngineDev guest useful for repository work with
+Purpose: keep the live EngineDev installation useful for repository work with
 Codex CLI, tmux, Docker, and the EngineOS command surface.
 
 Default workflow:
@@ -25,9 +25,9 @@ Default workflow:
 	`.git/hooks/pre-push` and derives the package build/install set from pushed
 	commits. The hook rejects relevant dirty files and does not call ISO, VM, or
 	builder-handoff paths.
-9. Session analysis uses pinned `codex-insights 0.2.0` with
-   `gpt-5.6-luna` at medium reasoning. The first-deploy setup installs it in an
-   isolated user environment; verify it with `codex-insights --version`.
+9. The `codex-extractor` checkout provides pinned `codex-insights 0.2.0` with
+   `gpt-5.6-luna` at medium reasoning. Managed setup installs it in an isolated
+   user environment; verify it with `codex-insights --version`.
 
 Codex CLI authentication is intentionally not automated. Run `codex` once after
 deploy and authenticate with the intended ChatGPT or API-key account.

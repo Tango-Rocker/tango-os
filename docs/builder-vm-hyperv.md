@@ -1,5 +1,9 @@
 # Hyper-V Arch Builder VM
 
+> **Legacy image-lab reference:** This builder is not used for routine
+> EngineOS development or acceptance. Use the live bare-metal package workflow
+> in [../README.md](../README.md) unless the image lab is explicitly re-enabled.
+
 This is the practical path for making `dev@<builder-vm-ip>` real on a Windows
 host with Hyper-V.
 

@@ -11,27 +11,33 @@ This is the place for useful tangents. Add ideas here instead of expanding the c
 
 ## Later Ideas
 
-### Session Mining Action Queue
+### Shell Screen Capture
 
-Why: the 2026-07-08 full Codex session review found recurring proof,
-environment, and ergonomics issues across 46 local sessions. Highest-value
-EngineOS candidates are fail-closed proof gates, a source-tree validation
-wrapper, multi-package `eos-*` handling, live visual proof helpers, MC preview
-proof, pane/window management proofs, and cleaner git/package disposition.
+Why: live MC and GUI routing can be proven through shell geometry/state logs,
+but `eos-proof mc-preview --visual` cannot capture a real frame because the
+compositor does not expose the protocol required by `grim`.
 
-Likely phase: current PoC/MVP hardening; use the generated local evidence under
-`.agent-insights/out/full-20260708/` while it remains available on this machine.
+Likely phase: current MVP hardening after the boot/recovery gate; add a
+security-reviewed capture protocol and prove that metadata-only output remains
+insufficient.
 
-### Command Surface Follow-Ups
+### Falkon Pane Stress Proof
 
-Why: the command-surface and false-signal audit found remaining active-doc and
-cross-repo drift: legacy image-lab commands still appear near routine workflows,
-some validators still mix static/dry-run previews with proof language, and
-`opencode-autonomy/scripts/codex-session-insight-gate.py` can report skipped,
-failed, or timed-out extraction as a successful launcher step.
+Why: token binding and pane geometry are covered by tests, but the live
+terminal-to-Falkon focus path still needs a repeated switch test with a real
+mapped Qt surface and captured evidence.
 
-Likely phase: next hardening pass after the six-subagent EngineOS command
-surface batch lands; keep global skill availability as the separate after-pass.
+Likely phase: current shell PoC, after screen capture or another accepted visual
+evidence path exists.
+
+### Boot Validation Cleanup
+
+Why: the active AMD shell reports radeonsi hardware rendering, while the broad
+boot gate still fails on missing recovery assets and an unrelated llvmpipe
+device heuristic.
+
+Likely phase: current bare-metal runtime gate; make the validator identify the
+active shell renderer and require the tracked recovery units/files.
 
 ### Package Signing
 

@@ -41,7 +41,7 @@ shell/                wlroots shell work
 engines/              QuakeSpasm and future engine ports
 tools/engineos/       eos-* command wrappers and command entrypoints
 tools/scripts/        implementation helpers for the CLI
-tools/post-install-payload/ first-deploy guest setup scripts and assets
+tools/post-install-payload/ managed live-user bootstrap scripts and assets
 docs/                 architecture, plans, and workflow docs
 .agents/index.toml    canonical agent role/path index
 .agents/roles/        role-specific AGENTS.md boundaries

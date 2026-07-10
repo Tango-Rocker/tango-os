@@ -1,5 +1,8 @@
 # EngineRuntime Archiso Profile
 
+> **Legacy image profile:** Retained for reference only. It is not a routine
+> build, deployment, or acceptance path.
+
 This profile is the runtime appliance image. The Arch builder VM can build it with `mkarchiso`; runtime autostart and interactive Quake input/audio still need live Runtime or bare-metal proof.
 
 Hyper-V basic console testing is useful for boot, recovery, service logs, input visibility, and Quake smoke checks. It is not a real audio proof path for Linux guests in this setup: the guest sees no ALSA sound card and PipeWire/Pulse falls back to Dummy Output. Treat audio as proven only on bare metal or another VM/RDP path that exposes an audio device.
