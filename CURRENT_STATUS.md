@@ -111,7 +111,10 @@ These are historical proof artifacts only; they are not the active work path:
   command path, entity-browser placement, and OS-level Wayland drag-and-drop
   are proven.
 - Screenshot-based MC Quick View acceptance capture. The real live renderer,
-  output selection, pane geometry, and show/hide IPC path are proven.
+  output selection, pane geometry, and show/hide IPC path are proven. The
+  2026-07-10 `eos-proof mc-preview --visual` attempt failed closed because the
+  compositor does not expose the screen-capture protocol required by `grim`;
+  metadata-only output was not accepted as visual proof.
 - Persistent Quake asset handling outside generated ISO images.
 - Real Secure Boot and installer work only if explicitly re-enabled.
 
