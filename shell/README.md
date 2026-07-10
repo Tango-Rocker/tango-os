@@ -40,9 +40,12 @@ authoritative in the server. Pointer clicks transfer focused size ownership;
 output loss promotes a surviving view. Styled status lines, messages, prompts,
 and menus are rendered by tmux, invalidated without polling, retained by the
 mux client, and composited over the pane grid at tmux's coordinates. Their
-observed mode and geometry are recorded in `shell-state.json`. Mouse/status
-interaction, full copy-mode interaction, glyph-atlas caching, and live
-hardware acceptance remain before native mode becomes the default.
+observed mode and geometry are recorded in `shell-state.json`. Pointer motion,
+buttons, modifiers, and vertical scroll are mapped to focused-view terminal
+cells and sent to tmux for authoritative hit-testing; wheel input uses tmux's
+copy-mode bindings. Drag selection, border/status/menu click proofs,
+glyph-atlas caching, and live hardware acceptance remain before native mode
+becomes the default.
 
 ## Surface Model
 

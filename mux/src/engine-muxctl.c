@@ -702,6 +702,61 @@ static int request_focus_proof(int fd, uint32_t pane_id) {
 	return 0;
 }
 
+static int request_mouse(int fd, uint32_t pane_id, const char *event,
+		const char *button, uint32_t x, uint32_t y, uint32_t modifiers) {
+	uint64_t revision = 0;
+	char *session_id = NULL;
+	if (focus_proof_session(fd, pane_id, &revision, &session_id) != 0)
+		return -1;
+	if (focus_proof_register_view(fd, 1, session_id, 80, 24, true,
+			400, &revision) != 0) {
+		free(session_id);
+		return -1;
+	}
+	free(session_id);
+	struct json_object *request = json_object_new_object();
+	if (request == NULL) return -1;
+	json_object_object_add(request, "schema",
+		json_object_new_string("engine-mux/mouse-v1"));
+	json_object_object_add(request, "view_id", json_object_new_int(1));
+	json_object_object_add(request, "x", json_object_new_int64(x));
+	json_object_object_add(request, "y", json_object_new_int64(y));
+	json_object_object_add(request, "event", json_object_new_string(event));
+	json_object_object_add(request, "button", json_object_new_string(button));
+	json_object_object_add(request, "modifiers",
+		json_object_new_int64(modifiers));
+	const char *payload = json_object_to_json_string_ext(request,
+		JSON_C_TO_STRING_PLAIN);
+	uint16_t response_type = 0;
+	char *response = NULL;
+	int result = exchange(fd, ENGINE_MUX_MOUSE_REQUEST, 401, revision, payload,
+		&response_type, &revision, &response);
+	json_object_put(request);
+	if (result != 0 || response_type != ENGINE_MUX_MOUSE_ACK) {
+		free(response);
+		errno = EPROTO;
+		return -1;
+	}
+	struct json_object *ack = json_tokener_parse(response);
+	free(response);
+	if (ack == NULL) { errno = EPROTO; return -1; }
+	usleep(20000);
+	response = NULL;
+	if (exchange(fd, ENGINE_MUX_SNAPSHOT_REQUEST, 402, revision, "{}",
+			&response_type, &revision, &response) != 0 ||
+			response_type != ENGINE_MUX_SNAPSHOT) {
+		json_object_put(ack);
+		free(response);
+		errno = EPROTO;
+		return -1;
+	}
+	free(response);
+	printf("%s\n", json_object_to_json_string_ext(ack,
+		JSON_C_TO_STRING_PRETTY));
+	json_object_put(ack);
+	return 0;
+}
+
 static int request_ui(int fd, uint32_t pane_id, char **keys,
 		size_t key_count) {
 	uint64_t revision = 0;
@@ -776,7 +831,7 @@ static int request_ui(int fd, uint32_t pane_id, char **keys,
 }
 
 static void usage(FILE *stream, const char *program) {
-	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT|input PANE_ID BYTES|keys PANE_ID KEY...|focus-proof PANE_ID|ui PANE_ID [KEY...]\n", program);
+	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT|input PANE_ID BYTES|keys PANE_ID KEY...|focus-proof PANE_ID|ui PANE_ID [KEY...]|mouse PANE_ID EVENT BUTTON X Y MODIFIERS\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -808,6 +863,7 @@ int main(int argc, char **argv) {
 	bool is_keys = strcmp(command, "keys") == 0;
 	bool is_focus_proof = strcmp(command, "focus-proof") == 0;
 	bool is_ui = strcmp(command, "ui") == 0;
+	bool is_mouse = strcmp(command, "mouse") == 0;
 	if ((is_grid && optind + 2 != argc) ||
 			(is_damage && optind + 3 != argc) ||
 			(is_stale_grid && optind + 2 != argc) ||
@@ -816,7 +872,8 @@ int main(int argc, char **argv) {
 			(is_keys && optind + 3 > argc) ||
 			(is_focus_proof && optind + 2 != argc) ||
 			(is_ui && optind + 2 > argc) ||
-			(!is_grid && !is_damage && !is_stale_grid && !is_scrollback && !is_input && !is_keys && !is_focus_proof && !is_ui &&
+			(is_mouse && optind + 7 != argc) ||
+			(!is_grid && !is_damage && !is_stale_grid && !is_scrollback && !is_input && !is_keys && !is_focus_proof && !is_ui && !is_mouse &&
 			 optind + 1 != argc)) {
 		usage(stderr, argv[0]);
 		return 2;
@@ -835,7 +892,7 @@ int main(int argc, char **argv) {
 		free(owned_socket);
 		return 1;
 	}
-	if (is_grid || is_damage || is_stale_grid || is_scrollback || is_input || is_keys || is_focus_proof || is_ui) {
+	if (is_grid || is_damage || is_stale_grid || is_scrollback || is_input || is_keys || is_focus_proof || is_ui || is_mouse) {
 		const char *pane_text = argv[optind + 1];
 		if (*pane_text == '%') pane_text++;
 		char *end = NULL;
@@ -854,7 +911,21 @@ int main(int argc, char **argv) {
 			return 2;
 		}
 		int grid_result;
-		if (is_ui) {
+		if (is_mouse) {
+			char *x_end = NULL, *y_end = NULL, *modifiers_end = NULL;
+			unsigned long x = strtoul(argv[optind + 4], &x_end, 10);
+			unsigned long y = strtoul(argv[optind + 5], &y_end, 10);
+			unsigned long modifiers = strtoul(argv[optind + 6],
+				&modifiers_end, 10);
+			if (*x_end != '\0' || *y_end != '\0' ||
+					*modifiers_end != '\0' || x > UINT32_MAX ||
+					y > UINT32_MAX || modifiers > 7) {
+				close(fd); free(owned_socket); return 2;
+			}
+			grid_result = request_mouse(fd, (uint32_t)pane_id,
+				argv[optind + 2], argv[optind + 3], (uint32_t)x,
+				(uint32_t)y, (uint32_t)modifiers);
+		} else if (is_ui) {
 			grid_result = request_ui(fd, (uint32_t)pane_id,
 				&argv[optind + 2], (size_t)(argc - optind - 2));
 		} else if (is_focus_proof) {

@@ -73,6 +73,10 @@ bool engineos_mux_client_focus_view(struct engineos_mux_client *client,
 bool engineos_mux_client_send_key(struct engineos_mux_client *client,
 	uint32_t view_id, const char *key_name, bool *grid_changed,
 	char *error, size_t error_size);
+bool engineos_mux_client_send_mouse(struct engineos_mux_client *client,
+	uint32_t view_id, uint32_t x, uint32_t y, const char *event,
+	const char *button, uint32_t modifiers, bool *grid_changed,
+	char *error, size_t error_size);
 bool engineos_mux_client_request_ui(struct engineos_mux_client *client,
 	uint32_t view_id, bool *grid_changed, char *error, size_t error_size);
 void engineos_mux_client_destroy(struct engineos_mux_client *client);

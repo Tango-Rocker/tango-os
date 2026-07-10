@@ -352,6 +352,116 @@ engine_mux_key_dispatch(struct engine_mux_client *client,
 }
 
 static int
+engine_mux_mouse_button(const char *name, u_int *button)
+{
+	if (strcmp(name, "none") == 0)
+		*button = 3;
+	else if (strcmp(name, "left") == 0)
+		*button = MOUSE_BUTTON_1;
+	else if (strcmp(name, "middle") == 0)
+		*button = MOUSE_BUTTON_2;
+	else if (strcmp(name, "right") == 0)
+		*button = MOUSE_BUTTON_3;
+	else if (strcmp(name, "wheel-up") == 0)
+		*button = MOUSE_WHEEL_UP;
+	else if (strcmp(name, "wheel-down") == 0)
+		*button = MOUSE_WHEEL_DOWN;
+	else
+		return (-1);
+	return (0);
+}
+
+static int
+engine_mux_mouse_dispatch(struct engine_mux_client *client,
+    struct json_object *root, char **cause)
+{
+	struct engine_mux_view *view;
+	struct client *tmux_client;
+	struct key_event *event;
+	const char *schema, *type, *button_name;
+	u_int view_id, x, y, button, modifiers, encoded_button;
+
+	schema = engine_mux_json_string_value(root, "schema", 64);
+	type = engine_mux_json_string_value(root, "event", 16);
+	button_name = engine_mux_json_string_value(root, "button", 16);
+	if (schema == NULL || strcmp(schema, "engine-mux/mouse-v1") != 0 ||
+	    type == NULL || button_name == NULL ||
+	    engine_mux_json_u32(root, "view_id", 1, UINT32_MAX, &view_id) != 0 ||
+	    engine_mux_json_u32(root, "x", 0, WINDOW_MAXIMUM, &x) != 0 ||
+	    engine_mux_json_u32(root, "y", 0, WINDOW_MAXIMUM, &y) != 0 ||
+	    engine_mux_json_u32(root, "modifiers", 0, 7, &modifiers) != 0 ||
+	    engine_mux_mouse_button(button_name, &button) != 0) {
+		*cause = xstrdup("graphical mouse request is invalid");
+		return (-1);
+	}
+	view = engine_mux_view_find(client, view_id);
+	if (view == NULL || (tmux_client = view->tmux_client) == NULL ||
+	    tmux_client->session == NULL || (tmux_client->flags & CLIENT_DEAD) ||
+	    (~tmux_client->flags & CLIENT_FOCUSED) ||
+	    (tmux_client->flags & CLIENT_IGNORESIZE) ||
+	    x >= tmux_client->tty.sx || y >= tmux_client->tty.sy) {
+		*cause = xstrdup("graphical mouse target is not an attached client cell");
+		return (-1);
+	}
+	encoded_button = button;
+	tmux_client->tty.oox = 0;
+	tmux_client->tty.ooy = 0;
+	tmux_client->tty.osx = tmux_client->session->curw->window->sx;
+	tmux_client->tty.osy = tmux_client->session->curw->window->sy;
+	if (modifiers & 1)
+		encoded_button |= MOUSE_MASK_SHIFT;
+	if (modifiers & 2)
+		encoded_button |= MOUSE_MASK_META;
+	if (modifiers & 4)
+		encoded_button |= MOUSE_MASK_CTRL;
+
+	event = xcalloc(1, sizeof *event);
+	event->key = KEYC_MOUSE;
+	event->m.lx = tmux_client->tty.mouse_last_x;
+	event->m.ly = tmux_client->tty.mouse_last_y;
+	event->m.lb = tmux_client->tty.mouse_last_b;
+	event->m.x = x;
+	event->m.y = y;
+	event->m.sgr_type = 'M';
+	event->m.sgr_b = encoded_button;
+	event->m.b = encoded_button;
+	if (strcmp(type, "motion") == 0) {
+		event->m.sgr_b |= MOUSE_MASK_DRAG;
+		event->m.b = event->m.sgr_b;
+	} else if (strcmp(type, "release") == 0) {
+		if (button == 3 || MOUSE_WHEEL(button)) {
+			free(event);
+			*cause = xstrdup("graphical mouse release button is invalid");
+			return (-1);
+		}
+		event->m.sgr_type = 'm';
+		event->m.b = 3;
+	} else if (strcmp(type, "press") == 0) {
+		if (button == 3 || MOUSE_WHEEL(button)) {
+			free(event);
+			*cause = xstrdup("graphical mouse press button is invalid");
+			return (-1);
+		}
+	} else if (strcmp(type, "wheel") == 0) {
+		if (!MOUSE_WHEEL(button)) {
+			free(event);
+			*cause = xstrdup("graphical mouse wheel button is invalid");
+			return (-1);
+		}
+	} else {
+		free(event);
+		*cause = xstrdup("graphical mouse event type is invalid");
+		return (-1);
+	}
+	tmux_client->tty.mouse_last_x = x;
+	tmux_client->tty.mouse_last_y = y;
+	tmux_client->tty.mouse_last_b = event->m.b;
+	if (!server_client_handle_key(tmux_client, event))
+		free(event);
+	return (0);
+}
+
+static int
 engine_mux_status_style_equal(const struct grid_cell *left,
     const struct grid_cell *right)
 {
@@ -1212,7 +1322,7 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	size_t scrollback_size;
 	const char *hello =
 	    "{\"schema\":\"engine-mux/hello-v1\",\"server\":\"engine-mux\","
-	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\",\"ui-model-v1\",\"ui-invalidate-v1\"]}";
+	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\",\"ui-model-v1\",\"ui-invalidate-v1\",\"tmux-mouse-v1\"]}";
 	const char *subscribe_ack =
 	    "{\"schema\":\"engine-mux/grid-subscribe-v1\",\"subscribed\":true}";
 	const char *input_ack =
@@ -1225,6 +1335,8 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	    "{\"schema\":\"engine-mux/view-focus-v1\",\"focused\":true}";
 	const char *key_ack =
 	    "{\"schema\":\"engine-mux/key-v1\",\"queued\":true}";
+	const char *mouse_ack =
+	    "{\"schema\":\"engine-mux/mouse-v1\",\"queued\":true}";
 
 	packet_size = sizeof header + ENGINE_MUX_MAX_PAYLOAD;
 	packet = xmalloc(packet_size);
@@ -1286,13 +1398,16 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	}
 	if (type == ENGINE_MUX_VIEW_REGISTER_REQUEST ||
 	    type == ENGINE_MUX_KEY_REQUEST ||
+	    type == ENGINE_MUX_MOUSE_REQUEST ||
 	    type == ENGINE_MUX_VIEW_UNREGISTER_REQUEST ||
 	    type == ENGINE_MUX_VIEW_FOCUS_REQUEST) {
 		struct json_object *root;
 		struct engine_mux_view *view;
 		const char *schema;
+		const char *ack;
 		char *cause = NULL;
 		u_int view_id;
+		uint16_t ack_type;
 		int result = -1;
 
 		root = engine_mux_parse_json(packet + sizeof header, payload_size);
@@ -1307,6 +1422,8 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 			result = engine_mux_view_register(client, root, &cause);
 		} else if (type == ENGINE_MUX_KEY_REQUEST) {
 			result = engine_mux_key_dispatch(client, root, &cause);
+		} else if (type == ENGINE_MUX_MOUSE_REQUEST) {
+			result = engine_mux_mouse_dispatch(client, root, &cause);
 		} else if (type == ENGINE_MUX_VIEW_UNREGISTER_REQUEST) {
 			schema = engine_mux_json_string_value(root, "schema", 64);
 			if (schema != NULL && strcmp(schema,
@@ -1339,22 +1456,24 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 			return;
 		}
 		free(cause);
-		if (engine_mux_send_frame(client->fd,
-		    type == ENGINE_MUX_VIEW_REGISTER_REQUEST ?
-		    ENGINE_MUX_VIEW_REGISTER_ACK :
-		    (type == ENGINE_MUX_KEY_REQUEST ? ENGINE_MUX_KEY_ACK :
-		    (type == ENGINE_MUX_VIEW_UNREGISTER_REQUEST ?
-		    ENGINE_MUX_VIEW_UNREGISTER_ACK : ENGINE_MUX_VIEW_FOCUS_ACK)),
-		    request_id,
-		    engine_mux_revision,
-		    type == ENGINE_MUX_VIEW_REGISTER_REQUEST ? view_ack :
-		    (type == ENGINE_MUX_KEY_REQUEST ? key_ack :
-		    (type == ENGINE_MUX_VIEW_UNREGISTER_REQUEST ?
-		    view_unregister_ack : view_focus_ack)),
-		    strlen(type == ENGINE_MUX_VIEW_REGISTER_REQUEST ? view_ack :
-		    (type == ENGINE_MUX_KEY_REQUEST ? key_ack :
-		    (type == ENGINE_MUX_VIEW_UNREGISTER_REQUEST ?
-		    view_unregister_ack : view_focus_ack)))) != 0)
+		if (type == ENGINE_MUX_VIEW_REGISTER_REQUEST) {
+			ack_type = ENGINE_MUX_VIEW_REGISTER_ACK;
+			ack = view_ack;
+		} else if (type == ENGINE_MUX_KEY_REQUEST) {
+			ack_type = ENGINE_MUX_KEY_ACK;
+			ack = key_ack;
+		} else if (type == ENGINE_MUX_MOUSE_REQUEST) {
+			ack_type = ENGINE_MUX_MOUSE_ACK;
+			ack = mouse_ack;
+		} else if (type == ENGINE_MUX_VIEW_UNREGISTER_REQUEST) {
+			ack_type = ENGINE_MUX_VIEW_UNREGISTER_ACK;
+			ack = view_unregister_ack;
+		} else {
+			ack_type = ENGINE_MUX_VIEW_FOCUS_ACK;
+			ack = view_focus_ack;
+		}
+		if (engine_mux_send_frame(client->fd, ack_type, request_id,
+		    engine_mux_revision, ack, strlen(ack)) != 0)
 			engine_mux_client_free(client);
 		return;
 	}

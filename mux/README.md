@@ -12,7 +12,8 @@ session, window, and pane structures.
 header and a bounded payload. The implemented v1 messages are handshake,
 complete layout snapshot, full binary terminal-grid snapshot, sparse grid
 damage, scrollback pages, pane input, graphical-view registration, tmux key
-input, focused-view transfer, semantic UI models, and explicit errors. The UI
+input, graphical mouse input, focused-view transfer, semantic UI models, and
+explicit errors. The UI
 model exports styled status rows, prompts and their input/screen cursors,
 messages, and tmux-rendered menu rows with selection, keys, and command
 metadata. Stale
@@ -33,6 +34,12 @@ do not own a terminal tty and are excluded only from tty redraw/reset paths.
 Focused-view requests atomically promote one graphical size owner and demote
 all others. Disconnecting that owner promotes a surviving graphical client.
 
+Mouse frames carry cell coordinates, press/release/motion/wheel state, and
+Shift/Meta/Ctrl modifiers for the focused graphical view. The frontend creates
+the same SGR mouse state as a terminal client and passes it through tmux's
+normal client-key path. Tmux therefore remains authoritative for pane, border,
+status, menu, and copy-mode hit-testing and bindings.
+
 Run a local contract proof:
 
 ```bash
@@ -41,5 +48,5 @@ meson compile -C build/mux
 ./tools/engineos/eos-test mux
 ```
 
-The next migration proof is mouse/status interaction and full copy-mode
-interaction.
+The next migration proof is drag selection plus border, status, and menu click
+interaction through the shell.

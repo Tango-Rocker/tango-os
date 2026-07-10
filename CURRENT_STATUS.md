@@ -99,8 +99,8 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration stage 1 is installed side by side as
-  `engineos-mux 3.6b-12` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-27`, but native mode is not yet the live desktop
+  `engineos-mux 3.6b-13` with the decoder/renderer/control boundary in
+  `engineos-shell 0.1.0-28`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
@@ -152,9 +152,15 @@ These are historical proof artifacts only; they are not the active work path:
   grid at tmux's coordinates. The headless contract targets the shell's real
   graphical client, opens a menu and then a command prompt, and requires each
   transition and its geometry to appear as rendered UI in `shell-state.json`.
-  The same contract passes with installed `engineos-mux 3.6b-12` and
-  `engineos-shell 0.1.0-27`. Mouse/status and full copy-mode interaction,
-  glyph-atlas updates, and hardware-renderer acceptance remain.
+  Native pointer events now carry focused client-view cell coordinates,
+  buttons, wheel direction, and keyboard modifiers into tmux's normal SGR
+  mouse classifier. Tmux remains responsible for pane, border, status, menu,
+  and copy-mode hit-testing. The contract proves a real `MouseDown1Pane`
+  binding and wheel-triggered entry into copy mode, while the shell routes
+  pointer motion, buttons, and vertical scroll through that boundary. The same
+  contract passes against the exact `engineos-mux 3.6b-13` and
+  `engineos-shell 0.1.0-28` package binaries. Drag-selection, border/status/menu
+  click proofs, glyph-atlas updates, and hardware-renderer acceptance remain.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 

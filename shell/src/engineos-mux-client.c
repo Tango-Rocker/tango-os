@@ -1011,6 +1011,38 @@ bool engineos_mux_client_send_key(struct engineos_mux_client *client,
 	return result;
 }
 
+bool engineos_mux_client_send_mouse(struct engineos_mux_client *client,
+		uint32_t view_id, uint32_t x, uint32_t y, const char *event,
+		const char *button, uint32_t modifiers, bool *grid_changed,
+		char *error, size_t error_size) {
+	if (view_id == 0 || event == NULL || *event == '\0' ||
+			button == NULL || *button == '\0' || modifiers > 7) {
+		snprintf(error, error_size, "invalid graphical mouse request");
+		return false;
+	}
+	struct json_object *root = json_object_new_object();
+	if (root == NULL) {
+		snprintf(error, error_size, "out of memory");
+		return false;
+	}
+	json_object_object_add(root, "schema",
+		json_object_new_string("engine-mux/mouse-v1"));
+	json_object_object_add(root, "view_id", json_object_new_int64(view_id));
+	json_object_object_add(root, "x", json_object_new_int64(x));
+	json_object_object_add(root, "y", json_object_new_int64(y));
+	json_object_object_add(root, "event", json_object_new_string(event));
+	json_object_object_add(root, "button", json_object_new_string(button));
+	json_object_object_add(root, "modifiers",
+		json_object_new_int64(modifiers));
+	const char *payload = json_object_to_json_string_ext(root,
+		JSON_C_TO_STRING_PLAIN);
+	bool result = exchange_json_request(client, ENGINE_MUX_MOUSE_REQUEST,
+		ENGINE_MUX_MOUSE_ACK, payload, "engine-mux/mouse-v1", NULL,
+		grid_changed, error, error_size);
+	json_object_put(root);
+	return result;
+}
+
 bool engineos_mux_client_request_ui(struct engineos_mux_client *client,
 		uint32_t view_id, bool *grid_changed, char *error, size_t error_size) {
 	if (view_id == 0) {

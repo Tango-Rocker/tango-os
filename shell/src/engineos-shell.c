@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <linux/input-event-codes.h>
 #include <limits.h>
 #include <locale.h>
 #include <signal.h>
@@ -198,6 +199,11 @@ struct engineos_shell_server {
 	int mux_terminal_width;
 	int mux_terminal_height;
 	uint32_t mux_terminal_glyph_cells;
+	uint32_t mux_pointer_button;
+	uint32_t mux_pointer_x;
+	uint32_t mux_pointer_y;
+	uint32_t keyboard_modifiers;
+	bool mux_pointer_cell_valid;
 	struct wl_event_source *pane_binding_timer;
 	struct wl_event_source *mux_event_source;
 	struct wl_list outputs;
@@ -4665,6 +4671,8 @@ static void keyboard_handle_modifiers(struct wl_listener *listener, void *data) 
 	(void)data;
 	struct engineos_shell_keyboard *keyboard =
 		wl_container_of(listener, keyboard, modifiers);
+	keyboard->server->keyboard_modifiers =
+		wlr_keyboard_get_modifiers(keyboard->keyboard);
 	wlr_seat_set_keyboard(keyboard->server->seat, keyboard->keyboard);
 	wlr_seat_keyboard_notify_modifiers(keyboard->server->seat,
 		&keyboard->keyboard->modifiers);
@@ -4783,6 +4791,7 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
 	int nsyms = xkb_state_key_get_syms(keyboard->keyboard->xkb_state,
 		keycode, &syms);
 	uint32_t modifiers = wlr_keyboard_get_modifiers(keyboard->keyboard);
+	server->keyboard_modifiers = modifiers;
 	bool handled = false;
 
 	if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
@@ -5035,6 +5044,113 @@ static void end_interactive_move(struct engineos_shell_server *server,
 	write_shell_state(server, reason != NULL ? reason : "window-move-complete");
 }
 
+static const char *native_mux_button_name(uint32_t button) {
+	switch (button) {
+	case 0: return "none";
+	case BTN_LEFT: return "left";
+	case BTN_MIDDLE: return "middle";
+	case BTN_RIGHT: return "right";
+	default: return NULL;
+	}
+}
+
+static uint32_t native_mux_mouse_modifiers(
+		const struct engineos_shell_server *server) {
+	uint32_t result = 0;
+	if (server->keyboard_modifiers & WLR_MODIFIER_SHIFT) result |= 1;
+	if (server->keyboard_modifiers & WLR_MODIFIER_ALT) result |= 2;
+	if (server->keyboard_modifiers & WLR_MODIFIER_CTRL) result |= 4;
+	return result;
+}
+
+static bool native_mux_pointer_cell(struct engineos_shell_server *server,
+		uint32_t *view_id, uint32_t *cell_x, uint32_t *cell_y) {
+	if (server->mux_mode != ENGINEOS_MUX_NATIVE ||
+			!server->mux_client.ready ||
+			server->input_mode != ENGINEOS_INPUT_TERMINAL ||
+			server->mux_client.primary_view_id == 0) return false;
+	struct wlr_output *target = wlr_output_layout_output_at(
+		server->output_layout, server->cursor->x, server->cursor->y);
+	if (target == NULL) return false;
+	struct engineos_shell_output *output;
+	wl_list_for_each(output, &server->outputs, link) {
+		if (output->output != target || !output->mux_registered ||
+				output->mux_view_id != server->mux_client.primary_view_id) continue;
+		struct wlr_output_layout_output *layout_output =
+			wlr_output_layout_get(server->output_layout, target);
+		if (layout_output == NULL) return false;
+		uint32_t columns = server->mux_client.ui_columns;
+		uint32_t rows = server->mux_client.ui_rows;
+		if (columns < server->mux_client.grid_columns)
+			columns = server->mux_client.grid_columns;
+		if (rows < server->mux_client.grid_rows)
+			rows = server->mux_client.grid_rows;
+		if (columns == 0 || rows == 0 || server->mux_terminal_width <= 0 ||
+				server->mux_terminal_height <= 0) return false;
+		double local_x = server->cursor->x - layout_output->x;
+		double local_y = server->cursor->y - layout_output->y;
+		if (local_x < 0 || local_y < 0 ||
+				local_x >= server->mux_terminal_width ||
+				local_y >= server->mux_terminal_height) return false;
+		uint32_t x = (uint32_t)(local_x * columns /
+			(double)server->mux_terminal_width);
+		uint32_t y = (uint32_t)(local_y * rows /
+			(double)server->mux_terminal_height);
+		if (x >= columns || y >= rows) return false;
+		*view_id = output->mux_view_id;
+		*cell_x = x;
+		*cell_y = y;
+		return true;
+	}
+	return false;
+}
+
+static bool route_native_terminal_mouse_at(struct engineos_shell_server *server,
+		uint32_t view_id, uint32_t x, uint32_t y, const char *event,
+		const char *button, bool coalesce_motion) {
+	if (coalesce_motion && server->mux_pointer_cell_valid &&
+			server->mux_pointer_x == x && server->mux_pointer_y == y)
+		return true;
+	bool grid_changed = false;
+	char error[256] = {0};
+	if (!engineos_mux_client_send_mouse(&server->mux_client, view_id, x, y,
+			event, button, native_mux_mouse_modifiers(server),
+			&grid_changed, error, sizeof(error))) {
+		wlr_log(WLR_ERROR,
+			"native tmux mouse failed event=%s button=%s cell=%u,%u: %s",
+			event, button, x, y, error);
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+		return true;
+	}
+	server->mux_pointer_x = x;
+	server->mux_pointer_y = y;
+	server->mux_pointer_cell_valid = true;
+	bool ui_grid_changed = false;
+	if (!engineos_mux_client_request_ui(&server->mux_client, view_id,
+			&ui_grid_changed, error, sizeof(error))) {
+		wlr_log(WLR_ERROR, "native tmux mouse UI refresh failed: %s", error);
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+		return true;
+	}
+	if (!refresh_native_terminal_scene(server,
+			grid_changed || ui_grid_changed ?
+			"native-mouse-grid-and-ui-damage" : "native-mouse-ui-damage")) {
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+	}
+	return true;
+}
+
+static bool route_native_terminal_mouse(struct engineos_shell_server *server,
+		const char *event, const char *button, bool coalesce_motion) {
+	uint32_t view_id, x, y;
+	if (!native_mux_pointer_cell(server, &view_id, &x, &y)) return false;
+	return route_native_terminal_mouse_at(server, view_id, x, y, event,
+		button, coalesce_motion);
+}
+
 static void cursor_handle_motion(struct wl_listener *listener, void *data) {
 	struct engineos_shell_server *server =
 		wl_container_of(listener, server, cursor_motion);
@@ -5048,6 +5164,9 @@ static void cursor_handle_motion(struct wl_listener *listener, void *data) {
 		return;
 	}
 	cursor_log_event(server, "motion", event->pointer);
+	const char *button = native_mux_button_name(server->mux_pointer_button);
+	if (button != NULL && route_native_terminal_mouse(server, "motion", button,
+			server->mux_pointer_button == 0)) return;
 	if (cursor_update_pointer_focus(server, event->time_msec, "motion")) {
 		sync_pointer_constraint(server, "motion");
 		send_game_relative_motion(server, event->time_msec,
@@ -5069,6 +5188,9 @@ static void cursor_handle_motion_absolute(struct wl_listener *listener, void *da
 		return;
 	}
 	cursor_log_event(server, "motion-absolute", event->pointer);
+	const char *button = native_mux_button_name(server->mux_pointer_button);
+	if (button != NULL && route_native_terminal_mouse(server, "motion", button,
+			server->mux_pointer_button == 0)) return;
 	cursor_update_pointer_focus(server, event->time_msec, "motion-absolute");
 }
 
@@ -5100,6 +5222,7 @@ static bool focus_native_mux_output(struct engineos_shell_server *server,
 		wl_display_terminate(server->display);
 		return false;
 	}
+	server->mux_pointer_cell_valid = false;
 	wlr_log(WLR_INFO, "native mux output focused view=%u output=%s reason=%s",
 		output->mux_view_id,
 		output->output->name[0] != '\0' ? output->output->name : "unnamed",
@@ -5137,6 +5260,12 @@ static void cursor_handle_button(struct wl_listener *listener, void *data) {
 	if (event->state == WL_POINTER_BUTTON_STATE_PRESSED &&
 			!server->game_capture) {
 		focus_native_mux_output_at_cursor(server);
+		const char *button = native_mux_button_name(event->button);
+		if (button != NULL && route_native_terminal_mouse(server, "press",
+				button, false)) {
+			server->mux_pointer_button = event->button;
+			return;
+		}
 		struct wlr_surface *surface = NULL;
 		double sx = 0.0;
 		double sy = 0.0;
@@ -5148,6 +5277,24 @@ static void cursor_handle_button(struct wl_listener *listener, void *data) {
 			wlr_log(WLR_INFO, "pointer click-focus role=%s sx=%.1f sy=%.1f",
 				surface_role_name(view->role), sx, sy);
 		}
+	}
+	if (event->state == WL_POINTER_BUTTON_STATE_RELEASED &&
+			server->mux_pointer_button != 0) {
+		const char *button =
+			native_mux_button_name(server->mux_pointer_button);
+		bool routed = button != NULL &&
+			route_native_terminal_mouse(server, "release", button, false);
+		if (!routed && button != NULL && server->mux_pointer_cell_valid &&
+				server->mux_mode == ENGINEOS_MUX_NATIVE &&
+				server->mux_client.ready &&
+				server->input_mode == ENGINEOS_INPUT_TERMINAL &&
+				server->mux_client.primary_view_id != 0) {
+			routed = route_native_terminal_mouse_at(server,
+				server->mux_client.primary_view_id, server->mux_pointer_x,
+				server->mux_pointer_y, "release", button, false);
+		}
+		server->mux_pointer_button = 0;
+		if (routed) return;
 	}
 
 	if (cursor_update_pointer_focus(server, event->time_msec, "button")) {
@@ -5162,6 +5309,15 @@ static void cursor_handle_axis(struct wl_listener *listener, void *data) {
 	struct wlr_pointer_axis_event *event = data;
 
 	cursor_log_event(server, "axis", event->pointer);
+	const char *button = NULL;
+	if (event->orientation == WL_POINTER_AXIS_VERTICAL_SCROLL) {
+		if (event->delta < 0 || event->delta_discrete < 0)
+			button = "wheel-up";
+		else if (event->delta > 0 || event->delta_discrete > 0)
+			button = "wheel-down";
+	}
+	if (button != NULL && route_native_terminal_mouse(server, "wheel", button,
+			false)) return;
 	if (cursor_update_pointer_focus(server, event->time_msec, "axis")) {
 		wlr_seat_pointer_notify_axis(server->seat, event->time_msec,
 			event->orientation, event->delta, event->delta_discrete,

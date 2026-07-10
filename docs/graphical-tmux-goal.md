@@ -33,10 +33,13 @@ styled status rows, messages, command prompts with both input and screen cursor
 positions, and already-rendered menu rows plus item/key/command metadata.
 The shell retains and composites those rows over the pane grid and consumes
 event-driven UI invalidations; headless contracts exercise live status, menu,
-and command-prompt transitions. Incremental GPU glyph-atlas updates,
-mouse/status and full copy-mode interaction, compound presentations, process
-scopes, leases, games/images, hardware acceptance, and legacy cutover remain
-open.
+and command-prompt transitions. Native mouse frames now enter tmux's normal
+SGR classifier with focused-view cell coordinates; the contract proves pane
+hit-testing and wheel-triggered copy mode, and the shell routes motion, buttons,
+modifiers, and vertical scroll through that boundary. Drag selection,
+border/status/menu click proofs, incremental GPU glyph-atlas updates, compound
+presentations, process scopes, leases, games/images, hardware acceptance, and
+legacy cutover remain open.
 
 ## Workstream 1: Integrate The Protocol Into Engine Mux
 

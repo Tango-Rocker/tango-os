@@ -161,6 +161,7 @@ run_mux() {
 	local grid_revision damage_revision
 	local history_rows history_start
 	local key_proof=""
+	local mouse_proof=""
 	local restore_proof="" shell_pane_id=""
 	local shell_pid="" overlay_pid="" prompt_pid="" shell_client_name=""
 	local initial_native_revision updated_native_revision stable_revision=""
@@ -233,7 +234,8 @@ run_mux() {
 		(.capabilities | index("tmux-key-v1")) and
 		(.capabilities | index("view-focus-v1")) and
 		(.capabilities | index("ui-model-v1")) and
-		(.capabilities | index("ui-invalidate-v1"))' \
+		(.capabilities | index("ui-invalidate-v1")) and
+		(.capabilities | index("tmux-mouse-v1"))' \
 		"$fixture/hello.json" >/dev/null ||
 		die "mux protocol was not served by engine-mux"
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot >"$fixture/first.json"
@@ -261,6 +263,39 @@ run_mux() {
 	done
 	[[ "$key_proof" == accepted ]] ||
 		die "graphical tmux client did not honor the configured prefix key table"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		set-option -g mouse on
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		bind-key -n MouseDown1Pane set-option -g @engineos-mouse-proof accepted
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" mouse "$pane_id" \
+		press left 2 2 0 >"$fixture/mouse.json"
+	jq -e '.schema == "engine-mux/mouse-v1" and .queued == true' \
+		"$fixture/mouse.json" >/dev/null ||
+		die "graphical mouse event was not explicitly acknowledged"
+	for _ in {1..100}; do
+		mouse_proof="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+			"$mux_bin" show-option -gv @engineos-mouse-proof 2>/dev/null || true)"
+		[[ "$mouse_proof" == accepted ]] && break
+		sleep 0.02
+	done
+	[[ "$mouse_proof" == accepted ]] ||
+		die "graphical mouse did not use tmux pane hit-testing and bindings"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" mouse "$pane_id" \
+		wheel wheel-up 2 2 0 >/dev/null
+	for _ in {1..100}; do
+		XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot \
+			>"$fixture/mouse-copy-mode.json"
+		jq -e --arg pane "$pane_id" \
+			'.panes[] | select(.pane_id == $pane) | .copy_mode == true' \
+			"$fixture/mouse-copy-mode.json" >/dev/null && break
+		sleep 0.02
+	done
+	jq -e --arg pane "$pane_id" \
+		'.panes[] | select(.pane_id == $pane) | .copy_mode == true' \
+		"$fixture/mouse-copy-mode.json" >/dev/null ||
+		die "graphical mouse wheel did not enter tmux copy mode"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -X -t "$pane_id" cancel
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		set-option -g prefix C-b
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
