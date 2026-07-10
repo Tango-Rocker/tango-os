@@ -863,9 +863,13 @@ run_image_preview() {
   fi
   [[ -x "$preview_bin" ]] || die "engine-image-preview helper is not executable"
   if [[ -z "$shell_bin" ]]; then
-    meson setup "$tmp_dir/shell-build" "$ROOT/shell" >/dev/null
-    meson compile -C "$tmp_dir/shell-build" >/dev/null
-    shell_bin="$tmp_dir/shell-build/engineos-shell"
+    if [[ -d "$ROOT/shell" ]]; then
+      meson setup "$tmp_dir/shell-build" "$ROOT/shell" >/dev/null
+      meson compile -C "$tmp_dir/shell-build" >/dev/null
+      shell_bin="$tmp_dir/shell-build/engineos-shell"
+    else
+      shell_bin="${ENGINEOS_INSTALLED_SHELL_BIN:-/usr/bin/engineos-shell}"
+    fi
   fi
   [[ -x "$shell_bin" ]] || die "current engineos-shell test binary is not executable"
 
