@@ -32,6 +32,7 @@ Usage: test_runner.sh [smoke|all]
 	   test_runner.sh dev-workflow
        test_runner.sh compositor --headless
        test_runner.sh shell-actions
+	   test_runner.sh mux
 	   test_runner.sh game-workflow
        test_runner.sh image-preview
        test_runner.sh app
@@ -89,6 +90,7 @@ run_all() {
 	run_all_step dev-workflow
   run_all_step compositor --headless
   run_all_step shell-actions
+	run_all_step mux
 	run_all_step game-workflow
   run_all_step image-preview
   run_all_step app
@@ -146,6 +148,96 @@ run_compositor() {
       die "compositor test expects --headless or --nested"
       ;;
   esac
+}
+
+run_mux() {
+	local build_dir="$ROOT/build/mux"
+	local shell_build_dir="$ROOT/build/shell"
+	local fixture="${TMPDIR:-/tmp}/engineos-mux-test-$$"
+	local socket_name="engine-mux-test-$$"
+	local daemon_pid=""
+	local first_revision second_revision pane_count
+
+	tmux -V | grep -Fx 'tmux 3.6b' >/dev/null ||
+		die "mux contract requires the pinned tmux 3.6b baseline"
+	rm -rf "$fixture"
+	mkdir -p "$fixture"
+	chmod 0700 "$fixture"
+	cleanup_mux_test() {
+		if [[ -n "$daemon_pid" ]]; then
+			kill "$daemon_pid" >/dev/null 2>&1 || true
+			wait "$daemon_pid" 2>/dev/null || true
+		fi
+		tmux -L "$socket_name" kill-server >/dev/null 2>&1 || true
+		rm -rf "$fixture"
+	}
+	trap cleanup_mux_test RETURN
+
+	if [[ -f "$build_dir/build.ninja" ]]; then
+		meson setup "$build_dir" "$ROOT/mux" --reconfigure >/dev/null
+	else
+		meson setup "$build_dir" "$ROOT/mux" >/dev/null
+	fi
+	meson compile -C "$build_dir" >/dev/null
+	if [[ -f "$shell_build_dir/build.ninja" ]]; then
+		meson setup "$shell_build_dir" "$ROOT/shell" --reconfigure >/dev/null
+	else
+		meson setup "$shell_build_dir" "$ROOT/shell" >/dev/null
+	fi
+	meson compile -C "$shell_build_dir" >/dev/null
+
+	tmux -L "$socket_name" -f /dev/null new-session -d -s contract
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxd" \
+		--tmux tmux --tmux-socket "$socket_name" >"$fixture/daemon.log" 2>&1 &
+	daemon_pid=$!
+	for _ in {1..100}; do
+		[[ -S "$fixture/engineos/mux.sock" ]] && break
+		sleep 0.02
+	done
+	[[ -S "$fixture/engineos/mux.sock" ]] ||
+		die "engine-muxd did not create its frontend socket"
+
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" hello >"$fixture/hello.json"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot >"$fixture/first.json"
+	first_revision="$(jq -er '.revision' "$fixture/first.json")"
+	[[ "$first_revision" == 1 ]] || die "initial mux revision was not 1"
+	[[ "$(jq -er '.panes | length' "$fixture/first.json")" == 1 ]] ||
+		die "initial mux snapshot did not contain one pane"
+
+	tmux -L "$socket_name" split-window -d -t contract:0
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot >"$fixture/second.json"
+	second_revision="$(jq -er '.revision' "$fixture/second.json")"
+	pane_count="$(jq -er '.panes | length' "$fixture/second.json")"
+	[[ "$second_revision" -gt "$first_revision" && "$pane_count" == 2 ]] ||
+		die "mux snapshot was not atomically revised after split"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" stale-command >"$fixture/stale.json"
+	jq -e '.code == "stale-revision"' "$fixture/stale.json" >/dev/null ||
+		die "mux server did not reject a stale revision"
+
+	local shell_status=0
+	if ENGINEOS_MUX_SOCKET="$fixture/missing.sock" \
+			"$shell_build_dir/engineos-shell" --headless --smoke --mux native \
+			>"$fixture/shell-fail.log" 2>&1; then
+		die "engineos-shell native mux mode silently fell back without a server"
+	else
+		shell_status=$?
+	fi
+	[[ "$shell_status" == 1 ]] ||
+		die "engineos-shell native mux failure exited abnormally: $shell_status"
+	grep -F 'native mux handshake failed' "$fixture/shell-fail.log" >/dev/null ||
+		die "engineos-shell native mux failure was not explicit"
+
+	XDG_RUNTIME_DIR="$fixture" ENGINEOS_STATE_DIR="$fixture/engineos" \
+		ENGINEOS_MUX_SOCKET="$fixture/engineos/mux.sock" \
+		WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 WLR_RENDERER=pixman \
+		"$shell_build_dir/engineos-shell" --headless --smoke-ms 100 \
+		--bootstrap none --mux native >"$fixture/shell-native.log" 2>&1 ||
+		die "engineos-shell did not start after a valid native mux snapshot"
+	jq -e '.mux.mode == "native" and .mux.connected == true and .mux.revision >= 1' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "shell state did not expose native mux revision evidence"
+
+	printf 'engine-mux protocol contract test passed\n'
 }
 
 run_dev_workflow() {
@@ -4489,6 +4581,9 @@ case "$SCOPE" in
   shell-actions)
     run_shell_actions
     ;;
+	mux)
+		run_mux
+		;;
 	game-workflow)
 		run_game_workflow
     ;;

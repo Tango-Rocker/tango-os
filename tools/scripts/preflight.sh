@@ -272,6 +272,15 @@ check_package_inputs() {
     engineos-tmux-plugins)
       require_file "packages/engineos-tmux-plugins/PKGBUILD"
       ;;
+	engineos-mux)
+		require_file "mux/meson.build"
+		require_file "mux/include/engine-mux-protocol.h"
+		require_file "mux/src/engine-muxd.c"
+		require_file "mux/src/engine-muxctl.c"
+		require_file "packages/engineos-mux/PKGBUILD"
+		require_file "packages/engineos-mux/0001-engine-mux-default-socket.patch"
+		require_file "packages/engineos-mux/files/usr/lib/systemd/user/engine-muxd.service"
+		;;
     engineos-cube)
       require_file "apps/cube/README.md"
       require_file "apps/cube/meson.build"
@@ -281,6 +290,7 @@ check_package_inputs() {
       require_file "shell/README.md"
       require_file "shell/meson.build"
       require_file "shell/src/engineos-shell.c"
+	  require_file "shell/src/engineos-mux-client.c"
       ;;
 	engineos-dgen)
 		require_file "packages/engineos-dgen/PKGBUILD"

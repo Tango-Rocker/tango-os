@@ -63,6 +63,14 @@ reserve `engineos-side` for the secondary terminal.
 MC image previews use the same pane and client-tty identity. Ambiguous or stale
 ownership is an error rather than a guessed output.
 
+### Native graphical mux migration
+
+The bridge is the deployed path while the native tmux frontend is developed
+side by side. [graphical-tmux.md](graphical-tmux.md) defines the compound
+console/presentation model and records the implemented protocol foundation.
+Selecting `engineos-shell --mux native` is explicit and fail-closed; it does
+not make the current bridge evidence count as native mux acceptance.
+
 ### Quake Development
 
 Quake uses the `eos-game quake` command surface and two per-user services:

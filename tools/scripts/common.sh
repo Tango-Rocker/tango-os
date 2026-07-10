@@ -136,6 +136,7 @@ engineos_packages() {
     engineos-dgen \
     engineos-oh-my-zsh \
     engineos-tmux-plugins \
+	engineos-mux \
     engineos-cube \
     engineos-shell \
     engineos-ericw-tools \

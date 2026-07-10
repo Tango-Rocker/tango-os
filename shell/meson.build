@@ -26,6 +26,7 @@ xkbcommon_dep = dependency('xkbcommon', required: true)
 libpng_dep = dependency('libpng', required: true)
 libjpeg_dep = dependency('libjpeg', required: true)
 json_c_dep = dependency('json-c', required: true)
+mux_inc = include_directories('../mux/include')
 
 wayland_scanner = find_program(
   wayland_scanner_dep.get_variable(pkgconfig: 'wayland_scanner'),
@@ -51,10 +52,12 @@ executable(
   [
     'src/engineos-shell.c',
     'src/engineos-image.c',
+    'src/engineos-mux-client.c',
     xdg_shell_protocol_header,
     pointer_constraints_protocol_header,
   ],
   c_args: ['-DWLR_USE_UNSTABLE'],
+  include_directories: [mux_inc],
   dependencies: [
     wlroots_dep,
     wayland_server_dep,

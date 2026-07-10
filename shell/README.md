@@ -21,6 +21,13 @@ The live shell is managed by `engineos-dev-shell.service`. Use
 `eos-runtime shell refresh-user` after changing tmux/user helpers and
 `eos-runtime shell restart-live` for a verified PID-replacing restart.
 
+Native graphical mux migration is opt-in with `--mux native` or
+`ENGINEOS_MUX_MODE=native`. That mode must connect to
+`$XDG_RUNTIME_DIR/engineos/mux.sock` (override with `ENGINEOS_MUX_SOCKET`) and
+receive a valid versioned snapshot before compositor setup. The default remains
+`legacy` until the terminal-grid renderer reaches live acceptance. See
+[`docs/graphical-tmux.md`](../docs/graphical-tmux.md).
+
 ## Surface Model
 
 Toplevels are classified as `terminal`, `cube`, `engine`, or `unknown`.

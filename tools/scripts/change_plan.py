@@ -32,6 +32,7 @@ def package_for_path(path: str, known: set[str]) -> str | None:
         package = path.split("/", 2)[1]
         return package if package in known else None
     rules = (
+		(("mux/",), "engineos-mux"),
         (("shell/",), "engineos-shell"),
         (("engines/quakespasm/",), "engineos-quakespasm"),
         (("tools/level-agent/",), "engineos-level-agent"),
@@ -131,6 +132,7 @@ def tests_for(packages: set[str]) -> list[str]:
     mapping = {
         "engineos-tools": "agent",
         "engineos-shell": "shell-actions",
+		"engineos-mux": "mux",
         "engineos-config": "app",
         "engineos-level-agent": "level-agent",
         "engineos-quakespasm": "engine",

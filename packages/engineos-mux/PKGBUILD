@@ -1,0 +1,49 @@
+pkgname=engineos-mux
+pkgver=3.6b
+pkgrel=1
+pkgdesc="EngineOS tmux 3.6b graphical frontend protocol foundation"
+arch=('x86_64')
+url="https://example.invalid/engineos"
+license=('ISC' 'custom:EngineOS-TBD')
+depends=('libevent' 'ncurses' 'libutempter' 'systemd-libs' 'json-c')
+makedepends=('meson' 'ninja' 'pkgconf' 'gcc' 'systemd')
+provides=('engine-mux')
+source=(
+  'tmux-3.6b.tar.gz::https://github.com/tmux/tmux/releases/download/3.6b/tmux-3.6b.tar.gz'
+  '0001-engine-mux-default-socket.patch'
+)
+sha256sums=(
+  '390759d25fdba016887ec982b808927e637070fd7d03a8021f8ef3102b9ae3c7'
+  '377d8420eb6bf2103bfc429829d90ed542fd9e9202c6780d122cb5ce4665cb5f'
+)
+
+prepare() {
+  patch -d "$srcdir/tmux-3.6b" -Np1 -i "$startdir/0001-engine-mux-default-socket.patch"
+}
+
+build() {
+  local _engineos_root
+  _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
+
+	cd "$srcdir/tmux-3.6b"
+	./configure --prefix=/usr --enable-utempter --enable-systemd
+	make
+
+  meson setup "$srcdir/mux-build" "$_engineos_root/mux" \
+    --prefix=/usr \
+    --buildtype=plain
+  meson compile -C "$srcdir/mux-build"
+}
+
+package() {
+  local _engineos_root
+  _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
+
+	install -Dm755 "$srcdir/tmux-3.6b/tmux" "$pkgdir/usr/bin/engine-mux"
+	install -Dm644 "$srcdir/tmux-3.6b/tmux.1" "$pkgdir/usr/share/man/man1/engine-mux.1"
+	install -Dm644 "$srcdir/tmux-3.6b/COPYING" "$pkgdir/usr/share/licenses/$pkgname/COPYING.tmux"
+  DESTDIR="$pkgdir" meson install -C "$srcdir/mux-build"
+  install -Dm644 "$startdir/files/usr/lib/systemd/user/engine-muxd.service" \
+    "$pkgdir/usr/lib/systemd/user/engine-muxd.service"
+  install -Dm644 "$_engineos_root/LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

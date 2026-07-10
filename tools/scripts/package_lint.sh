@@ -245,6 +245,16 @@ lint_pkgbuild() {
         return
       fi
 		;;
+	engineos-mux)
+		if ! grep -q 'tmux-3.6b.tar.gz' "$pkg_dir/PKGBUILD"; then
+			fail "$pkg: tmux 3.6b fork source must be pinned"
+			return
+		fi
+		if ! grep -q 'meson install' "$pkg_dir/PKGBUILD"; then
+			fail "$pkg: Meson mux binaries are not installed"
+			return
+		fi
+		;;
     engineos-cube)
       if ! grep -q 'apps/cube' "$pkg_dir/PKGBUILD"; then
         fail "$pkg: cube app source tree is not packaged"

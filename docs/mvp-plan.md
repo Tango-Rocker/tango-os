@@ -74,6 +74,12 @@ Remaining evidence: a live Falkon focus-switch stress pass and real screenshot
 capture. Screenshot proof is currently blocked because the compositor does not
 expose the screen-capture protocol required by `grim`.
 
+The replacement path is staged in parallel: the versioned native mux protocol
+and fail-closed shell handshake are proven by `eos-test mux`. This does not yet
+satisfy the pane workflow acceptance above; terminal grid rendering and the
+tmux 3.6b fork are the next proof. See
+[graphical-tmux.md](graphical-tmux.md).
+
 ### 3. Quake Development Loop
 
 Goal: a developer can generate, edit, build, reload, and play a level without

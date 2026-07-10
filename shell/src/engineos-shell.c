@@ -48,6 +48,7 @@
 #include <xkbcommon/xkbcommon.h>
 
 #include "engineos-image.h"
+#include "engineos-mux-client.h"
 
 #ifndef XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION
 #define XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION 4
@@ -88,6 +89,11 @@ enum engineos_bootstrap_mode {
 	ENGINEOS_BOOTSTRAP_TERMINAL,
 	ENGINEOS_BOOTSTRAP_ENGINE,
 	ENGINEOS_BOOTSTRAP_LAUNCHPAD,
+};
+
+enum engineos_mux_mode {
+	ENGINEOS_MUX_LEGACY,
+	ENGINEOS_MUX_NATIVE,
 };
 
 struct engineos_view_geometry {
@@ -232,6 +238,8 @@ struct engineos_shell_server {
 	int preview_socket_fd;
 	struct engineos_preview_surface preview;
 	struct engineos_preview_surface wallpaper;
+	struct engineos_mux_client mux_client;
+	enum engineos_mux_mode mux_mode;
 	enum engineos_bootstrap_mode bootstrap_mode;
 	enum engineos_input_mode input_mode;
 	enum engineos_surface_role active_slot;
@@ -384,11 +392,27 @@ static const char *mode_to_string(enum engineos_shell_mode mode) {
 	}
 }
 
+static const char *mux_mode_name(enum engineos_mux_mode mode) {
+	return mode == ENGINEOS_MUX_NATIVE ? "native" : "legacy";
+}
+
+static bool parse_mux_mode(const char *value, enum engineos_mux_mode *mode) {
+	if (value == NULL || strcmp(value, "legacy") == 0) {
+		*mode = ENGINEOS_MUX_LEGACY;
+		return true;
+	}
+	if (strcmp(value, "native") == 0) {
+		*mode = ENGINEOS_MUX_NATIVE;
+		return true;
+	}
+	return false;
+}
+
 static void usage(FILE *out, const char *argv0) {
 	fprintf(out,
 		"Usage: %s [--headless|--nested|--tty] [--smoke] [--smoke-ms N] [--startup CMD]\n"
 		"          [--terminal CMD] [--terminal-secondary CMD] [--cube CMD] [--engine CMD]\n"
-		"          [--bootstrap MODE]\n"
+		"          [--bootstrap MODE] [--mux legacy|native]\n"
 		"\n"
 		"Start the EngineOS wlroots shell bootstrap.\n"
 		"\n"
@@ -404,6 +428,7 @@ static void usage(FILE *out, const char *argv0) {
 		"  --cube CMD      command launched by Alt+2\n"
 		"  --engine CMD    command launched by Alt+G\n"
 		"  --bootstrap MODE  start none, terminal, engine, or launchpad after shell startup\n"
+		"  --mux MODE      select legacy pane bridge or fail-closed native mux protocol\n"
 		"  --version       print version\n"
 		"  --help          print this help\n",
 		argv0);
@@ -3182,6 +3207,13 @@ static void write_shell_state(struct engineos_shell_server *server,
 	json_write_string(file, getenv("WAYLAND_DISPLAY"));
 	fprintf(file, ",\n  \"bootstrap\": ");
 	json_write_string(file, bootstrap_mode_name(server->bootstrap_mode));
+	fprintf(file, ",\n  \"mux\": {\"mode\": ");
+	json_write_string(file, mux_mode_name(server->mux_mode));
+	fprintf(file, ", \"connected\": %s, \"revision\": %llu, \"socket\": ",
+		server->mux_client.ready ? "true" : "false",
+		(unsigned long long)server->mux_client.revision);
+	json_write_string(file, server->mux_client.socket_path);
+	fprintf(file, "}");
 	fprintf(file, ",\n  \"active_slot\": ");
 	json_write_string(file, surface_role_name(server->active_slot));
 	fprintf(file, ",\n  \"pending_slot\": ");
@@ -5855,6 +5887,7 @@ static void destroy_server(struct engineos_shell_server *server) {
 		wl_display_destroy(server->display);
 		server->display = NULL;
 	}
+	engineos_mux_client_destroy(&server->mux_client);
 	free(server->state_file);
 	server->state_file = NULL;
 	free(server->state_dir);
@@ -5865,6 +5898,11 @@ int main(int argc, char **argv) {
 	enum engineos_shell_mode mode = ENGINEOS_SHELL_AUTO;
 	struct engineos_shell_server server = {0};
 	server.preview_socket_fd = -1;
+	server.mux_client.fd = -1;
+	if (!parse_mux_mode(getenv("ENGINEOS_MUX_MODE"), &server.mux_mode)) {
+		fprintf(stderr, "engineos-shell: ENGINEOS_MUX_MODE must be legacy or native\n");
+		return 2;
+	}
 	wl_list_init(&server.launches);
 	wl_list_init(&server.pane_bindings);
 	wl_list_init(&server.terminal_clients);
@@ -5881,6 +5919,7 @@ int main(int argc, char **argv) {
 		{"bootstrap", required_argument, NULL, 1002},
 		{"cube", required_argument, NULL, 1003},
 		{"terminal-secondary", required_argument, NULL, 1004},
+		{"mux", required_argument, NULL, 1005},
 		{"version", no_argument, NULL, 'v'},
 		{"help", no_argument, NULL, 'h'},
 		{0},
@@ -5930,6 +5969,12 @@ int main(int argc, char **argv) {
 		case 1003:
 			server.cube_cmd = optarg;
 			break;
+		case 1005:
+			if (!parse_mux_mode(optarg, &server.mux_mode)) {
+				fprintf(stderr, "engineos-shell: --mux must be legacy or native\n");
+				return 2;
+			}
+			break;
 		case 'v':
 			puts("engineos-shell 0.1.0");
 			return 0;
@@ -5957,6 +6002,27 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "engineos-shell: failed to allocate shell state paths\n");
 		destroy_server(&server);
 		return 1;
+	}
+	if (server.mux_mode == ENGINEOS_MUX_NATIVE) {
+		const char *configured_socket = getenv("ENGINEOS_MUX_SOCKET");
+		char *default_socket = NULL;
+		if (configured_socket == NULL || configured_socket[0] == '\0') {
+			default_socket = join_state_path(server.state_dir, "mux.sock");
+			configured_socket = default_socket;
+		}
+		char mux_error[256] = {0};
+		bool connected = configured_socket != NULL &&
+			engineos_mux_client_connect(&server.mux_client, configured_socket,
+				mux_error, sizeof(mux_error));
+		free(default_socket);
+		if (!connected) {
+			fprintf(stderr, "engineos-shell: native mux handshake failed: %s\n",
+				mux_error[0] != '\0' ? mux_error : "socket path allocation failed");
+			engineos_mux_client_destroy(&server.mux_client);
+			free(server.state_file);
+			free(server.state_dir);
+			return 1;
+		}
 	}
 
 	if (!setup_server(&server)) {
@@ -6020,6 +6086,11 @@ int main(int argc, char **argv) {
 		server.startup_cmd != NULL ? server.startup_cmd : "(none)");
 	wlr_log(WLR_INFO, "bootstrap mode=%s",
 		bootstrap_mode_name(server.bootstrap_mode));
+	wlr_log(WLR_INFO, "mux mode=%s connected=%s revision=%llu socket=%s",
+		mux_mode_name(server.mux_mode),
+		server.mux_client.ready ? "true" : "false",
+		(unsigned long long)server.mux_client.revision,
+		server.mux_client.socket_path != NULL ? server.mux_client.socket_path : "(none)");
 	wlr_log(WLR_INFO,
 		"client launch environment wayland_display=%s xdg_session_type=wayland display=unset sdl=wayland gdk=wayland qt=wayland",
 		socket);

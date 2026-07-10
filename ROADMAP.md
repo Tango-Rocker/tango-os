@@ -31,6 +31,7 @@ Current runtime proof command:
 
 ```bash
 ./tools/engineos/eos-ci local --test agent --install --clean-generated --no-validate-repo
+./tools/engineos/eos-test mux
 eos-app manifest validate
 eos-proof mc-preview
 eos-game quake proof

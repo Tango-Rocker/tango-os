@@ -82,6 +82,9 @@ infer_changed_packages() {
       shell/*)
         add_package engineos-shell
         ;;
+	  mux/*)
+		add_package engineos-mux
+		;;
       tools/game/*)
         add_package engineos-quakespasm
         ;;
