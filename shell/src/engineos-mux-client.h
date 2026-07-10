@@ -7,6 +7,20 @@
 
 #include "engine-mux-protocol.h"
 
+struct engineos_mux_ui_span {
+	uint32_t start;
+	uint32_t end;
+	uint16_t attributes;
+	int32_t foreground;
+	int32_t background;
+};
+
+struct engineos_mux_ui_row {
+	char *text;
+	struct engineos_mux_ui_span *spans;
+	size_t span_count;
+};
+
 struct engineos_mux_client {
 	int fd;
 	uint64_t revision;
@@ -22,6 +36,21 @@ struct engineos_mux_client {
 	uint32_t grid_nonblank_cells;
 	uint16_t grid_flags;
 	struct engine_mux_grid_cell *grid_cells;
+	uint32_t ui_columns;
+	uint32_t ui_rows;
+	int32_t ui_status_y;
+	struct engineos_mux_ui_row *ui_status_rows;
+	size_t ui_status_row_count;
+	uint32_t ui_menu_x;
+	uint32_t ui_menu_y;
+	uint32_t ui_menu_width;
+	uint32_t ui_menu_height;
+	struct engineos_mux_ui_row *ui_menu_rows;
+	size_t ui_menu_row_count;
+	char ui_mode[16];
+	bool ui_prompt_active;
+	bool ui_message_active;
+	bool ui_menu_active;
 	char *socket_path;
 	bool ready;
 };
@@ -44,6 +73,8 @@ bool engineos_mux_client_focus_view(struct engineos_mux_client *client,
 bool engineos_mux_client_send_key(struct engineos_mux_client *client,
 	uint32_t view_id, const char *key_name, bool *grid_changed,
 	char *error, size_t error_size);
+bool engineos_mux_client_request_ui(struct engineos_mux_client *client,
+	uint32_t view_id, bool *grid_changed, char *error, size_t error_size);
 void engineos_mux_client_destroy(struct engineos_mux_client *client);
 
 #endif

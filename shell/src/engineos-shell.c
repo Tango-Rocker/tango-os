@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <limits.h>
+#include <locale.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -3311,7 +3312,7 @@ static void write_shell_state(struct engineos_shell_server *server,
 	fprintf(file, ", \"session_id\": ");
 	json_write_string(file, server->mux_client.session_id);
 	fprintf(file,
-		", \"client_view_id\": %u, \"pane_id\": \"%%%u\", \"generation\": %u, \"grid\": {\"revision\": %llu, \"columns\": %u, \"rows\": %u, \"cursor_x\": %u, \"cursor_y\": %u, \"nonblank_cells\": %u, \"rendered\": %s, \"pixel_width\": %d, \"pixel_height\": %d, \"glyph_cells\": %u}}",
+		", \"client_view_id\": %u, \"pane_id\": \"%%%u\", \"generation\": %u, \"grid\": {\"revision\": %llu, \"columns\": %u, \"rows\": %u, \"cursor_x\": %u, \"cursor_y\": %u, \"nonblank_cells\": %u, \"rendered\": %s, \"pixel_width\": %d, \"pixel_height\": %d, \"glyph_cells\": %u}, \"ui\": {\"columns\": %u, \"rows\": %u, \"status_y\": %d, \"status_rows\": %zu, \"mode\": ",
 		server->mux_client.primary_view_id,
 		server->mux_client.pane_id, server->mux_client.pane_generation,
 		(unsigned long long)server->mux_client.grid_revision,
@@ -3320,7 +3321,20 @@ static void write_shell_state(struct engineos_shell_server *server,
 		server->mux_client.grid_nonblank_cells,
 		server->mux_terminal_scene != NULL ? "true" : "false",
 		server->mux_terminal_width, server->mux_terminal_height,
-		server->mux_terminal_glyph_cells);
+		server->mux_terminal_glyph_cells,
+		server->mux_client.ui_columns, server->mux_client.ui_rows,
+		server->mux_client.ui_status_y,
+		server->mux_client.ui_status_row_count);
+	json_write_string(file, server->mux_client.ui_mode);
+	fprintf(file,
+		", \"rendered\": %s, \"prompt_active\": %s, \"message_active\": %s, \"menu_active\": %s, \"menu_x\": %u, \"menu_y\": %u, \"menu_width\": %u, \"menu_height\": %u}}",
+		server->mux_terminal_scene != NULL &&
+			server->mux_client.ui_status_row_count != 0 ? "true" : "false",
+		server->mux_client.ui_prompt_active ? "true" : "false",
+		server->mux_client.ui_message_active ? "true" : "false",
+		server->mux_client.ui_menu_active ? "true" : "false",
+		server->mux_client.ui_menu_x, server->mux_client.ui_menu_y,
+		server->mux_client.ui_menu_width, server->mux_client.ui_menu_height);
 	fprintf(file, ",\n  \"active_slot\": ");
 	json_write_string(file, surface_role_name(server->active_slot));
 	fprintf(file, ",\n  \"pending_slot\": ");
@@ -4739,8 +4753,19 @@ static bool route_native_terminal_key(struct engineos_shell_server *server,
 		wl_display_terminate(server->display);
 		return true;
 	}
-	if (grid_changed && !refresh_native_terminal_scene(server,
-			"native-input-grid-damage")) {
+	bool ui_grid_changed = false;
+	if (!engineos_mux_client_request_ui(&server->mux_client,
+			server->mux_client.primary_view_id, &ui_grid_changed,
+			error, sizeof(error))) {
+		wlr_log(WLR_ERROR, "native tmux UI refresh failed key=%s: %s",
+			key_name, error);
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+		return true;
+	}
+	if (!refresh_native_terminal_scene(server,
+			grid_changed || ui_grid_changed ?
+			"native-input-grid-and-ui-damage" : "native-input-ui-damage")) {
 		server->mux_client.ready = false;
 		wl_display_terminate(server->display);
 	}
@@ -5060,8 +5085,17 @@ static bool focus_native_mux_output(struct engineos_shell_server *server,
 		wl_display_terminate(server->display);
 		return false;
 	}
-	if (grid_changed && !refresh_native_terminal_scene(server,
-			"native-output-focus-damage")) {
+	bool ui_grid_changed = false;
+	if (!engineos_mux_client_request_ui(&server->mux_client,
+			output->mux_view_id, &ui_grid_changed, error, sizeof(error))) {
+		wlr_log(WLR_ERROR, "native mux output UI refresh failed: %s", error);
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+		return false;
+	}
+	if (!refresh_native_terminal_scene(server,
+			grid_changed || ui_grid_changed ?
+			"native-output-focus-grid-and-ui" : "native-output-focus-ui")) {
 		server->mux_client.ready = false;
 		wl_display_terminate(server->display);
 		return false;
@@ -5263,10 +5297,21 @@ static void output_destroy(struct wl_listener *listener, void *data) {
 			wlr_log(WLR_ERROR, "native mux output unregister failed: %s", error);
 			server->mux_client.ready = false;
 			wl_display_terminate(server->display);
-		} else if (grid_changed && !refresh_native_terminal_scene(server,
-				"native-output-unregister-damage")) {
-			server->mux_client.ready = false;
-			wl_display_terminate(server->display);
+		} else if (!was_focused && server->mux_client.primary_view_id != 0) {
+			bool ui_grid_changed = false;
+			if (!engineos_mux_client_request_ui(&server->mux_client,
+					server->mux_client.primary_view_id, &ui_grid_changed,
+					error, sizeof(error)) ||
+					!refresh_native_terminal_scene(server,
+						grid_changed || ui_grid_changed ?
+						"native-output-unregister-grid-and-ui" :
+						"native-output-unregister-ui")) {
+				wlr_log(WLR_ERROR,
+					"native mux output unregister UI refresh failed: %s",
+					error[0] != '\0' ? error : "render failed");
+				server->mux_client.ready = false;
+				wl_display_terminate(server->display);
+			}
 		}
 		if (was_focused && server->mux_client.ready) {
 			struct engineos_shell_output *candidate;
@@ -5389,14 +5434,29 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 			return;
 		}
 		shell_output->mux_registered = true;
+		if (server->mux_client.primary_view_id != 0) {
+			bool ui_grid_changed = false;
+			if (!engineos_mux_client_request_ui(&server->mux_client,
+					server->mux_client.primary_view_id, &ui_grid_changed,
+					error, sizeof(error))) {
+				wlr_log(WLR_ERROR,
+					"native mux initial UI model failed: %s", error);
+				server->mux_client.ready = false;
+				wl_display_terminate(server->display);
+				return;
+			}
+			grid_changed = grid_changed || ui_grid_changed;
+		}
 		wlr_log(WLR_INFO,
 			"native mux view registered view=%u output=%s session=%s grid=%ux%u focused=%s",
 			shell_output->mux_view_id, output_name,
 			server->mux_client.session_id,
 			server->mux_client.grid_columns, server->mux_client.grid_rows,
 			focused ? "true" : "false");
-		if (grid_changed && !refresh_native_terminal_scene(server,
-				"native-output-register-damage")) {
+		if (server->mux_client.primary_view_id != 0 &&
+				!refresh_native_terminal_scene(server,
+				grid_changed ? "native-output-register-grid-and-ui" :
+				"native-output-register-ui")) {
 			server->mux_client.ready = false;
 			wl_display_terminate(server->display);
 			return;
@@ -6211,6 +6271,7 @@ static void destroy_server(struct engineos_shell_server *server) {
 }
 
 int main(int argc, char **argv) {
+	setlocale(LC_CTYPE, "");
 	enum engineos_shell_mode mode = ENGINEOS_SHELL_AUTO;
 	struct engineos_shell_server server = {0};
 	server.preview_socket_fd = -1;

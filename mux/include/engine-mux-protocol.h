@@ -34,6 +34,7 @@ enum engine_mux_message_type {
 	ENGINE_MUX_VIEW_UNREGISTER_ACK = 0x800b,
 	ENGINE_MUX_VIEW_FOCUS_ACK = 0x800c,
 	ENGINE_MUX_UI_MODEL = 0x800d,
+	ENGINE_MUX_UI_INVALIDATED = 0x800e,
 	ENGINE_MUX_ERROR = 0xffff,
 };
 
@@ -127,6 +128,10 @@ struct engine_mux_input_header {
 	uint32_t generation;
 	uint16_t byte_length;
 	uint16_t flags;
+} __attribute__((packed));
+
+struct engine_mux_ui_invalidation {
+	uint32_t view_id;
 } __attribute__((packed));
 
 /* All integer fields are encoded in network byte order. */

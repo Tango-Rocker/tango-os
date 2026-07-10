@@ -1,3 +1,5 @@
+#define _XOPEN_SOURCE 700
+
 #include "engineos-terminal-renderer.h"
 
 #include "engineos-image.h"
@@ -11,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 #define COLOUR_FLAG_256 0x01000000
 #define COLOUR_FLAG_RGB 0x02000000
@@ -86,6 +89,61 @@ static void blend_bitmap(uint8_t *pixels, int image_width, int image_height,
 	}
 }
 
+static const struct engineos_mux_ui_span *ui_span_at(
+		const struct engineos_mux_ui_row *row, uint32_t column) {
+	for (size_t index = 0; index < row->span_count; index++) {
+		if (column >= row->spans[index].start &&
+				column < row->spans[index].end) return &row->spans[index];
+	}
+	return NULL;
+}
+
+static void render_ui_rows(uint8_t *pixels, int image_width, int image_height,
+		FT_Face face, int cell_width, int cell_height, int baseline,
+		const struct engineos_mux_ui_row *rows, size_t row_count,
+		uint32_t columns, uint32_t origin_x, uint32_t origin_y,
+		uint32_t *glyph_cells) {
+	for (size_t row_index = 0; row_index < row_count; row_index++) {
+		const struct engineos_mux_ui_row *row = &rows[row_index];
+		for (size_t span_index = 0; span_index < row->span_count; span_index++) {
+			const struct engineos_mux_ui_span *span = &row->spans[span_index];
+			uint32_t background = palette_colour(span->background, false);
+			fill_rect(pixels, image_width, image_height,
+				(int)(origin_x + span->start) * cell_width,
+				(int)(origin_y + row_index) * cell_height,
+				(int)(span->end - span->start) * cell_width,
+				cell_height, background);
+		}
+		size_t offset = 0, length = strlen(row->text);
+		uint32_t column = 0;
+		while (offset < length && column < columns) {
+			uint32_t codepoint = next_codepoint((const uint8_t *)row->text,
+				length, &offset);
+			int advance = wcwidth((wchar_t)codepoint);
+			if (advance < 0) advance = 1;
+			uint32_t glyph_column = advance == 0 && column != 0 ? column - 1 : column;
+			const struct engineos_mux_ui_span *span = ui_span_at(row, glyph_column);
+			int32_t foreground = span != NULL ? span->foreground : 8;
+			int32_t background = span != NULL ? span->background : 9;
+			if (span != NULL && (span->attributes & GRID_ATTR_REVERSE)) {
+				int32_t swap = foreground; foreground = background; background = swap;
+			}
+			if (codepoint != 0 && codepoint != ' ' &&
+					FT_Load_Char(face, codepoint, FT_LOAD_RENDER) == 0) {
+				blend_bitmap(pixels, image_width, image_height,
+					&face->glyph->bitmap,
+					(int)(origin_x + glyph_column) * cell_width +
+						face->glyph->bitmap_left,
+					(int)(origin_y + row_index) * cell_height + baseline -
+						face->glyph->bitmap_top,
+					palette_colour(foreground, true));
+				(*glyph_cells)++;
+			}
+			if (advance > 0) column += (uint32_t)advance;
+		}
+	}
+}
+
 struct wlr_buffer *engineos_terminal_render(
 		const struct engineos_mux_client *client, int *width, int *height,
 		uint32_t *glyph_cells, char *error, size_t error_size) {
@@ -129,8 +187,12 @@ struct wlr_buffer *engineos_terminal_render(
 	int baseline = (int)(face->size->metrics.ascender >> 6) + 1;
 	if (cell_width < 1) cell_width = 9;
 	if (cell_height < 1) cell_height = 18;
-	*width = (int)client->grid_columns * cell_width;
-	*height = (int)client->grid_rows * cell_height;
+	uint32_t render_columns = client->grid_columns;
+	uint32_t render_rows = client->grid_rows;
+	if (client->ui_columns > render_columns) render_columns = client->ui_columns;
+	if (client->ui_rows > render_rows) render_rows = client->ui_rows;
+	*width = (int)render_columns * cell_width;
+	*height = (int)render_rows * cell_height;
 	if (*width <= 0 || *height <= 0 || *width > 4096 || *height > 4096 ||
 			(int64_t)*width * *height > 16777216) {
 		snprintf(error, error_size, "terminal render target is too large");
@@ -165,6 +227,17 @@ struct wlr_buffer *engineos_terminal_render(
 			drew = true;
 		}
 		if (drew) (*glyph_cells)++;
+	}
+	if (client->ui_status_y >= 0 && client->ui_status_row_count != 0) {
+		render_ui_rows(pixels, *width, *height, face, cell_width, cell_height,
+			baseline, client->ui_status_rows, client->ui_status_row_count,
+			client->ui_columns, 0, (uint32_t)client->ui_status_y, glyph_cells);
+	}
+	if (client->ui_menu_active && client->ui_menu_row_count != 0) {
+		render_ui_rows(pixels, *width, *height, face, cell_width, cell_height,
+			baseline, client->ui_menu_rows, client->ui_menu_row_count,
+			client->ui_menu_width, client->ui_menu_x, client->ui_menu_y,
+			glyph_cells);
 	}
 	FT_Done_Face(face); FT_Done_FreeType(library);
 	FcPatternDestroy(match); FcPatternDestroy(pattern);

@@ -278,6 +278,8 @@ static bool receive_grid_damage(struct engineos_mux_client *client,
 		snprintf(error, error_size, "grid damage send: %s", strerror(errno));
 		return false;
 	}
+receive_again:
+	;
 	size_t capacity = sizeof(frame) + ENGINE_MUX_MAX_PAYLOAD;
 	unsigned char *packet = malloc(capacity);
 	if (packet == NULL) {
@@ -300,6 +302,16 @@ static bool receive_grid_damage(struct engineos_mux_client *client,
 		snprintf(error, error_size, "invalid grid damage response");
 		return false;
 	}
+	if (type == ENGINE_MUX_UI_INVALIDATED) {
+		if (length != sizeof(struct engine_mux_ui_invalidation)) {
+			free(packet);
+			snprintf(error, error_size,
+				"invalid UI invalidation during grid damage");
+			return false;
+		}
+		free(packet);
+		goto receive_again;
+	}
 	if (type == ENGINE_MUX_ERROR) {
 		free(packet);
 		if (!request_grid(client, error, error_size)) return false;
@@ -309,7 +321,8 @@ static bool receive_grid_damage(struct engineos_mux_client *client,
 	if (type != ENGINE_MUX_GRID_DAMAGE ||
 			length < sizeof(struct engine_mux_grid_damage_header)) {
 		free(packet);
-		snprintf(error, error_size, "unexpected grid damage response");
+		snprintf(error, error_size, "unexpected grid damage response type %u",
+			type);
 		return false;
 	}
 	struct engine_mux_grid_damage_header header;
@@ -453,23 +466,43 @@ bool engineos_mux_client_handle_event(struct engineos_mux_client *client,
 	struct engine_mux_frame_header frame;
 	unsigned char packet[sizeof(frame) + sizeof(struct engine_mux_grid_request)];
 	ssize_t count = recv(client->fd, packet, sizeof(packet), 0);
-	if (count <= 0) {
+	if (count < (ssize_t)sizeof(frame)) {
 		snprintf(error, error_size, "mux connection closed: %s",
 			count == 0 ? "end of stream" : strerror(errno));
 		return false;
 	}
-	if (count != (ssize_t)sizeof(packet)) {
+	memcpy(&frame, packet, sizeof(frame));
+	uint32_t length = ntohl(frame.payload_length);
+	uint16_t type = ntohs(frame.type);
+	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
+			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
+			sizeof(frame) + length != (size_t)count) {
+		snprintf(error, error_size, "invalid mux invalidation frame");
+		return false;
+	}
+	if (type == ENGINE_MUX_UI_INVALIDATED) {
+		struct engine_mux_ui_invalidation invalidated;
+		if (length != sizeof(invalidated)) {
+			snprintf(error, error_size, "invalid UI invalidation frame");
+			return false;
+		}
+		memcpy(&invalidated, packet + sizeof(frame), sizeof(invalidated));
+		uint32_t view_id = ntohl(invalidated.view_id);
+		if (view_id != client->primary_view_id) return true;
+		bool changed_during_request = false;
+		if (!engineos_mux_client_request_ui(client, view_id,
+				&changed_during_request, error, error_size)) return false;
+		*grid_changed = true;
+		return true;
+	}
+	if (type != ENGINE_MUX_GRID_INVALIDATED ||
+			length != sizeof(struct engine_mux_grid_request)) {
 		snprintf(error, error_size, "invalid grid invalidation size");
 		return false;
 	}
-	memcpy(&frame, packet, sizeof(frame));
 	struct engine_mux_grid_request invalidated;
 	memcpy(&invalidated, packet + sizeof(frame), sizeof(invalidated));
-	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
-			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
-			ntohs(frame.type) != ENGINE_MUX_GRID_INVALIDATED ||
-			ntohl(frame.payload_length) != sizeof(invalidated) ||
-			ntohl(invalidated.pane_id) != client->pane_id ||
+	if (ntohl(invalidated.pane_id) != client->pane_id ||
 			ntohl(invalidated.generation) != client->pane_generation) {
 		snprintf(error, error_size, "invalid grid invalidation frame");
 		return false;
@@ -542,6 +575,13 @@ bool engineos_mux_client_send_input(struct engineos_mux_client *client,
 			invalidated = true;
 			continue;
 		}
+		if (type == ENGINE_MUX_UI_INVALIDATED) {
+			if (payload_length != sizeof(struct engine_mux_ui_invalidation)) {
+				snprintf(error, error_size, "invalid UI invalidation during request");
+				return false;
+			}
+			continue;
+		}
 		if (type == ENGINE_MUX_ERROR) {
 			size_t copy_length = payload_length;
 			if (copy_length >= error_size) copy_length = error_size - 1;
@@ -564,9 +604,179 @@ bool engineos_mux_client_send_input(struct engineos_mux_client *client,
 	return true;
 }
 
+static void free_ui_rows(struct engineos_mux_ui_row *rows, size_t count) {
+	for (size_t index = 0; index < count; index++) {
+		free(rows[index].text);
+		free(rows[index].spans);
+	}
+	free(rows);
+}
+
+static bool json_u32(struct json_object *parent, const char *name,
+		uint32_t maximum, uint32_t *value) {
+	struct json_object *object = NULL;
+	if (!json_object_object_get_ex(parent, name, &object) ||
+			!json_object_is_type(object, json_type_int)) return false;
+	int64_t parsed = json_object_get_int64(object);
+	if (parsed < 0 || (uint64_t)parsed > maximum) return false;
+	*value = (uint32_t)parsed;
+	return true;
+}
+
+static bool json_i32(struct json_object *parent, const char *name,
+		int32_t minimum, int32_t maximum, int32_t *value) {
+	struct json_object *object = NULL;
+	if (!json_object_object_get_ex(parent, name, &object) ||
+			!json_object_is_type(object, json_type_int)) return false;
+	int64_t parsed = json_object_get_int64(object);
+	if (parsed < minimum || parsed > maximum) return false;
+	*value = (int32_t)parsed;
+	return true;
+}
+
+static bool parse_ui_rows(struct json_object *array, uint32_t columns,
+		struct engineos_mux_ui_row **parsed_rows, size_t *parsed_count,
+		char *error, size_t error_size) {
+	if (!json_object_is_type(array, json_type_array)) {
+		snprintf(error, error_size, "UI rows are not an array");
+		return false;
+	}
+	size_t count = json_object_array_length(array);
+	struct engineos_mux_ui_row *rows = calloc(count, sizeof(*rows));
+	if (rows == NULL && count != 0) {
+		snprintf(error, error_size, "out of memory");
+		return false;
+	}
+	for (size_t row_index = 0; row_index < count; row_index++) {
+		struct json_object *row = json_object_array_get_idx(array, row_index);
+		struct json_object *text = NULL, *spans = NULL;
+		if (!json_object_is_type(row, json_type_object) ||
+				!json_object_object_get_ex(row, "text", &text) ||
+				!json_object_is_type(text, json_type_string) ||
+				!json_object_object_get_ex(row, "spans", &spans) ||
+				!json_object_is_type(spans, json_type_array)) {
+			snprintf(error, error_size, "UI row contract is invalid");
+			free_ui_rows(rows, count);
+			return false;
+		}
+		rows[row_index].text = strdup(json_object_get_string(text));
+		rows[row_index].span_count = json_object_array_length(spans);
+		rows[row_index].spans = calloc(rows[row_index].span_count,
+			sizeof(*rows[row_index].spans));
+		if (rows[row_index].text == NULL ||
+				(rows[row_index].spans == NULL && rows[row_index].span_count != 0)) {
+			snprintf(error, error_size, "out of memory");
+			free_ui_rows(rows, count);
+			return false;
+		}
+		for (size_t span_index = 0;
+				span_index < rows[row_index].span_count; span_index++) {
+			struct json_object *span = json_object_array_get_idx(spans, span_index);
+			struct engineos_mux_ui_span *destination =
+				&rows[row_index].spans[span_index];
+			uint32_t attributes, foreground, background;
+			if (!json_object_is_type(span, json_type_object) ||
+					!json_u32(span, "start", columns, &destination->start) ||
+					!json_u32(span, "end", columns, &destination->end) ||
+					destination->end < destination->start ||
+					!json_u32(span, "attributes", UINT16_MAX, &attributes) ||
+					!json_u32(span, "foreground", UINT32_MAX, &foreground) ||
+					!json_u32(span, "background", UINT32_MAX, &background)) {
+				snprintf(error, error_size, "UI style span contract is invalid");
+				free_ui_rows(rows, count);
+				return false;
+			}
+			destination->attributes = (uint16_t)attributes;
+			destination->foreground = (int32_t)foreground;
+			destination->background = (int32_t)background;
+		}
+	}
+	*parsed_rows = rows;
+	*parsed_count = count;
+	return true;
+}
+
+static bool parse_ui_model(struct engineos_mux_client *client,
+		struct json_object *root, char *error, size_t error_size) {
+	struct json_object *status = NULL, *status_rows = NULL, *mode = NULL;
+	struct json_object *prompt = NULL, *message = NULL, *menu = NULL;
+	struct json_object *menu_rows = NULL, *active = NULL;
+	uint32_t columns, rows, menu_x = 0, menu_y = 0;
+	int32_t status_y;
+	uint32_t menu_width = 0, menu_height = 0;
+	struct engineos_mux_ui_row *new_status_rows = NULL, *new_menu_rows = NULL;
+	size_t new_status_count = 0, new_menu_count = 0;
+	if (!json_u32(root, "columns", 16384, &columns) || columns == 0 ||
+			!json_u32(root, "rows", 16384, &rows) || rows == 0 ||
+			!json_object_object_get_ex(root, "status", &status) ||
+			!json_object_is_type(status, json_type_object) ||
+			!json_object_object_get_ex(status, "mode", &mode) ||
+			!json_object_is_type(mode, json_type_string) ||
+			strlen(json_object_get_string(mode)) >= sizeof(client->ui_mode) ||
+			!json_i32(status, "y", -1, (int32_t)rows, &status_y) ||
+			!json_object_object_get_ex(status, "rows", &status_rows) ||
+			!parse_ui_rows(status_rows, columns, &new_status_rows,
+				&new_status_count, error, error_size) ||
+			(status_y < 0 ? new_status_count != 0 :
+				(uint64_t)status_y + new_status_count > rows)) {
+		if (error[0] == '\0') snprintf(error, error_size, "UI status contract is invalid");
+		free_ui_rows(new_status_rows, new_status_count);
+		return false;
+	}
+	if (!json_object_object_get_ex(root, "prompt", &prompt) ||
+			!json_object_object_get_ex(prompt, "active", &active) ||
+			!json_object_is_type(active, json_type_boolean)) goto invalid;
+	bool prompt_active = json_object_get_boolean(active);
+	if (!json_object_object_get_ex(root, "message", &message) ||
+			!json_object_object_get_ex(message, "active", &active) ||
+			!json_object_is_type(active, json_type_boolean)) goto invalid;
+	bool message_active = json_object_get_boolean(active);
+	if (!json_object_object_get_ex(root, "menu", &menu) ||
+			!json_object_object_get_ex(menu, "active", &active) ||
+			!json_object_is_type(active, json_type_boolean)) goto invalid;
+	bool menu_active = json_object_get_boolean(active);
+	if (menu_active) {
+		if (!json_u32(menu, "x", columns, &menu_x) ||
+				!json_u32(menu, "y", rows, &menu_y) ||
+				!json_u32(menu, "width", columns, &menu_width) ||
+				!json_u32(menu, "height", rows, &menu_height) ||
+				menu_width == 0 || menu_height == 0 ||
+				menu_x + menu_width > columns || menu_y + menu_height > rows ||
+				!json_object_object_get_ex(menu, "rows", &menu_rows) ||
+				!parse_ui_rows(menu_rows, menu_width, &new_menu_rows,
+					&new_menu_count, error, error_size) ||
+				new_menu_count != menu_height) goto invalid;
+	}
+	free_ui_rows(client->ui_status_rows, client->ui_status_row_count);
+	free_ui_rows(client->ui_menu_rows, client->ui_menu_row_count);
+	client->ui_columns = columns;
+	client->ui_rows = rows;
+	client->ui_status_y = status_y;
+	client->ui_status_rows = new_status_rows;
+	client->ui_status_row_count = new_status_count;
+	client->ui_menu_x = menu_x;
+	client->ui_menu_y = menu_y;
+	client->ui_menu_width = menu_width;
+	client->ui_menu_height = menu_height;
+	client->ui_menu_rows = new_menu_rows;
+	client->ui_menu_row_count = new_menu_count;
+	strcpy(client->ui_mode, json_object_get_string(mode));
+	client->ui_prompt_active = prompt_active;
+	client->ui_message_active = message_active;
+	client->ui_menu_active = menu_active;
+	return true;
+
+invalid:
+	snprintf(error, error_size, "UI model contract is invalid");
+	free_ui_rows(new_status_rows, new_status_count);
+	free_ui_rows(new_menu_rows, new_menu_count);
+	return false;
+}
+
 static bool exchange_json_request(struct engineos_mux_client *client,
 		uint16_t request_type, uint16_t expected_type, const char *payload,
-		const char *expected_schema, bool *grid_changed,
+		const char *expected_schema, struct json_object **response,
+		bool *grid_changed,
 		char *error, size_t error_size) {
 	*grid_changed = false;
 	size_t payload_length = strlen(payload);
@@ -634,6 +844,16 @@ static bool exchange_json_request(struct engineos_mux_client *client,
 			invalidated = true;
 			continue;
 		}
+		if (type == ENGINE_MUX_UI_INVALIDATED) {
+			if (length != sizeof(struct engine_mux_ui_invalidation)) {
+				free(packet);
+				snprintf(error, error_size,
+					"invalid UI invalidation during request");
+				return false;
+			}
+			free(packet);
+			continue;
+		}
 		char *json_text = malloc((size_t)length + 1);
 		if (json_text == NULL) {
 			free(packet);
@@ -666,7 +886,10 @@ static bool exchange_json_request(struct engineos_mux_client *client,
 			json_object_put(root);
 			return false;
 		}
-		json_object_put(root);
+		if (response != NULL)
+			*response = root;
+		else
+			json_object_put(root);
 		client->revision = be64_to_host(frame.state_revision);
 		break;
 	}
@@ -704,7 +927,7 @@ bool engineos_mux_client_register_view(struct engineos_mux_client *client,
 		JSON_C_TO_STRING_PLAIN);
 	bool result = exchange_json_request(client,
 		ENGINE_MUX_VIEW_REGISTER_REQUEST, ENGINE_MUX_VIEW_REGISTER_ACK,
-		payload, "engine-mux/view-register-v1", grid_changed,
+		payload, "engine-mux/view-register-v1", NULL, grid_changed,
 		error, error_size);
 	json_object_put(root);
 	if (result && focused) client->primary_view_id = view_id;
@@ -725,7 +948,7 @@ bool engineos_mux_client_unregister_view(struct engineos_mux_client *client,
 		JSON_C_TO_STRING_PLAIN);
 	bool result = exchange_json_request(client,
 		ENGINE_MUX_VIEW_UNREGISTER_REQUEST, ENGINE_MUX_VIEW_UNREGISTER_ACK,
-		payload, "engine-mux/view-unregister-v1", grid_changed,
+		payload, "engine-mux/view-unregister-v1", NULL, grid_changed,
 		error, error_size);
 	json_object_put(root);
 	if (result && client->primary_view_id == view_id)
@@ -751,7 +974,7 @@ bool engineos_mux_client_focus_view(struct engineos_mux_client *client,
 		JSON_C_TO_STRING_PLAIN);
 	bool result = exchange_json_request(client,
 		ENGINE_MUX_VIEW_FOCUS_REQUEST, ENGINE_MUX_VIEW_FOCUS_ACK,
-		payload, "engine-mux/view-focus-v1", grid_changed,
+		payload, "engine-mux/view-focus-v1", NULL, grid_changed,
 		error, error_size);
 	json_object_put(root);
 	if (result) client->primary_view_id = view_id;
@@ -782,9 +1005,36 @@ bool engineos_mux_client_send_key(struct engineos_mux_client *client,
 	const char *payload = json_object_to_json_string_ext(root,
 		JSON_C_TO_STRING_PLAIN);
 	bool result = exchange_json_request(client, ENGINE_MUX_KEY_REQUEST,
-		ENGINE_MUX_KEY_ACK, payload, "engine-mux/key-v1", grid_changed,
+		ENGINE_MUX_KEY_ACK, payload, "engine-mux/key-v1", NULL, grid_changed,
 		error, error_size);
 	json_object_put(root);
+	return result;
+}
+
+bool engineos_mux_client_request_ui(struct engineos_mux_client *client,
+		uint32_t view_id, bool *grid_changed, char *error, size_t error_size) {
+	if (view_id == 0) {
+		snprintf(error, error_size, "invalid UI model request");
+		return false;
+	}
+	struct json_object *request = json_object_new_object();
+	if (request == NULL) {
+		snprintf(error, error_size, "out of memory");
+		return false;
+	}
+	json_object_object_add(request, "schema",
+		json_object_new_string("engine-mux/ui-request-v1"));
+	json_object_object_add(request, "view_id", json_object_new_int64(view_id));
+	const char *payload = json_object_to_json_string_ext(request,
+		JSON_C_TO_STRING_PLAIN);
+	struct json_object *response = NULL;
+	bool result = exchange_json_request(client, ENGINE_MUX_UI_REQUEST,
+		ENGINE_MUX_UI_MODEL, payload, "engine-mux/ui-model-v1", &response,
+		grid_changed, error, error_size);
+	json_object_put(request);
+	if (!result) return false;
+	result = parse_ui_model(client, response, error, error_size);
+	json_object_put(response);
 	return result;
 }
 
@@ -796,7 +1046,13 @@ void engineos_mux_client_destroy(struct engineos_mux_client *client) {
 	free(client->socket_path);
 	free(client->session_id);
 	free(client->grid_cells);
+	free_ui_rows(client->ui_status_rows, client->ui_status_row_count);
+	free_ui_rows(client->ui_menu_rows, client->ui_menu_row_count);
 	client->grid_cells = NULL;
+	client->ui_status_rows = NULL;
+	client->ui_status_row_count = 0;
+	client->ui_menu_rows = NULL;
+	client->ui_menu_row_count = 0;
 	client->socket_path = NULL;
 	client->session_id = NULL;
 	client->primary_view_id = 0;

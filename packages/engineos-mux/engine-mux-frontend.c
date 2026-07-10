@@ -17,6 +17,8 @@ struct engine_mux_view {
 	int peer_fd;
 	struct client *tmux_client;
 	char *output_name;
+	uint64_t ui_hash;
+	int ui_subscribed;
 	TAILQ_ENTRY(engine_mux_view) entry;
 };
 TAILQ_HEAD(engine_mux_view_list, engine_mux_view);
@@ -57,6 +59,18 @@ static uint64_t engine_mux_snapshot_hash;
 static int engine_mux_send_frame(int, uint16_t, uint64_t, uint64_t,
     const char *, size_t);
 static void engine_mux_client_free(struct engine_mux_client *);
+static void engine_mux_hash_bytes(uint64_t *, const void *, size_t);
+
+static uint64_t
+engine_mux_ui_model_hash(struct json_object *model)
+{
+	const char *text = json_object_to_json_string_ext(model,
+	    JSON_C_TO_STRING_PLAIN);
+	uint64_t hash = UINT64_C(1469598103934665603);
+
+	engine_mux_hash_bytes(&hash, text, strlen(text));
+	return (hash);
+}
 
 static struct json_object *
 engine_mux_parse_json(const u_char *payload, size_t payload_size)
@@ -530,6 +544,43 @@ engine_mux_build_ui_model(struct engine_mux_view *view)
 	}
 	json_object_object_add(root, "menu", menu_object);
 	return (root);
+}
+
+static void
+engine_mux_notify_ui_clients(void)
+{
+	struct engine_mux_client *client, *next;
+	struct engine_mux_view *view;
+	struct engine_mux_ui_invalidation invalidated;
+	struct json_object *model;
+	uint64_t hash;
+	int failed;
+
+	TAILQ_FOREACH_SAFE(client, &engine_mux_clients, entry, next) {
+		failed = 0;
+		TAILQ_FOREACH(view, &client->views, entry) {
+			if (!view->ui_subscribed)
+				continue;
+			model = engine_mux_build_ui_model(view);
+			hash = engine_mux_ui_model_hash(model);
+			json_object_put(model);
+			if (hash == view->ui_hash)
+				continue;
+			invalidated.view_id = htonl(view->id);
+			if (engine_mux_send_frame(client->fd,
+			    ENGINE_MUX_UI_INVALIDATED, 0, engine_mux_revision,
+			    (char *)&invalidated, sizeof invalidated) != 0) {
+				if (errno != EAGAIN && errno != EWOULDBLOCK) {
+					engine_mux_client_free(client);
+					failed = 1;
+				}
+				break;
+			}
+			view->ui_hash = hash;
+		}
+		if (failed)
+			continue;
+	}
 }
 
 static uint64_t
@@ -1054,6 +1105,7 @@ engine_mux_frontend_sync(void)
 	    content_hash == engine_mux_snapshot_hash) {
 		free(candidate);
 		engine_mux_notify_grid_clients();
+		engine_mux_notify_ui_clients();
 		return;
 	}
 	if (engine_mux_revision == 0)
@@ -1068,6 +1120,7 @@ engine_mux_frontend_sync(void)
 	engine_mux_snapshot_size = candidate_size;
 	engine_mux_snapshot_hash = content_hash;
 	engine_mux_notify_grid_clients();
+	engine_mux_notify_ui_clients();
 }
 
 static int
@@ -1159,7 +1212,7 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	size_t scrollback_size;
 	const char *hello =
 	    "{\"schema\":\"engine-mux/hello-v1\",\"server\":\"engine-mux\","
-	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\",\"ui-model-v1\"]}";
+	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\",\"ui-model-v1\",\"ui-invalidate-v1\"]}";
 	const char *subscribe_ack =
 	    "{\"schema\":\"engine-mux/grid-subscribe-v1\",\"subscribed\":true}";
 	const char *input_ack =
@@ -1307,7 +1360,7 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	}
 	if (type == ENGINE_MUX_UI_REQUEST) {
 		struct json_object *root, *model;
-		struct engine_mux_view *view;
+		struct engine_mux_view *view, *other_view;
 		const char *schema, *model_text;
 		u_int view_id;
 		size_t model_size;
@@ -1349,6 +1402,10 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 			engine_mux_client_free(client);
 			return;
 		}
+		TAILQ_FOREACH(other_view, &client->views, entry)
+			other_view->ui_subscribed = 0;
+		view->ui_subscribed = 1;
+		view->ui_hash = engine_mux_ui_model_hash(model);
 		json_object_put(model);
 		return;
 	}

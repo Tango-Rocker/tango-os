@@ -37,9 +37,12 @@ through the compositor event loop; no polling process is involved. Every
 native output registers as a real tmux client, with one focused size owner, and
 keyboard events use tmux key names so prefixes and key tables remain
 authoritative in the server. Pointer clicks transfer focused size ownership;
-output loss promotes a surviving view. Mouse/status/copy-mode interaction,
-glyph-atlas caching, and live hardware acceptance remain before native mode
-becomes the default.
+output loss promotes a surviving view. Styled status lines, messages, prompts,
+and menus are rendered by tmux, invalidated without polling, retained by the
+mux client, and composited over the pane grid at tmux's coordinates. Their
+observed mode and geometry are recorded in `shell-state.json`. Mouse/status
+interaction, full copy-mode interaction, glyph-atlas caching, and live
+hardware acceptance remain before native mode becomes the default.
 
 ## Surface Model
 

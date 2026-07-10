@@ -162,7 +162,9 @@ run_mux() {
 	local history_rows history_start
 	local key_proof=""
 	local restore_proof="" shell_pane_id=""
-	local shell_pid="" initial_native_revision updated_native_revision
+	local shell_pid="" overlay_pid="" prompt_pid="" shell_client_name=""
+	local initial_native_revision updated_native_revision stable_revision=""
+	local stable_count=0
 
 	if [[ -z "$mux_bin" ]]; then
 		mux_bin="$ROOT/artifacts/build/engineos-mux/engineos-mux/src/tmux-$mux_commit/tmux"
@@ -178,6 +180,8 @@ run_mux() {
 	mkdir -p "$fixture"
 	chmod 0700 "$fixture"
 	cleanup_mux_test() {
+		[[ -z "$overlay_pid" ]] || kill "$overlay_pid" >/dev/null 2>&1 || true
+		[[ -z "$prompt_pid" ]] || kill "$prompt_pid" >/dev/null 2>&1 || true
 		if [[ -n "$shell_pid" ]]; then
 			kill "$shell_pid" >/dev/null 2>&1 || true
 			wait "$shell_pid" 2>/dev/null || true
@@ -228,7 +232,8 @@ run_mux() {
 		(.capabilities | index("graphical-view-v1")) and
 		(.capabilities | index("tmux-key-v1")) and
 		(.capabilities | index("view-focus-v1")) and
-		(.capabilities | index("ui-model-v1"))' \
+		(.capabilities | index("ui-model-v1")) and
+		(.capabilities | index("ui-invalidate-v1"))' \
 		"$fixture/hello.json" >/dev/null ||
 		die "mux protocol was not served by engine-mux"
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot >"$fixture/first.json"
@@ -443,12 +448,13 @@ run_mux() {
 	XDG_RUNTIME_DIR="$fixture" ENGINEOS_STATE_DIR="$fixture/engineos" \
 		ENGINEOS_MUX_SOCKET="$fixture/engineos/mux.sock" \
 		WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=2 WLR_RENDERER=pixman \
-		"$shell_bin" --headless --smoke-ms 1000 \
+		"$shell_bin" --headless --smoke-ms 15000 \
 		--bootstrap none --mux native >"$fixture/shell-native.log" 2>&1 &
 	shell_pid=$!
 	for _ in {1..100}; do
 		[[ -f "$fixture/engineos/shell-state.json" ]] &&
-			jq -e '.mux.grid.rendered == true' \
+			jq -e '.mux.grid.rendered == true and
+				.mux.ui.mode == "status" and .mux.ui.status_rows == 1' \
 				"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
 		sleep 0.02
 	done
@@ -471,6 +477,56 @@ run_mux() {
 			sort -u | wc -l)" == 2 ]] &&
 		[[ "$(wc -l <"$fixture/graphical-clients.txt")" == 2 ]] ||
 		die "native shell output clients did not preserve focused size ownership"
+	shell_client_name="$(awk '$0 ~ /focused/ {print $1; exit}' \
+		"$fixture/graphical-clients.txt")"
+	[[ -n "$shell_client_name" ]] ||
+		die "native shell focused graphical client name was unavailable"
+	for _ in {1..500}; do
+		updated_native_revision="$(jq -er '.mux.grid.revision' \
+			"$fixture/engineos/shell-state.json")"
+		if [[ "$updated_native_revision" == "$stable_revision" ]]; then
+			stable_count=$((stable_count + 1))
+		else
+			stable_revision="$updated_native_revision"
+			stable_count=0
+		fi
+		[[ "$stable_count" -ge 5 ]] && break
+		sleep 0.02
+	done
+	[[ "$stable_count" -ge 5 ]] ||
+		die "native shell grid did not settle before UI overlay proof"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		display-menu -c "$shell_client_name" -T SHELL-MENU \
+		Pick p 'set-option -g @engineos-shell-menu picked' \
+		>"$fixture/menu.log" 2>&1 &
+	overlay_pid=$!
+	for _ in {1..100}; do
+		jq -e '.mux.ui.rendered == true and .mux.ui.menu_active == true and
+			.mux.ui.menu_width > 0 and .mux.ui.menu_height > 0' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '.mux.ui.menu_active == true and .mux.ui.menu_width > 0 and
+		.mux.ui.menu_height > 0' "$fixture/engineos/shell-state.json" >/dev/null ||
+		die "native shell did not consume and render menu UI invalidation"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		command-prompt -t "$shell_client_name" \
+		>"$fixture/prompt.log" 2>&1 &
+	prompt_pid=$!
+	for _ in {1..100}; do
+		jq -e '.mux.ui.rendered == true and .mux.ui.mode == "prompt" and
+			.mux.ui.prompt_active == true and .mux.ui.menu_active == false' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '.mux.ui.mode == "prompt" and .mux.ui.prompt_active == true and
+		.mux.ui.menu_active == false' "$fixture/engineos/shell-state.json" \
+		>/dev/null || {
+		jq '.mux.ui' "$fixture/engineos/shell-state.json" >&2 || true
+		sed -n '1,80p' "$fixture/prompt.log" >&2 || true
+		tail -80 "$fixture/shell-native.log" >&2 || true
+		die "native shell did not consume and render prompt UI invalidation"
+	}
 	shell_pane_id="$(jq -er '.mux.pane_id' \
 		"$fixture/engineos/shell-state.json")"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
@@ -522,7 +578,12 @@ run_mux() {
 		.mux.grid.revision >= 1 and .mux.grid.columns > 0 and
 		.mux.grid.rows > 0 and .mux.grid.nonblank_cells > 0 and
 		.mux.grid.rendered == true and .mux.grid.pixel_width > 0 and
-		.mux.grid.pixel_height > 0 and .mux.grid.glyph_cells > 0' \
+		.mux.grid.pixel_height > 0 and .mux.grid.glyph_cells > 0 and
+		.mux.ui.columns > 0 and .mux.ui.rows > .mux.grid.rows and
+		.mux.ui.status_y == (.mux.ui.rows - 1) and .mux.ui.status_rows == 1 and
+		.mux.ui.rendered == true and .mux.ui.mode == "prompt" and
+		.mux.ui.prompt_active == true and .mux.ui.message_active == false and
+		.mux.ui.menu_active == false' \
 		"$fixture/engineos/shell-state.json" >/dev/null || {
 		jq '.mux' "$fixture/engineos/shell-state.json" >&2 || true
 		die "shell state did not expose native mux revision evidence"

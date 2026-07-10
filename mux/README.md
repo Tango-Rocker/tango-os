@@ -20,6 +20,10 @@ revisions fail with an explicit complete resynchronization requirement.
 Unsupported command messages fail; they are not reported as successful. Layout
 snapshots expose copy-mode/history state.
 
+After the first UI request, tmux hashes the rendered per-view model and sends a
+bounded invalidation only when it changes. This updates status, message, prompt,
+and menu presentation without compositor polling.
+
 Each native shell output registers as a real tmux client attached to the
 selected session. Its grid dimensions participate in tmux's normal canonical
 size calculation, while secondary nonfocused views ignore size. Discrete key
@@ -37,5 +41,5 @@ meson compile -C build/mux
 ./tools/engineos/eos-test mux
 ```
 
-The next migration proof is native rendering and interaction for status,
-prompts, menus, mouse, and copy mode.
+The next migration proof is mouse/status interaction and full copy-mode
+interaction.
