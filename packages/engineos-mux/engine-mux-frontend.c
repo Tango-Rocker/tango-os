@@ -142,9 +142,46 @@ engine_mux_view_find(struct engine_mux_client *client, u_int id)
 }
 
 static void
+engine_mux_view_focus(struct engine_mux_view *focused)
+{
+	struct engine_mux_client *client;
+	struct engine_mux_view *view;
+	struct client *tmux_client;
+
+	TAILQ_FOREACH(client, &engine_mux_clients, entry) {
+		TAILQ_FOREACH(view, &client->views, entry) {
+			tmux_client = view->tmux_client;
+			if (tmux_client == NULL ||
+			    (tmux_client->flags & CLIENT_DEAD))
+				continue;
+			if (view == focused) {
+				tmux_client->flags |= CLIENT_FOCUSED;
+				tmux_client->flags &= ~CLIENT_IGNORESIZE;
+			} else {
+				tmux_client->flags &= ~CLIENT_FOCUSED;
+				tmux_client->flags |= CLIENT_IGNORESIZE;
+			}
+		}
+	}
+	tmux_client = focused->tmux_client;
+	if (tmux_client->session != NULL) {
+		tmux_client->session->curw->window->latest = tmux_client;
+		window_update_focus(tmux_client->session->curw->window);
+		notify_client("client-active", tmux_client);
+	}
+	recalculate_sizes();
+}
+
+static void
 engine_mux_view_free(struct engine_mux_client *client,
     struct engine_mux_view *view)
 {
+	struct engine_mux_client *other_client;
+	struct engine_mux_view *other_view;
+	int was_focused = view->tmux_client != NULL &&
+	    (view->tmux_client->flags & CLIENT_FOCUSED) &&
+	    (~view->tmux_client->flags & CLIENT_IGNORESIZE);
+
 	TAILQ_REMOVE(&client->views, view, entry);
 	if (view->tmux_client != NULL &&
 	    (~view->tmux_client->flags & CLIENT_DEAD)) {
@@ -155,6 +192,18 @@ engine_mux_view_free(struct engine_mux_client *client,
 		close(view->peer_fd);
 	free(view->output_name);
 	free(view);
+	if (!was_focused)
+		return;
+	TAILQ_FOREACH(other_client, &engine_mux_clients, entry) {
+		TAILQ_FOREACH(other_view, &other_client->views, entry) {
+			if (other_view->tmux_client == NULL ||
+			    other_view->tmux_client->session == NULL ||
+			    (other_view->tmux_client->flags & CLIENT_DEAD))
+				continue;
+			engine_mux_view_focus(other_view);
+			return;
+		}
+	}
 }
 
 static int
@@ -232,7 +281,9 @@ engine_mux_view_register(struct engine_mux_client *client,
 	previous_latest = session->curw->window->latest;
 	TAILQ_INSERT_TAIL(&client->views, view, entry);
 	server_client_set_session(tmux_client, session);
-	if (!focused) {
+	if (focused)
+		engine_mux_view_focus(view);
+	else {
 		tmux_client->flags &= ~CLIENT_FOCUSED;
 		session->curw->window->latest = previous_latest;
 	}
@@ -913,7 +964,7 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	size_t scrollback_size;
 	const char *hello =
 	    "{\"schema\":\"engine-mux/hello-v1\",\"server\":\"engine-mux\","
-	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\"]}";
+	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\"]}";
 	const char *subscribe_ack =
 	    "{\"schema\":\"engine-mux/grid-subscribe-v1\",\"subscribed\":true}";
 	const char *input_ack =
@@ -922,6 +973,8 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	    "{\"schema\":\"engine-mux/view-register-v1\",\"registered\":true}";
 	const char *view_unregister_ack =
 	    "{\"schema\":\"engine-mux/view-unregister-v1\",\"unregistered\":true}";
+	const char *view_focus_ack =
+	    "{\"schema\":\"engine-mux/view-focus-v1\",\"focused\":true}";
 	const char *key_ack =
 	    "{\"schema\":\"engine-mux/key-v1\",\"queued\":true}";
 
@@ -985,7 +1038,8 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	}
 	if (type == ENGINE_MUX_VIEW_REGISTER_REQUEST ||
 	    type == ENGINE_MUX_KEY_REQUEST ||
-	    type == ENGINE_MUX_VIEW_UNREGISTER_REQUEST) {
+	    type == ENGINE_MUX_VIEW_UNREGISTER_REQUEST ||
+	    type == ENGINE_MUX_VIEW_FOCUS_REQUEST) {
 		struct json_object *root;
 		struct engine_mux_view *view;
 		const char *schema;
@@ -1005,7 +1059,7 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 			result = engine_mux_view_register(client, root, &cause);
 		} else if (type == ENGINE_MUX_KEY_REQUEST) {
 			result = engine_mux_key_dispatch(client, root, &cause);
-		} else {
+		} else if (type == ENGINE_MUX_VIEW_UNREGISTER_REQUEST) {
 			schema = engine_mux_json_string_value(root, "schema", 64);
 			if (schema != NULL && strcmp(schema,
 			    "engine-mux/view-unregister-v1") == 0 &&
@@ -1016,6 +1070,17 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 				result = 0;
 			} else
 				cause = xstrdup("graphical view unregister request is invalid");
+		} else {
+			schema = engine_mux_json_string_value(root, "schema", 64);
+			if (schema != NULL && strcmp(schema,
+			    "engine-mux/view-focus-v1") == 0 &&
+			    engine_mux_json_u32(root, "view_id", 1, UINT32_MAX,
+			    &view_id) == 0 &&
+			    (view = engine_mux_view_find(client, view_id)) != NULL) {
+				engine_mux_view_focus(view);
+				result = 0;
+			} else
+				cause = xstrdup("graphical view focus request is invalid");
 		}
 		json_object_put(root);
 		if (result != 0) {
@@ -1030,12 +1095,18 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 		    type == ENGINE_MUX_VIEW_REGISTER_REQUEST ?
 		    ENGINE_MUX_VIEW_REGISTER_ACK :
 		    (type == ENGINE_MUX_KEY_REQUEST ? ENGINE_MUX_KEY_ACK :
-		    ENGINE_MUX_VIEW_UNREGISTER_ACK), request_id,
+		    (type == ENGINE_MUX_VIEW_UNREGISTER_REQUEST ?
+		    ENGINE_MUX_VIEW_UNREGISTER_ACK : ENGINE_MUX_VIEW_FOCUS_ACK)),
+		    request_id,
 		    engine_mux_revision,
 		    type == ENGINE_MUX_VIEW_REGISTER_REQUEST ? view_ack :
-		    (type == ENGINE_MUX_KEY_REQUEST ? key_ack : view_unregister_ack),
+		    (type == ENGINE_MUX_KEY_REQUEST ? key_ack :
+		    (type == ENGINE_MUX_VIEW_UNREGISTER_REQUEST ?
+		    view_unregister_ack : view_focus_ack)),
 		    strlen(type == ENGINE_MUX_VIEW_REGISTER_REQUEST ? view_ack :
-		    (type == ENGINE_MUX_KEY_REQUEST ? key_ack : view_unregister_ack))) != 0)
+		    (type == ENGINE_MUX_KEY_REQUEST ? key_ack :
+		    (type == ENGINE_MUX_VIEW_UNREGISTER_REQUEST ?
+		    view_unregister_ack : view_focus_ack)))) != 0)
 			engine_mux_client_free(client);
 		return;
 	}

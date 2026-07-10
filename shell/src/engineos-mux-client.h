@@ -39,6 +39,8 @@ bool engineos_mux_client_register_view(struct engineos_mux_client *client,
 	bool *grid_changed, char *error, size_t error_size);
 bool engineos_mux_client_unregister_view(struct engineos_mux_client *client,
 	uint32_t view_id, bool *grid_changed, char *error, size_t error_size);
+bool engineos_mux_client_focus_view(struct engineos_mux_client *client,
+	uint32_t view_id, bool *grid_changed, char *error, size_t error_size);
 bool engineos_mux_client_send_key(struct engineos_mux_client *client,
 	uint32_t view_id, const char *key_name, bool *grid_changed,
 	char *error, size_t error_size);

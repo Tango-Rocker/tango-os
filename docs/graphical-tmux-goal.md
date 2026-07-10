@@ -26,10 +26,12 @@ terminal scene, event-driven refresh, and native keyboard control are
 implemented side by side. Every shell output now registers as a real tmux
 client with output geometry and canonical rows/columns. Discrete key frames use
 tmux's normal client key path, including configured prefixes and key tables,
-and graphical-client teardown is proven. Focused-view transfer,
-status/menu/prompt models, incremental GPU glyph-atlas updates, mouse and full
-copy-mode interaction, compound presentations, process scopes, leases,
-games/images, hardware acceptance, and legacy cutover remain open.
+and graphical-client teardown is proven. Pointer focus now transfers the sole
+graphical canonical-size owner, output loss promotes a survivor, and temporary
+frontend clients restore prior ownership on disconnect. Status/menu/prompt
+models, incremental GPU glyph-atlas updates, mouse and full copy-mode
+interaction, compound presentations, process scopes, leases, games/images,
+hardware acceptance, and legacy cutover remain open.
 
 ## Workstream 1: Integrate The Protocol Into Engine Mux
 

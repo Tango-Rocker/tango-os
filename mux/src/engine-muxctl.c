@@ -561,8 +561,149 @@ static int request_keys(int fd, uint32_t pane_id, char **keys,
 	return 0;
 }
 
+static int focus_proof_session(int fd, uint32_t pane_id,
+		uint64_t *revision, char **session_id) {
+	uint16_t response_type = 0;
+	char *response = NULL;
+	*session_id = NULL;
+	if (exchange(fd, ENGINE_MUX_SNAPSHOT_REQUEST, 200, 0, "{}",
+			&response_type, revision, &response) != 0) return -1;
+	if (response_type != ENGINE_MUX_SNAPSHOT) {
+		free(response);
+		errno = EPROTO;
+		return -1;
+	}
+	struct json_object *snapshot = json_tokener_parse(response);
+	free(response);
+	if (snapshot == NULL) { errno = EPROTO; return -1; }
+	struct json_object *panes = NULL;
+	json_object_object_get_ex(snapshot, "panes", &panes);
+	char expected[32];
+	snprintf(expected, sizeof(expected), "%%%u", pane_id);
+	for (size_t index = 0; panes != NULL &&
+			index < json_object_array_length(panes); index++) {
+		struct json_object *pane = json_object_array_get_idx(panes, index);
+		struct json_object *id_object = NULL, *session_object = NULL;
+		if (!json_object_object_get_ex(pane, "pane_id", &id_object) ||
+				!json_object_object_get_ex(pane, "session_id", &session_object)) continue;
+		if (strcmp(json_object_get_string(id_object), expected) != 0) continue;
+		*session_id = strdup(json_object_get_string(session_object));
+		break;
+	}
+	json_object_put(snapshot);
+	if (*session_id == NULL) { errno = ENOENT; return -1; }
+	return 0;
+}
+
+static int focus_proof_register_view(int fd, uint32_t view_id,
+		const char *session_id, uint32_t columns, uint32_t rows, bool focused,
+		uint64_t request_id, uint64_t *revision) {
+	struct json_object *request = json_object_new_object();
+	if (request == NULL) return -1;
+	json_object_object_add(request, "schema",
+		json_object_new_string("engine-mux/view-register-v1"));
+	json_object_object_add(request, "view_id", json_object_new_int64(view_id));
+	json_object_object_add(request, "session_id", json_object_new_string(session_id));
+	json_object_object_add(request, "output", json_object_new_string("focus-proof"));
+	json_object_object_add(request, "pixel_width",
+		json_object_new_int64((int64_t)columns * 10));
+	json_object_object_add(request, "pixel_height",
+		json_object_new_int64((int64_t)rows * 20));
+	json_object_object_add(request, "scale_milli", json_object_new_int(1000));
+	json_object_object_add(request, "columns", json_object_new_int64(columns));
+	json_object_object_add(request, "rows", json_object_new_int64(rows));
+	json_object_object_add(request, "focused", json_object_new_boolean(focused));
+	const char *payload = json_object_to_json_string_ext(request,
+		JSON_C_TO_STRING_PLAIN);
+	uint16_t response_type = 0;
+	char *response = NULL;
+	int result = exchange(fd, ENGINE_MUX_VIEW_REGISTER_REQUEST, request_id,
+		*revision, payload, &response_type, revision, &response);
+	json_object_put(request);
+	free(response);
+	if (result != 0 || response_type != ENGINE_MUX_VIEW_REGISTER_ACK) {
+		errno = EPROTO;
+		return -1;
+	}
+	return 0;
+}
+
+static int request_focus_proof(int fd, uint32_t pane_id) {
+	uint64_t revision = 0;
+	char *session_id = NULL;
+	if (focus_proof_session(fd, pane_id, &revision, &session_id) != 0)
+		return -1;
+	if (focus_proof_register_view(fd, 1, session_id, 80, 24, true,
+			201, &revision) != 0 ||
+			focus_proof_register_view(fd, 2, session_id, 100, 30, false,
+			202, &revision) != 0) {
+		free(session_id);
+		return -1;
+	}
+	free(session_id);
+	struct json_object *request = json_object_new_object();
+	if (request == NULL) return -1;
+	json_object_object_add(request, "schema",
+		json_object_new_string("engine-mux/view-focus-v1"));
+	json_object_object_add(request, "view_id", json_object_new_int(2));
+	const char *payload = json_object_to_json_string_ext(request,
+		JSON_C_TO_STRING_PLAIN);
+	uint16_t response_type = 0;
+	char *response = NULL;
+	if (exchange(fd, ENGINE_MUX_VIEW_FOCUS_REQUEST, 203, revision, payload,
+			&response_type, &revision, &response) != 0 ||
+			response_type != ENGINE_MUX_VIEW_FOCUS_ACK) {
+		json_object_put(request);
+		free(response);
+		errno = EPROTO;
+		return -1;
+	}
+	json_object_put(request);
+	free(response);
+	if (exchange(fd, ENGINE_MUX_SNAPSHOT_REQUEST, 204, revision, "{}",
+			&response_type, &revision, &response) != 0 ||
+			response_type != ENGINE_MUX_SNAPSHOT) {
+		free(response);
+		errno = EPROTO;
+		return -1;
+	}
+	struct json_object *snapshot = json_tokener_parse(response);
+	free(response);
+	if (snapshot == NULL) { errno = EPROTO; return -1; }
+	struct json_object *panes = NULL;
+	json_object_object_get_ex(snapshot, "panes", &panes);
+	int64_t columns = -1, rows = -1;
+	char expected[32];
+	snprintf(expected, sizeof(expected), "%%%u", pane_id);
+	for (size_t index = 0; panes != NULL &&
+			index < json_object_array_length(panes); index++) {
+		struct json_object *pane = json_object_array_get_idx(panes, index);
+		struct json_object *id_object = NULL, *columns_object = NULL;
+		struct json_object *rows_object = NULL;
+		if (!json_object_object_get_ex(pane, "pane_id", &id_object) ||
+				strcmp(json_object_get_string(id_object), expected) != 0) continue;
+		if (!json_object_object_get_ex(pane, "columns", &columns_object) ||
+				!json_object_object_get_ex(pane, "rows", &rows_object)) continue;
+		columns = json_object_get_int64(columns_object);
+		rows = json_object_get_int64(rows_object);
+		break;
+	}
+	json_object_put(snapshot);
+	if (columns < 0 || rows < 0) { errno = EPROTO; return -1; }
+	struct json_object *result = json_object_new_object();
+	if (result == NULL) return -1;
+	json_object_object_add(result, "schema",
+		json_object_new_string("engine-mux/focus-proof-v1"));
+	json_object_object_add(result, "focused_view_id", json_object_new_int(2));
+	json_object_object_add(result, "columns", json_object_new_int64(columns));
+	json_object_object_add(result, "rows", json_object_new_int64(rows));
+	printf("%s\n", json_object_to_json_string_ext(result, JSON_C_TO_STRING_PRETTY));
+	json_object_put(result);
+	return 0;
+}
+
 static void usage(FILE *stream, const char *program) {
-	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT|input PANE_ID BYTES|keys PANE_ID KEY...\n", program);
+	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT|input PANE_ID BYTES|keys PANE_ID KEY...|focus-proof PANE_ID\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -592,13 +733,15 @@ int main(int argc, char **argv) {
 	bool is_scrollback = strcmp(command, "scrollback") == 0;
 	bool is_input = strcmp(command, "input") == 0;
 	bool is_keys = strcmp(command, "keys") == 0;
+	bool is_focus_proof = strcmp(command, "focus-proof") == 0;
 	if ((is_grid && optind + 2 != argc) ||
 			(is_damage && optind + 3 != argc) ||
 			(is_stale_grid && optind + 2 != argc) ||
 			(is_scrollback && optind + 4 != argc) ||
 			(is_input && optind + 3 != argc) ||
 			(is_keys && optind + 3 > argc) ||
-			(!is_grid && !is_damage && !is_stale_grid && !is_scrollback && !is_input && !is_keys &&
+			(is_focus_proof && optind + 2 != argc) ||
+			(!is_grid && !is_damage && !is_stale_grid && !is_scrollback && !is_input && !is_keys && !is_focus_proof &&
 			 optind + 1 != argc)) {
 		usage(stderr, argv[0]);
 		return 2;
@@ -617,7 +760,7 @@ int main(int argc, char **argv) {
 		free(owned_socket);
 		return 1;
 	}
-	if (is_grid || is_damage || is_stale_grid || is_scrollback || is_input || is_keys) {
+	if (is_grid || is_damage || is_stale_grid || is_scrollback || is_input || is_keys || is_focus_proof) {
 		const char *pane_text = argv[optind + 1];
 		if (*pane_text == '%') pane_text++;
 		char *end = NULL;
@@ -636,7 +779,9 @@ int main(int argc, char **argv) {
 			return 2;
 		}
 		int grid_result;
-		if (is_keys) {
+		if (is_focus_proof) {
+			grid_result = request_focus_proof(fd, (uint32_t)pane_id);
+		} else if (is_keys) {
 			grid_result = request_keys(fd, (uint32_t)pane_id,
 				&argv[optind + 2], (size_t)(argc - optind - 2));
 		} else if (is_input) {

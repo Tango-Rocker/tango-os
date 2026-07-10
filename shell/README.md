@@ -36,9 +36,10 @@ composition. Flow-controlled server invalidations drive sparse grid updates
 through the compositor event loop; no polling process is involved. Every
 native output registers as a real tmux client, with one focused size owner, and
 keyboard events use tmux key names so prefixes and key tables remain
-authoritative in the server. Focused-output transfer, mouse/status/copy-mode
-interaction, glyph-atlas caching, and live hardware acceptance remain before
-native mode becomes the default.
+authoritative in the server. Pointer clicks transfer focused size ownership;
+output loss promotes a surviving view. Mouse/status/copy-mode interaction,
+glyph-atlas caching, and live hardware acceptance remain before native mode
+becomes the default.
 
 ## Surface Model
 

@@ -161,6 +161,7 @@ run_mux() {
 	local grid_revision damage_revision
 	local history_rows history_start
 	local key_proof=""
+	local restore_proof="" shell_pane_id=""
 	local shell_pid="" initial_native_revision updated_native_revision
 
 	if [[ -z "$mux_bin" ]]; then
@@ -225,7 +226,8 @@ run_mux() {
 	jq -e '.server == "engine-mux" and (.capabilities | index("terminal-grid-v1")) and
 		(.capabilities | index("pane-input-v1")) and
 		(.capabilities | index("graphical-view-v1")) and
-		(.capabilities | index("tmux-key-v1"))' \
+		(.capabilities | index("tmux-key-v1")) and
+		(.capabilities | index("view-focus-v1"))' \
 		"$fixture/hello.json" >/dev/null ||
 		die "mux protocol was not served by engine-mux"
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot >"$fixture/first.json"
@@ -256,7 +258,17 @@ run_mux() {
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		set-option -g prefix C-b
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
-		send-keys -t "$pane_id" "printf 'A\\033[31mR\\033[0m界é'" Enter
+		set-option -g status off
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" focus-proof \
+		"$pane_id" >"$fixture/focus-proof.json"
+	jq -e '.schema == "engine-mux/focus-proof-v1" and
+		.focused_view_id == 2 and .columns == 100 and .rows == 30' \
+		"$fixture/focus-proof.json" >/dev/null ||
+		die "focused graphical view did not take canonical tmux size ownership"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		set-option -g status on
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -t "$pane_id" "printf 'A\033[31mR\033[0m界é\n'" Enter
 	for _ in {1..100}; do
 		XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" grid "$pane_id" \
 			>"$fixture/grid.json"
@@ -269,8 +281,11 @@ run_mux() {
 	jq -e '.schema == "engine-mux/grid-v1" and
 		.cell_count == (.columns * .rows) and .coloured_cells >= 1 and
 		.wide_cells >= 1 and ([.text_rows[] | contains("AR界é")] | any)' \
-		"$fixture/grid.json" >/dev/null ||
+		"$fixture/grid.json" >/dev/null || {
+		jq '{columns, rows, coloured_cells, wide_cells, text_rows}' \
+			"$fixture/grid.json" >&2 || true
 		die "binary terminal grid did not preserve text, colour, and wide cells"
+	}
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" input "$pane_id" \
 		$'printf NATIVE-INPUT-PROOF\r' >"$fixture/input.json"
 	jq -e '.schema == "engine-mux/pane-input-v1" and .accepted == true' \
@@ -420,6 +435,32 @@ run_mux() {
 			sort -u | wc -l)" == 2 ]] &&
 		[[ "$(wc -l <"$fixture/graphical-clients.txt")" == 2 ]] ||
 		die "native shell output clients did not preserve focused size ownership"
+	shell_pane_id="$(jq -er '.mux.pane_id' \
+		"$fixture/engineos/shell-state.json")"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		set-option -g prefix C-a
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		bind-key -T prefix y set-option -g @engineos-focus-restore accepted
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" keys \
+		"$shell_pane_id" C-a y >"$fixture/focus-restore-keys.json"
+	for _ in {1..100}; do
+		restore_proof="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+			"$mux_bin" show-option -gv @engineos-focus-restore 2>/dev/null || true)"
+		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			list-clients -F '#{client_flags}' >"$fixture/restored-client-flags.txt"
+		if [[ "$restore_proof" == accepted &&
+				"$(grep -c 'focused' "$fixture/restored-client-flags.txt")" == 1 &&
+				"$(grep -c 'ignore-size' "$fixture/restored-client-flags.txt")" == 1 ]]; then
+			break
+		fi
+		sleep 0.02
+	done
+	[[ "$restore_proof" == accepted &&
+		"$(grep -c 'focused' "$fixture/restored-client-flags.txt")" == 1 &&
+		"$(grep -c 'ignore-size' "$fixture/restored-client-flags.txt")" == 1 ]] ||
+		die "temporary graphical client did not restore focused size ownership"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		set-option -g prefix C-b
 	initial_native_revision="$(jq -er '.mux.grid.revision' \
 		"$fixture/engineos/shell-state.json")"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \

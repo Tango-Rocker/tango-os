@@ -5047,6 +5047,49 @@ static void cursor_handle_motion_absolute(struct wl_listener *listener, void *da
 	cursor_update_pointer_focus(server, event->time_msec, "motion-absolute");
 }
 
+static bool focus_native_mux_output(struct engineos_shell_server *server,
+		struct engineos_shell_output *output, const char *reason) {
+	if (!output->mux_registered || !server->mux_client.ready) return false;
+	if (server->mux_client.primary_view_id == output->mux_view_id) return true;
+	bool grid_changed = false;
+	char error[256] = {0};
+	if (!engineos_mux_client_focus_view(&server->mux_client,
+			output->mux_view_id, &grid_changed, error, sizeof(error))) {
+		wlr_log(WLR_ERROR, "native mux output focus failed: %s", error);
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+		return false;
+	}
+	if (grid_changed && !refresh_native_terminal_scene(server,
+			"native-output-focus-damage")) {
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+		return false;
+	}
+	wlr_log(WLR_INFO, "native mux output focused view=%u output=%s reason=%s",
+		output->mux_view_id,
+		output->output->name[0] != '\0' ? output->output->name : "unnamed",
+		reason != NULL ? reason : "unspecified");
+	write_shell_state(server, reason != NULL ? reason : "native-output-focused");
+	return true;
+}
+
+static void focus_native_mux_output_at_cursor(
+		struct engineos_shell_server *server) {
+	if (server->mux_mode != ENGINEOS_MUX_NATIVE ||
+			!server->mux_client.ready ||
+			server->input_mode != ENGINEOS_INPUT_TERMINAL) return;
+	struct wlr_output *target = wlr_output_layout_output_at(
+		server->output_layout, server->cursor->x, server->cursor->y);
+	if (target == NULL) return;
+	struct engineos_shell_output *output;
+	wl_list_for_each(output, &server->outputs, link) {
+		if (output->output != target) continue;
+		focus_native_mux_output(server, output, "native-output-pointer-focus");
+		return;
+	}
+}
+
 static void cursor_handle_button(struct wl_listener *listener, void *data) {
 	struct engineos_shell_server *server =
 		wl_container_of(listener, server, cursor_button);
@@ -5059,6 +5102,7 @@ static void cursor_handle_button(struct wl_listener *listener, void *data) {
 	}
 	if (event->state == WL_POINTER_BUTTON_STATE_PRESSED &&
 			!server->game_capture) {
+		focus_native_mux_output_at_cursor(server);
 		struct wlr_surface *surface = NULL;
 		double sx = 0.0;
 		double sy = 0.0;
@@ -5210,6 +5254,8 @@ static void output_destroy(struct wl_listener *listener, void *data) {
 		wl_container_of(listener, output, destroy);
 	struct engineos_shell_server *server = output->server;
 	if (output->mux_registered && server->mux_client.ready) {
+		bool was_focused = server->mux_client.primary_view_id ==
+			output->mux_view_id;
 		bool grid_changed = false;
 		char error[256] = {0};
 		if (!engineos_mux_client_unregister_view(&server->mux_client,
@@ -5221,6 +5267,15 @@ static void output_destroy(struct wl_listener *listener, void *data) {
 				"native-output-unregister-damage")) {
 			server->mux_client.ready = false;
 			wl_display_terminate(server->display);
+		}
+		if (was_focused && server->mux_client.ready) {
+			struct engineos_shell_output *candidate;
+			wl_list_for_each(candidate, &server->outputs, link) {
+				if (candidate == output || !candidate->mux_registered) continue;
+				focus_native_mux_output(server, candidate,
+					"native-output-destroy-focus-transfer");
+				break;
+			}
 		}
 	}
 

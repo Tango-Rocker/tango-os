@@ -733,6 +733,31 @@ bool engineos_mux_client_unregister_view(struct engineos_mux_client *client,
 	return result;
 }
 
+bool engineos_mux_client_focus_view(struct engineos_mux_client *client,
+		uint32_t view_id, bool *grid_changed, char *error, size_t error_size) {
+	if (view_id == 0) {
+		snprintf(error, error_size, "invalid graphical view focus request");
+		return false;
+	}
+	struct json_object *root = json_object_new_object();
+	if (root == NULL) {
+		snprintf(error, error_size, "out of memory");
+		return false;
+	}
+	json_object_object_add(root, "schema",
+		json_object_new_string("engine-mux/view-focus-v1"));
+	json_object_object_add(root, "view_id", json_object_new_int64(view_id));
+	const char *payload = json_object_to_json_string_ext(root,
+		JSON_C_TO_STRING_PLAIN);
+	bool result = exchange_json_request(client,
+		ENGINE_MUX_VIEW_FOCUS_REQUEST, ENGINE_MUX_VIEW_FOCUS_ACK,
+		payload, "engine-mux/view-focus-v1", grid_changed,
+		error, error_size);
+	json_object_put(root);
+	if (result) client->primary_view_id = view_id;
+	return result;
+}
+
 bool engineos_mux_client_send_key(struct engineos_mux_client *client,
 		uint32_t view_id, const char *key_name, bool *grid_changed,
 		char *error, size_t error_size) {

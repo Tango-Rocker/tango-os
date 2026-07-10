@@ -99,8 +99,8 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration stage 1 is installed side by side as
-  `engineos-mux 3.6b-8` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-23`, but native mode is not yet the live desktop
+  `engineos-mux 3.6b-9` with the decoder/renderer/control boundary in
+  `engineos-shell 0.1.0-24`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
@@ -136,9 +136,13 @@ These are historical proof artifacts only; they are not the active work path:
   prefixes, key tables, copy-mode tables, and plugin bindings retain tmux
   semantics. The contract proves a custom `C-a` prefix binding, real
   `list-clients` registration, event-driven PTY/grid damage, and graphical
-  client cleanup. The same proof passes with installed `/usr/bin/engine-mux`
-  and `/usr/bin/engineos-shell`. Focus transfer between graphical outputs,
-  status/menu/prompt models, mouse/copy-mode interaction, glyph-atlas updates,
+  client cleanup. Pointer clicks now transfer focused-view and canonical-size
+  ownership, keyboard routing follows the promoted view, output loss promotes
+  a surviving view, and a temporary graphical client restores the prior shell
+  owner when it disconnects. The contract proves an 80x24 to 100x30 canonical
+  resize and cross-client focus restoration. The same proof passes with
+  installed `/usr/bin/engine-mux` and `/usr/bin/engineos-shell`.
+  Status/menu/prompt models, mouse/copy-mode interaction, glyph-atlas updates,
   and hardware-renderer acceptance remain.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
