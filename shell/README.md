@@ -30,8 +30,10 @@ receive a valid versioned snapshot before compositor setup. The default remains
 
 Native mode also selects the active tmux pane, validates and retains its full
 binary terminal grid, and records pane identity, grid revision, dimensions,
-cursor, and nonblank-cell evidence in `shell-state.json`. The grid is not yet
-drawn into the scene; retaining it is the decoder boundary for that renderer.
+cursor, and nonblank-cell evidence in `shell-state.json`. A pane-local scene
+subtree displays a CPU-rasterized FreeType terminal buffer through wlroots
+composition. Damage refresh, glyph-atlas caching, and live hardware acceptance
+remain before native mode becomes the default.
 
 ## Surface Model
 

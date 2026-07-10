@@ -100,7 +100,7 @@ These are historical proof artifacts only; they are not the active work path:
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration stage 1 is installed side by side as
   `engineos-mux 3.6b-5` with the decoder boundary in
-  `engineos-shell 0.1.0-19`, but native mode is not yet the live desktop
+  `engineos-shell 0.1.0-20`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
@@ -122,8 +122,10 @@ These are historical proof artifacts only; they are not the active work path:
   scrollback and copy-mode metadata are exported without exceeding bounded
   frames. Native shell startup now selects the active pane, validates and
   retains its binary grid, and reports pane/grid/nonblank evidence in
-  `shell-state.json`. Status/menu/prompt models, ongoing damage consumption,
-  and native shell rendering remain unimplemented.
+  `shell-state.json`. A per-pane wlroots scene subtree now presents a
+  FreeType/fontconfig-rasterized terminal buffer and proves nonblank glyph
+  pixels in the headless compositor. Status/menu/prompt models, ongoing damage
+  consumption, glyph-atlas updates, and hardware-renderer acceptance remain.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 
@@ -134,8 +136,8 @@ These are historical proof artifacts only; they are not the active work path:
 - Interactive Quake keyboard, mouse, and audible audio in a live Runtime
   console session with user assets.
 - Full `eos-proof shell-launch --bare-metal` still fails in the boot-validation
-  gate: `ttf-dejavu` is missing, `getty@tty2.service` is not enabled,
-  `engineos-recovery-help` is unavailable, `runtime-start.log` has no final
+  gate: `getty@tty2.service` is not enabled, `engineos-recovery-help` is
+  unavailable, `runtime-start.log` has no final
   startup decision, and the broad renderer heuristic sees an llvmpipe device.
   The restarted `engineos-shell` log itself shows AMD/radeonsi GLES2 rendering
   on the current shell, so the remaining failure is the broader boot gate, not

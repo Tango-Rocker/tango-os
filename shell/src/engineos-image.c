@@ -53,7 +53,7 @@ static const struct wlr_buffer_impl pixel_buffer_impl = {
 	.end_data_ptr_access = pixel_buffer_end_data_ptr_access,
 };
 
-static struct wlr_buffer *create_pixel_buffer(unsigned char *pixels,
+struct wlr_buffer *engineos_pixel_buffer_create(uint8_t *pixels,
 		int width, int height) {
 	struct engineos_pixel_buffer *buffer = calloc(1, sizeof(*buffer));
 	if (buffer == NULL) {
@@ -110,7 +110,7 @@ static struct wlr_buffer *decode_png(const char *path, int *image_width,
 	int width = (int)image.width;
 	int height = (int)image.height;
 	png_image_free(&image);
-	struct wlr_buffer *buffer = create_pixel_buffer(pixels, width, height);
+	struct wlr_buffer *buffer = engineos_pixel_buffer_create(pixels, width, height);
 	if (buffer == NULL) {
 		free(pixels);
 		snprintf(error, error_size, "failed to allocate image buffer");
@@ -193,7 +193,7 @@ static struct wlr_buffer *decode_jpeg(const char *path, int *image_width,
 	fclose(file);
 
 	struct wlr_buffer *buffer =
-		create_pixel_buffer((unsigned char *)pixels, width, height);
+		engineos_pixel_buffer_create((unsigned char *)pixels, width, height);
 	if (buffer == NULL) {
 		free((void *)pixels);
 		snprintf(error, error_size, "failed to allocate image buffer");

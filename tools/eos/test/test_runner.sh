@@ -352,7 +352,9 @@ run_mux() {
 	jq -e '.mux.mode == "native" and .mux.connected == true and
 		.mux.revision >= 1 and .mux.generation == 1 and
 		.mux.grid.revision >= 1 and .mux.grid.columns > 0 and
-		.mux.grid.rows > 0 and .mux.grid.nonblank_cells > 0' \
+		.mux.grid.rows > 0 and .mux.grid.nonblank_cells > 0 and
+		.mux.grid.rendered == true and .mux.grid.pixel_width > 0 and
+		.mux.grid.pixel_height > 0 and .mux.grid.glyph_cells > 0' \
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "shell state did not expose native mux revision evidence"
 

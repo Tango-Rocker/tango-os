@@ -26,6 +26,8 @@ xkbcommon_dep = dependency('xkbcommon', required: true)
 libpng_dep = dependency('libpng', required: true)
 libjpeg_dep = dependency('libjpeg', required: true)
 json_c_dep = dependency('json-c', required: true)
+freetype_dep = dependency('freetype2', required: true)
+fontconfig_dep = dependency('fontconfig', required: true)
 mux_inc = include_directories('../mux/include')
 
 wayland_scanner = find_program(
@@ -53,6 +55,7 @@ executable(
     'src/engineos-shell.c',
     'src/engineos-image.c',
     'src/engineos-mux-client.c',
+    'src/engineos-terminal-renderer.c',
     xdg_shell_protocol_header,
     pointer_constraints_protocol_header,
   ],
@@ -65,6 +68,8 @@ executable(
     libpng_dep,
     libjpeg_dep,
     json_c_dep,
+    freetype_dep,
+    fontconfig_dep,
   ],
   install: true,
 )

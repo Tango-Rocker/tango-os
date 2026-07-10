@@ -49,6 +49,7 @@
 
 #include "engineos-image.h"
 #include "engineos-mux-client.h"
+#include "engineos-terminal-renderer.h"
 
 #ifndef XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION
 #define XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION 4
@@ -190,6 +191,12 @@ struct engineos_shell_server {
 	struct wlr_pointer_constraints_v1 *pointer_constraints;
 	struct wlr_pointer_constraint_v1 *active_pointer_constraint;
 	struct wlr_scene *scene;
+	struct wlr_scene_tree *mux_pane_tree;
+	struct wlr_scene_buffer *mux_terminal_scene;
+	struct wlr_buffer *mux_terminal_buffer;
+	int mux_terminal_width;
+	int mux_terminal_height;
+	uint32_t mux_terminal_glyph_cells;
 	struct wl_event_source *pane_binding_timer;
 	struct wl_list outputs;
 	struct wl_list views;
@@ -2311,6 +2318,36 @@ static void reset_image_surface(struct engineos_preview_surface *surface) {
 	surface->opacity_percent = 0;
 }
 
+static bool setup_native_terminal_scene(struct engineos_shell_server *server) {
+	char error[256] = {0};
+	server->mux_terminal_buffer = engineos_terminal_render(&server->mux_client,
+		&server->mux_terminal_width, &server->mux_terminal_height,
+		&server->mux_terminal_glyph_cells, error, sizeof(error));
+	if (server->mux_terminal_buffer == NULL) {
+		wlr_log(WLR_ERROR, "native terminal render failed: %s", error);
+		return false;
+	}
+	server->mux_pane_tree = wlr_scene_tree_create(&server->scene->tree);
+	if (server->mux_pane_tree == NULL) {
+		wlr_log(WLR_ERROR, "failed to create native mux pane scene tree");
+		return false;
+	}
+	server->mux_terminal_scene = wlr_scene_buffer_create(server->mux_pane_tree,
+		server->mux_terminal_buffer);
+	if (server->mux_terminal_scene == NULL) {
+		wlr_log(WLR_ERROR, "failed to create native terminal scene buffer");
+		return false;
+	}
+	wlr_scene_node_set_position(&server->mux_pane_tree->node, 0, 0);
+	wlr_log(WLR_INFO,
+		"native terminal scene pane=%%%u generation=%u grid_revision=%llu pixels=%dx%d glyph_cells=%u",
+		server->mux_client.pane_id, server->mux_client.pane_generation,
+		(unsigned long long)server->mux_client.grid_revision,
+		server->mux_terminal_width, server->mux_terminal_height,
+		server->mux_terminal_glyph_cells);
+	return true;
+}
+
 static void hide_image_preview(struct engineos_shell_server *server,
 		const char *reason) {
 	reset_image_surface(&server->preview);
@@ -3214,12 +3251,15 @@ static void write_shell_state(struct engineos_shell_server *server,
 		(unsigned long long)server->mux_client.revision);
 	json_write_string(file, server->mux_client.socket_path);
 	fprintf(file,
-		", \"pane_id\": \"%%%u\", \"generation\": %u, \"grid\": {\"revision\": %llu, \"columns\": %u, \"rows\": %u, \"cursor_x\": %u, \"cursor_y\": %u, \"nonblank_cells\": %u}}",
+		", \"pane_id\": \"%%%u\", \"generation\": %u, \"grid\": {\"revision\": %llu, \"columns\": %u, \"rows\": %u, \"cursor_x\": %u, \"cursor_y\": %u, \"nonblank_cells\": %u, \"rendered\": %s, \"pixel_width\": %d, \"pixel_height\": %d, \"glyph_cells\": %u}}",
 		server->mux_client.pane_id, server->mux_client.pane_generation,
 		(unsigned long long)server->mux_client.grid_revision,
 		server->mux_client.grid_columns, server->mux_client.grid_rows,
 		server->mux_client.grid_cursor_x, server->mux_client.grid_cursor_y,
-		server->mux_client.grid_nonblank_cells);
+		server->mux_client.grid_nonblank_cells,
+		server->mux_terminal_scene != NULL ? "true" : "false",
+		server->mux_terminal_width, server->mux_terminal_height,
+		server->mux_terminal_glyph_cells);
 	fprintf(file, ",\n  \"active_slot\": ");
 	json_write_string(file, surface_role_name(server->active_slot));
 	fprintf(file, ",\n  \"pending_slot\": ");
@@ -5861,6 +5901,15 @@ static void destroy_server(struct engineos_shell_server *server) {
 			destroy_shell_output(output);
 		}
 	}
+	if (server->mux_pane_tree != NULL) {
+		wlr_scene_node_destroy(&server->mux_pane_tree->node);
+		server->mux_pane_tree = NULL;
+		server->mux_terminal_scene = NULL;
+	}
+	if (server->mux_terminal_buffer != NULL) {
+		wlr_buffer_drop(server->mux_terminal_buffer);
+		server->mux_terminal_buffer = NULL;
+	}
 	if (server->scene != NULL) {
 		wlr_scene_node_destroy(&server->scene->tree.node);
 		server->scene = NULL;
@@ -6032,6 +6081,11 @@ int main(int argc, char **argv) {
 	}
 
 	if (!setup_server(&server)) {
+		destroy_server(&server);
+		return 1;
+	}
+	if (server.mux_mode == ENGINEOS_MUX_NATIVE &&
+			!setup_native_terminal_scene(&server)) {
 		destroy_server(&server);
 		return 1;
 	}

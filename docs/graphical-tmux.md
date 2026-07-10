@@ -51,8 +51,12 @@ The migration is side by side and disabled by default:
   mux revision are written to `shell-state.json`.
 - Native shell startup selects the active pane from the authoritative snapshot,
   validates and retains its full binary grid, and records pane identity, grid
-  revision, dimensions, cursor, and nonblank-cell evidence. Scene rendering and
-  ongoing damage consumption are the next shell-side steps.
+  revision, dimensions, cursor, and nonblank-cell evidence.
+- A compositor-native pane scene subtree renders that retained grid into a
+  wlroots scene buffer. FreeType/fontconfig performs CPU glyph rasterization;
+  wlroots composes the buffer. The headless contract proves a nonblank frame,
+  including wide/combining source cells. Ongoing damage consumption, an atlas,
+  and bare-metal GPU acceptance are still required.
 
 The in-server frontend exposes `layout-snapshot`, `terminal-grid-v1`,
 revisioned grid damage, paged scrollback, and copy-mode state. Command
