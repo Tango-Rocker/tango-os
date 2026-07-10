@@ -350,6 +350,8 @@ run_ci() {
     die "ci dry-run did not stop the retired engine runner before reinstall"
   grep -F 'sudo -n pacman -R --noconfirm engineos-engine-runner engineos-engine-runner-debug' "$out" >/dev/null ||
     die "ci dry-run did not remove retired engine runner packages"
+  grep -F 'sudo -n systemctl reset-failed engineos-engine-runner.service' "$out" >/dev/null ||
+    die "ci dry-run did not clear the retired engine runner failure state"
   grep -F 'eos-validate repo' "$out" >/dev/null ||
     die "ci dry-run did not include real repo validation command"
 

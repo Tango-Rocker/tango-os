@@ -190,6 +190,23 @@ verify_package_artifact() {
   done < <(bsdtar -tf "$artifact" | grep -E '^usr/lib/systemd/(system|user)/.+\.(service|socket)$' || true)
 }
 
+verify_split_package_artifact() {
+  local pkgbase="$1"
+  local artifact="$2"
+  local artifact_base artifact_name artifact_version expected_version
+
+  read -r artifact_name artifact_version < <(pacman -Qp "$artifact")
+  artifact_base="$(bsdtar -xOf "$artifact" .PKGINFO 2>/dev/null |
+    sed -n 's/^pkgbase = //p' | head -n 1)"
+  expected_version="$(pkgbuild_expected_version "$pkgbase")"
+  [[ "$artifact_base" == "$pkgbase" ]] ||
+    die "split artifact base mismatch: expected=$pkgbase actual=${artifact_base:-missing} artifact=$artifact"
+  [[ "$artifact_name" != "$pkgbase" ]] ||
+    die "expected split artifact for $pkgbase, got base package: $artifact"
+  [[ "$artifact_version" == "$expected_version" ]] ||
+    die "split artifact version mismatch: $artifact_name expected=$expected_version actual=$artifact_version"
+}
+
 verify_installed_package() {
   local pkg="$1"
   local artifact="$2"
@@ -217,7 +234,7 @@ verify_installed_package() {
 }
 
 install_rebuilt_packages() {
-  local pkg artifact
+  local pkg artifact split_pkg split_artifact
   local artifacts=()
 
   for pkg in "${PACKAGES[@]}"; do
@@ -229,6 +246,15 @@ install_rebuilt_packages() {
     [[ -n "$artifact" ]] || die "no rebuilt artifact found for reinstall: $pkg in $REPO_DIR"
     verify_package_artifact "$pkg" "$artifact"
     artifacts+=("$artifact")
+
+    split_pkg="$pkg-debug"
+    if pacman -Q "$split_pkg" >/dev/null 2>&1; then
+      split_artifact="$(latest_package_artifact "$split_pkg")"
+      [[ -n "$split_artifact" ]] ||
+        die "installed split package has no rebuilt artifact: $split_pkg in $REPO_DIR"
+      verify_split_package_artifact "$pkg" "$split_artifact"
+      artifacts+=("$split_artifact")
+    fi
   done
 
   [[ ${#artifacts[@]} -gt 0 ]] || return 0
@@ -251,6 +277,7 @@ remove_retired_packages() {
     run_or_print sudo -n systemctl disable --now engineos-engine-runner.service
     run_or_print sudo -n pacman -R --noconfirm "${retired[@]}"
     run_or_print sudo -n systemctl daemon-reload
+    run_or_print sudo -n systemctl reset-failed engineos-engine-runner.service
     return 0
   fi
 
@@ -264,6 +291,7 @@ remove_retired_packages() {
   fi
   run_or_print sudo -n pacman -R --noconfirm "${installed[@]}"
   run_or_print sudo -n systemctl daemon-reload
+  run_or_print sudo -n systemctl reset-failed engineos-engine-runner.service
 }
 
 clean_generated_package_dirs() {
