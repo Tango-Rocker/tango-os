@@ -92,11 +92,17 @@ choose_session() {
   done < <("$TMUX_BIN" list-sessions -F $'#{session_id}\t#{session_name}\t#{session_windows}')
 
   if [[ "$destination_count" -eq 0 ]]; then
+    log_event "window=$source_window_id source=$source_session_id status=no-destination"
     notify_client "$client" "No other tmux session is available"
     return 0
   fi
 
-  "$TMUX_BIN" "${menu_args[@]}"
+  log_event "window=$source_window_id source=$source_session_id destinations=$destination_count status=menu-open"
+  if ! "$TMUX_BIN" "${menu_args[@]}"; then
+    log_event "window=$source_window_id source=$source_session_id status=menu-failed"
+    notify_client "$client" "Could not open the destination session menu"
+    return 1
+  fi
 }
 
 apply_move() {
