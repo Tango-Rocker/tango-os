@@ -154,21 +154,26 @@ run_mux() {
 	local build_dir="$ROOT/build/mux"
 	local shell_build_dir="$ROOT/build/shell"
 	local fixture="${TMPDIR:-/tmp}/engineos-mux-test-$$"
-	local socket_name="engine-mux-test-$$"
-	local daemon_pid=""
-	local first_revision second_revision pane_count
+	local mux_bin="${ENGINEOS_MUX_BIN:-}"
+	local mux_commit="0623d1e968423ad0c192e0d8debf1258671063d5"
+	local first_revision second_revision focus_revision pane_count
 
-	tmux -V | grep -Fx 'tmux 3.6b' >/dev/null ||
+	if [[ -z "$mux_bin" ]]; then
+		mux_bin="$ROOT/artifacts/build/engineos-mux/engineos-mux/src/tmux-$mux_commit/tmux"
+	fi
+	if [[ ! -x "$mux_bin" ]]; then
+		mux_bin="$(command -v engine-mux || true)"
+	fi
+	[[ -x "$mux_bin" ]] ||
+		die "in-server mux test binary unavailable; build engineos-mux first"
+	"$mux_bin" -V | grep -Fx 'tmux 3.6b' >/dev/null ||
 		die "mux contract requires the pinned tmux 3.6b baseline"
 	rm -rf "$fixture"
 	mkdir -p "$fixture"
 	chmod 0700 "$fixture"
 	cleanup_mux_test() {
-		if [[ -n "$daemon_pid" ]]; then
-			kill "$daemon_pid" >/dev/null 2>&1 || true
-			wait "$daemon_pid" 2>/dev/null || true
-		fi
-		tmux -L "$socket_name" kill-server >/dev/null 2>&1 || true
+		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			kill-server >/dev/null 2>&1 || true
 		rm -rf "$fixture"
 	}
 	trap cleanup_mux_test RETURN
@@ -186,33 +191,70 @@ run_mux() {
 	fi
 	meson compile -C "$shell_build_dir" >/dev/null
 
-	tmux -L "$socket_name" -f /dev/null new-session -d -s contract
-	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxd" \
-		--tmux tmux --tmux-socket "$socket_name" >"$fixture/daemon.log" 2>&1 &
-	daemon_pid=$!
+	mkdir -p "$fixture/custom-runtime"
+	chmod 0700 "$fixture/custom-runtime"
+	XDG_RUNTIME_DIR="$fixture/custom-runtime" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" -L custom -f /dev/null new-session -d -s custom
+	[[ ! -e "$fixture/custom-runtime/engineos/mux.sock" ]] ||
+		die "custom engine-mux server incorrectly claimed the graphical socket"
+	XDG_RUNTIME_DIR="$fixture/custom-runtime" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" -L custom kill-server
+
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" -f /dev/null \
+		new-session -d -s contract
 	for _ in {1..100}; do
 		[[ -S "$fixture/engineos/mux.sock" ]] && break
 		sleep 0.02
 	done
 	[[ -S "$fixture/engineos/mux.sock" ]] ||
-		die "engine-muxd did not create its frontend socket"
+		die "engine-mux did not create its in-server frontend socket"
+	[[ "$(stat -c '%a' "$fixture/engineos")" == 700 &&
+		"$(stat -c '%a' "$fixture/engineos/mux.sock")" == 700 ]] ||
+		die "engine-mux frontend socket permissions are not private"
 
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" hello >"$fixture/hello.json"
+	jq -e '.server == "engine-mux"' "$fixture/hello.json" >/dev/null ||
+		die "mux protocol was not served by engine-mux"
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot >"$fixture/first.json"
 	first_revision="$(jq -er '.revision' "$fixture/first.json")"
-	[[ "$first_revision" == 1 ]] || die "initial mux revision was not 1"
+	[[ "$first_revision" -ge 1 ]] || die "initial mux revision was not positive"
 	[[ "$(jq -er '.panes | length' "$fixture/first.json")" == 1 ]] ||
 		die "initial mux snapshot did not contain one pane"
+	jq -e '.panes[0].command | contains("/") | not' "$fixture/first.json" >/dev/null ||
+		die "mux snapshot did not normalize pane_current_command metadata"
+	for index in {1..8}; do
+		XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot \
+			>"$fixture/concurrent-$index.json" &
+	done
+	wait
+	for index in {1..8}; do
+		jq -e '.schema == "engine-mux/snapshot-v1"' \
+			"$fixture/concurrent-$index.json" >/dev/null ||
+			die "concurrent mux client $index did not receive a snapshot"
+	done
 
-	tmux -L "$socket_name" split-window -d -t contract:0
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		split-window -d -t contract:0
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot >"$fixture/second.json"
 	second_revision="$(jq -er '.revision' "$fixture/second.json")"
 	pane_count="$(jq -er '.panes | length' "$fixture/second.json")"
 	[[ "$second_revision" -gt "$first_revision" && "$pane_count" == 2 ]] ||
 		die "mux snapshot was not atomically revised after split"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		select-pane -t contract:0.1
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot >"$fixture/focus.json"
+	focus_revision="$(jq -er '.revision' "$fixture/focus.json")"
+	[[ "$focus_revision" -gt "$second_revision" ]] ||
+		die "mux revision did not advance after pane focus changed"
+	jq -e '[.panes[] | select(.window_active and .active)] | length == 1' \
+		"$fixture/focus.json" >/dev/null ||
+		die "mux snapshot did not identify the active pane in the active window"
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" stale-command >"$fixture/stale.json"
 	jq -e '.code == "stale-revision"' "$fixture/stale.json" >/dev/null ||
 		die "mux server did not reject a stale revision"
+	if pgrep -x engine-muxd >/dev/null 2>&1; then
+		die "standalone engine-muxd must not serve the native protocol"
+	fi
 
 	local shell_status=0
 	if ENGINEOS_MUX_SOCKET="$fixture/missing.sock" \

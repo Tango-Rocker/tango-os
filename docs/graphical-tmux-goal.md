@@ -14,9 +14,9 @@ Every pane permanently retains a working console and may additionally own a
 Wayland, game, or stream presentation. `prefix + v` toggles between that
 presentation and its live backing console.
 
-The current baseline is commit `57dfba0`: an isolated tmux 3.6b fork, frontend
-protocol prototype, revisioned layout snapshots, native shell handshake,
-packaging, and contract tests.
+The initial baseline was commit `57dfba0`: an isolated tmux 3.6b fork,
+standalone frontend prototype, revisioned layout snapshots, native shell
+handshake, packaging, and contract tests.
 
 ## Workstream 1: Integrate The Protocol Into Engine Mux
 

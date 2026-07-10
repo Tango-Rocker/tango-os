@@ -98,16 +98,22 @@ These are historical proof artifacts only; they are not the active work path:
   Pane `%6` independently resolves through `/dev/pts/1` to
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
-- Native graphical mux migration stage 1 now exists in source, not yet in the
-  live desktop. The side-by-side `engineos-mux` package builds the pinned
-  official tmux 3.6b baseline as `engine-mux` with an isolated namespace and a
-  same-user `SOCK_SEQPACKET` frontend service. Its v1 handshake and atomic
-  layout snapshots are exercised against real split panes. `engineos-shell
+- Native graphical mux migration stage 1 is installed side by side as
+  `engineos-mux 3.6b-2`, but native mode is not yet the live desktop default.
+  The package builds the pinned
+  official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
+  fork server now owns the same-user `SOCK_SEQPACKET` frontend and constructs
+  revisioned snapshots directly from tmux's session, window, and pane trees;
+  the standalone `engine-muxd` and its `list-panes` subprocess path are removed.
+  Its v1 handshake and atomic layout snapshots are exercised against real split
+  panes and focus changes. The upstream regression scripts match an identically
+  configured pristine build (21 pass and the same 11 host-baseline failures),
+  including a passing environment-isolation test. The retired daemon binary
+  and user unit are absent from the live package. `engineos-shell
   --mux native` requires that handshake and snapshot before compositor startup,
   exposes the observed revision in `shell-state.json`, and fails instead of
   falling back when the mux service is absent. This is a protocol foundation;
-  the fork has only the isolated baseline patch, while in-server frontend
-  integration and terminal grid transport/rendering remain unimplemented.
+  terminal grid transport/rendering remains unimplemented.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 

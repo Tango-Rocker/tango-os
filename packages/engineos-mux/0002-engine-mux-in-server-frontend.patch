@@ -1,0 +1,24 @@
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -150 +150,3 @@ dist_tmux_SOURCES = \
+-	environ.c \
++	environ.c \
++	engine-mux-frontend.c \
++	engine-mux-frontend.h \
+--- a/tmux.h
++++ b/tmux.h
+@@ -2884,0 +2885,5 @@ int	 server_create_socket(uint64_t, char **);
++/* engine-mux-frontend.c */
++int	 engine_mux_frontend_init(void);
++void	 engine_mux_frontend_sync(void);
++void	 engine_mux_frontend_free(void);
++
+--- a/server.c
++++ b/server.c
+@@ -251,0 +252,2 @@ server_start(struct tmuxproc *client, uint64_t flags, struct event_base *base,
++	if (engine_mux_frontend_init() != 0)
++		fatal("engine mux frontend initialization failed");
+@@ -254,0 +258 @@ server_start(struct tmuxproc *client, uint64_t flags, struct event_base *base,
++	engine_mux_frontend_free();
+@@ -279,0 +284 @@ server_loop(void)
++	engine_mux_frontend_sync();

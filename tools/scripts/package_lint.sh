@@ -246,12 +246,21 @@ lint_pkgbuild() {
       fi
 		;;
 	engineos-mux)
-		if ! grep -q 'tmux-3.6b.tar.gz' "$pkg_dir/PKGBUILD"; then
-			fail "$pkg: tmux 3.6b fork source must be pinned"
+		if ! grep -Eq '^_commit=[0-9a-f]{40}$' "$pkg_dir/PKGBUILD"; then
+			fail "$pkg: tmux 3.6b fork source must pin an exact commit"
 			return
 		fi
 		if ! grep -q 'meson install' "$pkg_dir/PKGBUILD"; then
 			fail "$pkg: Meson mux binaries are not installed"
+			return
+		fi
+		if ! grep -q '0002-engine-mux-in-server-frontend.patch' "$pkg_dir/PKGBUILD" ||
+			! grep -q 'engine-mux-frontend.c' "$pkg_dir/PKGBUILD"; then
+			fail "$pkg: in-server frontend sources must be packaged"
+			return
+		fi
+		if [[ -e "$pkg_dir/files/usr/lib/systemd/user/engine-muxd.service" ]]; then
+			fail "$pkg: standalone engine-muxd service must not be packaged"
 			return
 		fi
 		;;

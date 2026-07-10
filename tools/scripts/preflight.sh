@@ -275,11 +275,12 @@ check_package_inputs() {
 	engineos-mux)
 		require_file "mux/meson.build"
 		require_file "mux/include/engine-mux-protocol.h"
-		require_file "mux/src/engine-muxd.c"
 		require_file "mux/src/engine-muxctl.c"
 		require_file "packages/engineos-mux/PKGBUILD"
 		require_file "packages/engineos-mux/0001-engine-mux-default-socket.patch"
-		require_file "packages/engineos-mux/files/usr/lib/systemd/user/engine-muxd.service"
+		require_file "packages/engineos-mux/0002-engine-mux-in-server-frontend.patch"
+		require_file "packages/engineos-mux/engine-mux-frontend.c"
+		require_file "packages/engineos-mux/engine-mux-frontend.h"
 		;;
     engineos-cube)
       require_file "apps/cube/README.md"

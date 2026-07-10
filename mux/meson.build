@@ -11,14 +11,6 @@ json_c_dep = dependency('json-c', required: true)
 inc = include_directories('include')
 
 executable(
-  'engine-muxd',
-  'src/engine-muxd.c',
-  include_directories: inc,
-  dependencies: [json_c_dep],
-  install: true,
-)
-
-executable(
   'engine-muxctl',
   'src/engine-muxctl.c',
   include_directories: inc,

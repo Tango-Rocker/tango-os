@@ -1,31 +1,49 @@
 pkgname=engineos-mux
 pkgver=3.6b
-pkgrel=1
+pkgrel=2
+_commit=0623d1e968423ad0c192e0d8debf1258671063d5
 pkgdesc="EngineOS tmux 3.6b graphical frontend protocol foundation"
 arch=('x86_64')
 url="https://example.invalid/engineos"
 license=('ISC' 'custom:EngineOS-TBD')
 depends=('libevent' 'ncurses' 'libutempter' 'systemd-libs' 'json-c')
-makedepends=('meson' 'ninja' 'pkgconf' 'gcc' 'systemd')
+makedepends=('meson' 'ninja' 'pkgconf' 'gcc' 'systemd' 'autoconf' 'automake')
 provides=('engine-mux')
 source=(
-  'tmux-3.6b.tar.gz::https://github.com/tmux/tmux/releases/download/3.6b/tmux-3.6b.tar.gz'
+  "tmux-3.6b-$_commit.tar.gz::https://github.com/tmux/tmux/archive/$_commit.tar.gz"
   '0001-engine-mux-default-socket.patch'
+  '0002-engine-mux-in-server-frontend.patch'
+  'engine-mux-frontend.c'
+  'engine-mux-frontend.h'
 )
 sha256sums=(
-  '390759d25fdba016887ec982b808927e637070fd7d03a8021f8ef3102b9ae3c7'
+  '2c212f7ee2d925b01ec20ab5bb3a906c17b6a8652fe521fcaaf498f800b4d1fa'
   '377d8420eb6bf2103bfc429829d90ed542fd9e9202c6780d122cb5ce4665cb5f'
+  'e2ff73579fc5ba57b35d212fb4f23b77983383bd1c933c491d7bc265d2396d90'
+  'ae8ce7780677d158e254a7dd5cd786af11162cda9716d491ee1c9c3ab30b2803'
+  '38db77244832b7e2abe5e57f28dd4b08907ca400a5e815fd7db8713206e0ae3d'
 )
 
 prepare() {
-  patch -d "$srcdir/tmux-3.6b" -Np1 -i "$startdir/0001-engine-mux-default-socket.patch"
+  local _engineos_root
+  local _source_dir="$srcdir/tmux-$_commit"
+  _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
+
+	patch -d "$_source_dir" -Np1 -i "$startdir/0001-engine-mux-default-socket.patch"
+	patch -d "$_source_dir" -Np1 -i "$startdir/0002-engine-mux-in-server-frontend.patch"
+	install -m0644 "$srcdir/engine-mux-frontend.c" "$_source_dir/engine-mux-frontend.c"
+	install -m0644 "$srcdir/engine-mux-frontend.h" "$_source_dir/engine-mux-frontend.h"
+	install -m0644 "$_engineos_root/mux/include/engine-mux-protocol.h" "$_source_dir/engine-mux-protocol.h"
+	cd "$_source_dir"
+	autoreconf -fi
 }
 
 build() {
   local _engineos_root
+  local _source_dir="$srcdir/tmux-$_commit"
   _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
 
-	cd "$srcdir/tmux-3.6b"
+	cd "$_source_dir"
 	./configure --prefix=/usr --enable-utempter --enable-systemd
 	make
 
@@ -37,13 +55,12 @@ build() {
 
 package() {
   local _engineos_root
+  local _source_dir="$srcdir/tmux-$_commit"
   _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
 
-	install -Dm755 "$srcdir/tmux-3.6b/tmux" "$pkgdir/usr/bin/engine-mux"
-	install -Dm644 "$srcdir/tmux-3.6b/tmux.1" "$pkgdir/usr/share/man/man1/engine-mux.1"
-	install -Dm644 "$srcdir/tmux-3.6b/COPYING" "$pkgdir/usr/share/licenses/$pkgname/COPYING.tmux"
+	install -Dm755 "$_source_dir/tmux" "$pkgdir/usr/bin/engine-mux"
+	install -Dm644 "$_source_dir/tmux.1" "$pkgdir/usr/share/man/man1/engine-mux.1"
+	install -Dm644 "$_source_dir/COPYING" "$pkgdir/usr/share/licenses/$pkgname/COPYING.tmux"
   DESTDIR="$pkgdir" meson install -C "$srcdir/mux-build"
-  install -Dm644 "$startdir/files/usr/lib/systemd/user/engine-muxd.service" \
-    "$pkgdir/usr/lib/systemd/user/engine-muxd.service"
   install -Dm644 "$_engineos_root/LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
