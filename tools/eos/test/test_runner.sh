@@ -1247,6 +1247,16 @@ run_mux() {
 		 .mux.presentation.lease_view_id == .mux.client_view_id and
 		 .mux.presentation.lease_owned_by_focused_view == true and
 		 ([.output_views[] | select(.owns_selected_presentation)] | length) == 1 and
+		 ([.output_views[].scene_x] | unique | length) == 2 and
+		 ([.output_views[] | select(.owns_selected_presentation) |
+		   select(.bound_presentation_surface_count == 3 and
+		     .presentation_surface_count == 1 and .console_scene_count == 1)] |
+		  length) == 1 and
+		 ([.output_views[] | select(.owns_selected_presentation == false) |
+		   select(.bound_presentation_surface_count == 0 and
+		     .presentation_surface_count == 0 and .console_scene_count == 2)] |
+		  length) == 1 and
+		 all(.mux.panes[]; .scene.output_scene_count == 2) and
 		 .mux.presentation.popups == 1 and
 		 .mux.presentation.surface_tabs == 2 and
 		 ([.windows[] | select(.bound == true and .pane_id == $pane)] | length) == 3 and

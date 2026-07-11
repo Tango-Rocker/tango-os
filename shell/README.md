@@ -64,11 +64,15 @@ active window, so linked or inactive windows cannot duplicate pane scenes.
 Tmux now assigns every mapped presentation one frontend-client/output-view
 lease. Focus transfer, temporary-client disconnect restoration, invalid-view
 cleanup, tmux formats, and `shell-state.json` output-view evidence pass against
-the exact installed AMD/radeonsi GLES2 packages. The compositor currently
-gates graphical presentation visibility on that lease. Per-output console
-scene copies and physical presentation-subtree isolation, lease-keyed images,
-direct-KMS clipping, ordinary simultaneous text-client acceptance, and final
-live hardware acceptance remain before native mode becomes the default.
+the exact installed AMD/radeonsi GLES2 packages. Each output now owns a
+layout-positioned mux scene root and a console copy for every pane. The live
+XDG presentation subtree is reparented only beneath its lease owner's clipped
+pane; nonowners retain consoles, while external ownership detaches the local
+presentation from all output roots. `shell-state.json` exposes root positions,
+pane-copy counts, and bound/visible presentation counts. Independent
+per-output session models, lease-keyed images, direct-KMS clipping, ordinary
+simultaneous text-client acceptance, and final live hardware acceptance remain
+before native mode becomes the default.
 
 ## Surface Model
 

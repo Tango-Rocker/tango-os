@@ -80,9 +80,16 @@ output view and lease in `shell-state.json`, gates graphical presentation
 visibility on ownership, and retries snapshots when an intervening state
 invalidation would otherwise leave stale focus or lease state. Pixman and the
 exact installed AMD/radeonsi GLES2 packages pass the two-output transfer
-contract. Per-output console scene copies, physical presentation-subtree
-isolation, lease-keyed images, games, direct-KMS clipping, final hardware
-acceptance, and legacy cutover remain open. The server now exports every
+contract. The compositor now creates one layout-positioned mux scene root per
+output and one console node per pane under every root. It reparents the live
+XDG toplevel/transient set only beneath the owning lease's clipped pane tree;
+nonowners retain console copies, and external lease ownership detaches and
+hides the local presentation. Observability and the installed contract prove
+distinct output roots, complete pane-copy counts, one owning presentation
+subtree, and zero presentation surfaces on the nonowner. Independent
+per-output session models, lease-keyed images, games, direct-KMS clipping,
+final hardware acceptance, and legacy cutover remain open. The server now
+exports every
 pane's authoritative cell origin and size,
 and the shell validates and retains the complete pane set instead of discarding
 every pane except the selected one. `shell-state.json` exposes those stable
