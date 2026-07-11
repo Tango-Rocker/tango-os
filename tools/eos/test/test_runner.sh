@@ -168,6 +168,7 @@ run_mux() {
 	local restore_proof="" shell_pane_id=""
 	local view_proof_session="" view_proof_session_id="" view_proof_pane=""
 	local shell_pid="" overlay_pid="" prompt_pid="" shell_client_name=""
+	local text_client_pid=""
 	local initial_native_revision updated_native_revision stable_revision=""
 	local stable_count=0
 	local pane_scope="" pane_app_pid="" pane_state="" split_pane_id=""
@@ -254,6 +255,7 @@ PY
 	export PATH DBUS_SESSION_BUS_ADDRESS="$user_bus"
 	export ENGINEOS_USER_RUNTIME_DIR="$user_runtime"
 	cleanup_mux_test() {
+		[[ -z "${text_client_pid:-}" ]] || kill "$text_client_pid" >/dev/null 2>&1 || true
 		[[ -z "${multi_grid_pid:-}" ]] || kill "$multi_grid_pid" >/dev/null 2>&1 || true
 		[[ -z "${unscoped_pid:-}" ]] || kill "$unscoped_pid" >/dev/null 2>&1 || true
 		[[ -z "${overlay_pid:-}" ]] || kill "$overlay_pid" >/dev/null 2>&1 || true
@@ -1340,6 +1342,24 @@ PY
 	[[ "$pane_foreground_pid" == "$pane_shell_pid" ]] ||
 		die "selected native pane shell did not regain its PTY foreground group"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -t "$shell_pane_id" -l \
+		"printf '\\033[2J\\033[HTXT-BACK-CONSOLE\\n'"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -t "$shell_pane_id" Enter
+	for _ in {1..100}; do
+		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			capture-pane -p -S -100 -t "$shell_pane_id" | \
+			grep -F 'TXT-BACK-CONSOLE' >/dev/null && break
+		sleep 0.02
+	done
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		capture-pane -p -S -100 -t "$shell_pane_id" | \
+		grep -F 'TXT-BACK-CONSOLE' >/dev/null || {
+		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			capture-pane -p -S -100 -t "$shell_pane_id" >&2 || true
+		die "ordinary-client backing-console marker did not reach the pane grid"
+	}
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		launch-pane-app -t "$shell_pane_id" -- env \
 		ENGINEOS_WAYLAND_TEST_DELAY_MS=250 \
 		ENGINEOS_WAYLAND_TEST_POPUP=1 \
@@ -1434,6 +1454,98 @@ PY
 			>&2 || true
 			die "presentation lease did not return to the surviving shell output view"
 	}
+	local text_client_session canonical_size attached_size
+	text_client_session="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" display-message -p -t "$shell_pane_id" '#{session_id}')"
+	canonical_size="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" display-message -p -t "$shell_pane_id" \
+		'#{window_width}x#{window_height}')"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		set-option -g 'status-format[0]' \
+		'TXT #{pane_presentation}:#{pane_view_mode}:#{pane_surface_count}'
+	python "$ROOT/tests/tmux-text-client.py" \
+		--mux "$mux_bin" --runtime "$fixture" --target "=$text_client_session" \
+		--output "$fixture/text-client.raw" \
+		--ready "$fixture/text-client.ready" \
+		--release "$fixture/text-client.release" \
+		--initial-marker 'TXT wayland:presentation:2' \
+		--toggled-marker 'TXT wayland:console:2' \
+		--timeout 12 \
+		>"$fixture/text-client.log" 2>&1 &
+	text_client_pid=$!
+	for _ in {1..650}; do
+		[[ -f "$fixture/text-client.ready" ]] && break
+		kill -0 "$text_client_pid" >/dev/null 2>&1 || break
+		sleep 0.02
+	done
+	[[ -f "$fixture/text-client.ready" ]] || {
+		if kill -0 "$text_client_pid" >/dev/null 2>&1; then
+			kill "$text_client_pid" >/dev/null 2>&1 || true
+		fi
+		wait "$text_client_pid" 2>/dev/null || true
+		text_client_pid=""
+		cat "$fixture/text-client.log" >&2 || true
+		strings "$fixture/text-client.raw" >&2 || true
+		die "ordinary tmux tty client did not attach and drive prefix+v"
+	}
+	jq -e '.schema == "engineos/tmux-text-client-proof-v1" and
+		.columns == 50 and .rows == 20' "$fixture/text-client.ready" >/dev/null ||
+		die "ordinary tmux tty client did not publish its PTY dimensions"
+	grep -aF 'TXT wayland:presentation:2' "$fixture/text-client.raw" >/dev/null &&
+		grep -aF 'TXT wayland:console:2' "$fixture/text-client.raw" >/dev/null &&
+		grep -aF 'Running as unit:' "$fixture/text-client.raw" >/dev/null ||
+		die "ordinary tmux tty client did not render console and presentation metadata"
+	[[ "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		show-option -gv @engineos-text-client 2>/dev/null || true)" == accepted ]] ||
+		die "ordinary tmux tty client command prompt did not execute"
+	for _ in {1..150}; do
+		jq -e '.mux.presentation.view_mode == "console" and
+			.mux.presentation.terminal_visible == true and
+			.input.mode == "terminal"' "$fixture/engineos/shell-state.json" \
+			>/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '.mux.presentation.view_mode == "console" and
+		.mux.presentation.terminal_visible == true and
+		.input.mode == "terminal" and (.output_views | length) == 2 and
+		all(.output_views[]; .model_ready and .rendered_pane_count > 0)' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "ordinary-client prefix+v did not update the graphical shell"
+	[[ "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		display-message -p -t "$shell_pane_id" \
+		'#{window_width}x#{window_height}')" == "$canonical_size" ]] ||
+		die "small ordinary tmux client changed graphical canonical geometry"
+	attached_size="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" list-clients -F \
+		'#{client_name}|#{client_width}x#{client_height}|#{client_termname}' | \
+		awk -F'|' '$1 !~ /^engineos-view-/ {print $2 "|" $3; exit}')"
+	[[ "$attached_size" == '50x20|xterm-256color' ]] ||
+		die "ordinary tty client was not attached at its independent padded size: $attached_size"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		pane-presentation -t "$shell_pane_id" app
+	for _ in {1..150}; do
+		jq -e '.mux.presentation.view_mode == "presentation" and
+			.mux.presentation.terminal_visible == false and
+			.input.mode == "graphical"' "$fixture/engineos/shell-state.json" \
+			>/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '.mux.presentation.view_mode == "presentation" and
+		.mux.presentation.terminal_visible == false and
+		.input.mode == "graphical"' "$fixture/engineos/shell-state.json" \
+		>/dev/null || die "graphical presentation did not recover after ordinary-client toggle"
+	touch "$fixture/text-client.release"
+	wait "$text_client_pid" || {
+		cat "$fixture/text-client.log" >&2 || true
+		die "ordinary tmux tty client did not detach cleanly"
+	}
+	text_client_pid=""
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		set-option -g 'status-format[0]' 'ENGINE-STATUS #{session_name}'
+	[[ "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		display-message -p -t "$shell_pane_id" \
+		'#{window_width}x#{window_height}')" == "$canonical_size" ]] ||
+		die "ordinary tty client detach changed graphical canonical geometry"
 	python - "$fixture/engineos/preview.sock" "$preview_png" \
 		"$shell_pane_id" <<'PY'
 import json

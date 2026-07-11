@@ -72,6 +72,28 @@ static int engine_mux_send_frame(int, uint16_t, uint64_t, uint64_t,
     const char *, size_t);
 static void engine_mux_client_free(struct engine_mux_client *);
 
+int
+engine_mux_frontend_owns_window(struct window *window)
+{
+	struct engine_mux_client *client;
+	struct engine_mux_view *view;
+	struct client *tmux_client;
+
+	if (window == NULL)
+		return (0);
+	TAILQ_FOREACH(client, &engine_mux_clients, entry) {
+		TAILQ_FOREACH(view, &client->views, entry) {
+			tmux_client = view->tmux_client;
+			if (tmux_client == NULL || tmux_client->session == NULL ||
+			    (tmux_client->flags & CLIENT_DEAD))
+				continue;
+			if (session_has(tmux_client->session, window))
+				return (1);
+		}
+	}
+	return (0);
+}
+
 static struct engine_mux_subscription *
 engine_mux_subscription_find(struct engine_mux_client *client, u_int pane_id)
 {

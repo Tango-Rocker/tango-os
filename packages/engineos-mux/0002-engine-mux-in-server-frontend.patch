@@ -7,11 +7,12 @@
 +	engine-mux-frontend.h \
 --- a/tmux.h
 +++ b/tmux.h
-@@ -2884,0 +2885,5 @@ int	 server_create_socket(uint64_t, char **);
+@@ -2884,0 +2885,6 @@ int	 server_create_socket(uint64_t, char **);
 +/* engine-mux-frontend.c */
 +int	 engine_mux_frontend_init(void);
 +void	 engine_mux_frontend_sync(void);
 +void	 engine_mux_frontend_free(void);
++int	 engine_mux_frontend_owns_window(struct window *);
 +
 --- a/server.c
 +++ b/server.c

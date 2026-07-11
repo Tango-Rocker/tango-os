@@ -14,6 +14,57 @@
 @@ -2912 +2912 @@
 -	if (c->flags & (CLIENT_CONTROL|CLIENT_SUSPENDED))
 +	if (c->flags & (CLIENT_CONTROL|CLIENT_SUSPENDED|CLIENT_GRAPHICAL))
+--- a/resize.c
++++ b/resize.c
+@@ -102,6 +102,9 @@ clients_with_window(struct window *w)
+	u_int		 n = 0;
+
+	TAILQ_FOREACH(loop, &clients, entry) {
++		if (!(loop->flags & CLIENT_GRAPHICAL) &&
++		    engine_mux_frontend_owns_window(w))
++			continue;
+		if (ignore_client_size(loop) || !session_has(loop->session, w))
+			continue;
+		if (++n > 1)
+@@ -150,6 +153,9 @@ clients_calculate_size(int type, int current, struct client *c,
+
+	/* Loop over the clients and work out the size. */
+	TAILQ_FOREACH(loop, &clients, entry) {
++		if (!(loop->flags & CLIENT_GRAPHICAL) &&
++		    engine_mux_frontend_owns_window(w))
++			continue;
+		if (loop != c && ignore_client_size(loop)) {
+			log_debug("%s: ignoring %s (1)", __func__, loop->name);
+			continue;
+@@ -221,6 +227,9 @@ skip:
+	 */
+	if (w != NULL) {
+		TAILQ_FOREACH(loop, &clients, entry) {
++			if (!(loop->flags & CLIENT_GRAPHICAL) &&
++			    engine_mux_frontend_owns_window(w))
++				continue;
+			if (loop != c && ignore_client_size(loop))
+				continue;
+			if (loop != c && skip_client(loop, type, current, s, w))
+@@ -289,6 +298,8 @@ default_window_size(struct client *c, struct session *s, struct window *w,
+	 * client and no window, use the default size as for manual type.
+	 */
+	if (type == WINDOW_SIZE_LATEST && c != NULL && !ignore_client_size(c)) {
++		if (!(c->flags & CLIENT_GRAPHICAL) && engine_mux_frontend_owns_window(w))
++			goto find_client;
+		*sx = c->tty.sx;
+		*sy = c->tty.sy - status_line_size(c);
+		*xpixel = c->tty.xpixel;
+@@ -302,6 +313,7 @@ default_window_size(struct client *c, struct session *s, struct window *w,
+	 * Ignore the given client if it is a control client - the creating
+	 * client should only affect the size if it is not a control client.
+	 */
++find_client:
+	if (c != NULL && (c->flags & CLIENT_CONTROL))
+		c = NULL;
+
+--- a/server-client.c
++++ b/server-client.c
 @@ -3106 +3106 @@
 -	if (c->flags & (CLIENT_CONTROL|CLIENT_SUSPENDED))
 +	if (c->flags & (CLIENT_CONTROL|CLIENT_SUSPENDED|CLIENT_GRAPHICAL))

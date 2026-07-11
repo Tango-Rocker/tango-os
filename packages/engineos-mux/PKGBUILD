@@ -1,6 +1,6 @@
 pkgname=engineos-mux
 pkgver=3.6b
-pkgrel=33
+pkgrel=34
 _commit=0623d1e968423ad0c192e0d8debf1258671063d5
 pkgdesc="EngineOS tmux 3.6b graphical frontend protocol foundation"
 arch=('x86_64')
@@ -20,17 +20,15 @@ source=(
   'engine-pane.c'
   'engine-pane-host.c'
 )
-sha256sums=(
-  '2c212f7ee2d925b01ec20ab5bb3a906c17b6a8652fe521fcaaf498f800b4d1fa'
-  '377d8420eb6bf2103bfc429829d90ed542fd9e9202c6780d122cb5ce4665cb5f'
-  'e2ff73579fc5ba57b35d212fb4f23b77983383bd1c933c491d7bc265d2396d90'
-  '4d2036cb8ecd35d1d14d97147d68db1ca3f92e8fd7b7785b5cc79603553b34fc'
-  '492a467aac874af3b49791e37be5bb572bfcf5eace28574aa514c15d7bc734b9'
-  'b25e86fc0715092e5790d567f8c363642f9f4ed171f3c0d15c86e9e03c54d8c7'
-  '38db77244832b7e2abe5e57f28dd4b08907ca400a5e815fd7db8713206e0ae3d'
-  '4a94b8db1a630f41201e218bf7d8cda3b45b820a1059f52216bc9b806b264399'
-  'ebfa4c5ca40656cfac4a883f98fc6ff81177af16d9fe6bc4c0de93b6558a8553'
-)
+sha256sums=('2c212f7ee2d925b01ec20ab5bb3a906c17b6a8652fe521fcaaf498f800b4d1fa'
+            '377d8420eb6bf2103bfc429829d90ed542fd9e9202c6780d122cb5ce4665cb5f'
+            'c7f3fbcd68f53f4227614e03cfb7e5f91d3069b68ad03dccf4ead6c13c742e11'
+            '1d8d061eaa8aca3df1ab4d0517c6fad2d62b7e8fe60e6aac637ed6b1e68febdf'
+            '492a467aac874af3b49791e37be5bb572bfcf5eace28574aa514c15d7bc734b9'
+            '0daefd9359e4dc3500a4525020d94ebf78f6b9cb06621356ed78537aa6b3f4f0'
+            'cdad7a4fb6c706fb77863825c42218351cc1d4ab37131a835fc81a7d92967b1a'
+            '4a94b8db1a630f41201e218bf7d8cda3b45b820a1059f52216bc9b806b264399'
+            'ebfa4c5ca40656cfac4a883f98fc6ff81177af16d9fe6bc4c0de93b6558a8553')
 
 prepare() {
   local _engineos_root

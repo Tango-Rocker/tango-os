@@ -99,7 +99,7 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
-  `engineos-mux 3.6b-33` with the decoder/renderer/control boundary in
+  `engineos-mux 3.6b-34` with the decoder/renderer/control boundary in
   `engineos-shell 0.1.0-50`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
@@ -162,7 +162,7 @@ These are historical proof artifacts only; they are not the active work path:
   resizing, ranged status-window selection, status-menu opening, and menu-item
   command activation. The shell routes pointer motion, buttons, and vertical
   scroll through that same boundary. The contract passes against the exact
-  `engineos-mux 3.6b-33` and `engineos-shell 0.1.0-50` package binaries. The
+  `engineos-mux 3.6b-34` and `engineos-shell 0.1.0-50` package binaries. The
   native renderer now keeps FreeType-rasterized, colour-keyed glyphs in a GPU
   texture atlas and draws them into double-buffered per-pane GPU targets.
   Sparse tmux cell damage is retained through the mux client, expanded only
@@ -260,7 +260,7 @@ These are historical proof artifacts only; they are not the active work path:
   lease, temporary graphical clients restore the previous owner on disconnect,
   destroyed or out-of-window views lose ownership, and the shell settles
   concurrent invalidations instead of retaining stale lease state. The exact
-  installed `engineos-mux 3.6b-33` and `engineos-shell 0.1.0-50` binaries pass
+  installed `engineos-mux 3.6b-34` and `engineos-shell 0.1.0-50` binaries pass
   the complete two-output contract through AMD/radeonsi GLES2. Every output
   now owns a layout-positioned mux scene root with a console buffer node for
   every pane. The live XDG toplevel/transient set is parented only beneath the
@@ -331,8 +331,21 @@ These are historical proof artifacts only; they are not the active work path:
   deterministic two-session contract maps a Wayland client and image only on
   the nonfocused output while proving focused input identity remains
   unchanged.
-  Direct-KMS clipping and simultaneous ordinary text-client acceptance remain
-  the next boundary.
+  Simultaneous ordinary local tmux-client acceptance now passes against the
+  same native pane tree. A real `xterm-256color` client attaches through a
+  50x20 PTY while two graphical output clients remain registered, renders the
+  graphical pane's live backing console plus
+  `wayland:presentation:2` metadata, executes the tmux command prompt, and
+  drives the native `prefix+v` binding. The graphical shell observes the
+  console transition and returns to the presentation, while the ordinary
+  client's smaller dimensions do not change the graphical canonical window
+  size before, during, or after attachment. The fork now excludes ordinary
+  clients from sizing only for windows owned by registered graphical views;
+  ordinary tmux sizing remains unchanged for all other windows. Package
+  `engineos-mux 3.6b-34`, the installed pixman contract, and the exact
+  installed AMD/radeonsi GLES2 contract pass. Direct-KMS clipping and a real
+  SSH-attached client are the next compatibility boundary before native
+  `/usr/bin/tmux` cutover.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 

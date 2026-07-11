@@ -61,5 +61,8 @@ meson compile -C build/mux
 ./tools/engineos/eos-test mux
 ```
 
-The next migration proofs are direct-KMS clipping and simultaneous ordinary
-text-client acceptance.
+The native contract also attaches an ordinary PTY-backed tmux client beside
+the graphical views, verifies backing-console and presentation metadata,
+drives `prefix+v`, and proves the smaller tty cannot replace graphical
+canonical sizing. The next migration proofs are direct-KMS clipping and a real
+SSH-attached tmux client.

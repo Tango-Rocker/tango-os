@@ -46,14 +46,19 @@ now covers the complete terminal and compound-presentation foundation:
   only that synthetic client's attached session and active window, identifies
   the client/view/output in the response, and rejects stale or foreign view
   IDs. The shell uses this scope for focused-output refreshes; caching and
-  rendering every nonfocused output concurrently is the next migration step.
+  rendering now remain live for every nonfocused output concurrently.
+- An ordinary `xterm-256color` client can attach through a real PTY beside two
+  graphical views. It renders the graphical pane's backing console and
+  presentation metadata, executes the tmux command prompt, and drives
+  `prefix + v`. Registered graphical views retain canonical window sizing, so
+  a smaller text client receives normal tmux padding instead of resizing the
+  desktop; windows without graphical views retain upstream sizing behavior.
 
 ## Remaining acceptance boundary
 
 Before cutover, prove real Falkon and Quake sessions, user-asset Quake capture
-and emergency release, simultaneous ordinary local and SSH tmux clients,
-terminal-image transport, independent per-output session models,
-direct-KMS clipping, the complete upstream suite,
+and emergency release, an ordinary client attached over SSH, direct-KMS
+clipping, the complete upstream suite,
 and the bare-metal boot/recovery gate. Native mode then becomes the default;
 only after that acceptance are the bridge, hooks, launch tokens, geometry
 files, shell-owned foot bootstrap, and rollback path removed.
