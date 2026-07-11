@@ -125,8 +125,18 @@ settle every affected output model before input resumes. Presentations,
 transients, and explicit pane previews resolve the pane's owning output even
 when it is not focused. The deterministic two-session contract maps a Wayland
 client and an image only on the nonfocused output while proving focused input
-identity is unchanged. Terminal image transport, direct-KMS clipping, final
-hardware acceptance, and legacy cutover remain open. Native
+identity is unchanged. Terminal image transport is now mux-owned rather than
+shell-local: `pane-image` retains bounded PNG/JPEG bytes, owner, revision, pane
+generation, and one graphical output lease in tmux. The frontend advertises
+`pane-image-v1` and returns versioned 64 KiB binary chunks; the shell validates
+the complete identity and byte count before decoding into the leased pane
+scene. Native `engine-image-preview` uses this command, while direct native
+pane-image mutation through `preview.sock` is rejected. The deterministic
+contract transports a multi-chunk image, retains two pane images, proves
+nonfocused output isolation, and proves an image appears with its console but
+never above its graphical presentation. Exact installed AMD/radeonsi packages
+pass the same contract. Direct-KMS clipping, final hardware acceptance, and
+legacy cutover remain open. Native
 `game` is now an
 authoritative launch/split presentation that survives respawn.
 `eos-app pane launch|split|view|signal|respawn|list` routes directly to

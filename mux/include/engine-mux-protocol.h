@@ -25,6 +25,7 @@ enum engine_mux_message_type {
 	ENGINE_MUX_PRESENTATION_MAP_REQUEST = 15,
 	ENGINE_MUX_PRESENTATION_UNMAP_REQUEST = 16,
 	ENGINE_MUX_PRESENTATION_RESOLVE_REQUEST = 17,
+	ENGINE_MUX_IMAGE_REQUEST = 18,
 	ENGINE_MUX_SERVER_HELLO = 0x8001,
 	ENGINE_MUX_SNAPSHOT = 0x8002,
 	ENGINE_MUX_GRID_SNAPSHOT = 0x8003,
@@ -44,12 +45,16 @@ enum engine_mux_message_type {
 	ENGINE_MUX_PRESENTATION_UNMAP_ACK = 0x8011,
 	ENGINE_MUX_PRESENTATION_RESOLVE = 0x8012,
 	ENGINE_MUX_STATE_INVALIDATED = 0x8013,
+	ENGINE_MUX_IMAGE_CHUNK = 0x8014,
 	ENGINE_MUX_ERROR = 0xffff,
 };
 
 #define ENGINE_MUX_GRID_VERSION 1u
 #define ENGINE_MUX_GRID_CELL_TEXT_MAX 32u
 #define ENGINE_MUX_INPUT_MAX 64u
+#define ENGINE_MUX_IMAGE_VERSION 1u
+#define ENGINE_MUX_IMAGE_CHUNK_MAX (64u * 1024u)
+#define ENGINE_MUX_IMAGE_BYTES_MAX (16u * 1024u * 1024u)
 
 enum engine_mux_grid_flags {
 	ENGINE_MUX_GRID_ALTERNATE = 1u << 0,
@@ -141,6 +146,29 @@ struct engine_mux_input_header {
 
 struct engine_mux_ui_invalidation {
 	uint32_t view_id;
+} __attribute__((packed));
+
+struct engine_mux_image_request {
+	uint32_t pane_id;
+	uint32_t generation;
+	uint32_t image_id;
+	uint32_t offset;
+	uint32_t max_bytes;
+} __attribute__((packed));
+
+enum engine_mux_image_flags {
+	ENGINE_MUX_IMAGE_LAST_CHUNK = 1u << 0,
+};
+
+struct engine_mux_image_chunk_header {
+	uint16_t version;
+	uint16_t flags;
+	uint32_t pane_id;
+	uint32_t generation;
+	uint32_t image_id;
+	uint32_t offset;
+	uint32_t total_bytes;
+	uint32_t chunk_bytes;
 } __attribute__((packed));
 
 /* All integer fields are encoded in network byte order. */

@@ -31,7 +31,7 @@
 +};
 +TAILQ_HEAD(engine_pane_surfaces, engine_pane_surface);
 +
-@@ -1170,0 +1197,16 @@ struct window_pane {
+@@ -1170,0 +1197,24 @@ struct window_pane {
 +	enum engine_pane_presentation engine_presentation;
 +	enum engine_pane_presentation engine_saved_presentation;
 +	enum engine_pane_view_mode engine_view_mode;
@@ -47,8 +47,16 @@
 +	u_int		 engine_lease_client_id;
 +	u_int		 engine_lease_view_id;
 +	int		 engine_mapped;
++	u_int		 engine_image_id;
++	char		*engine_image_owner;
++	char		*engine_image_mime;
++	u_char		*engine_image_data;
++	size_t		 engine_image_size;
++	u_int		 engine_image_serial;
++	u_int		 engine_image_lease_client_id;
++	u_int		 engine_image_lease_view_id;
 +
-@@ -2888,0 +2930,10 @@ void	 engine_mux_frontend_free(void);
+@@ -2888,0 +2930,11 @@ void	 engine_mux_frontend_free(void);
 +/* engine-pane.c */
 +const char *engine_pane_presentation_name(const struct window_pane *);
 +const char *engine_pane_view_mode_name(const struct window_pane *);
@@ -57,6 +65,7 @@
 +int	 engine_pane_surface_unmap(struct window_pane *, pid_t, u_int, char **);
 +struct window_pane *engine_pane_resolve_pid(pid_t, char **);
 +void	 engine_pane_surface_clear(struct window_pane *);
++void	 engine_pane_image_clear(struct window_pane *);
 +void	 engine_pane_sync_all(void);
 +
 --- a/window.c
@@ -64,14 +73,16 @@
 @@ -936,0 +937,2 @@ window_pane_create(struct window *w, u_int sx, u_int sy, u_int hlimit)
 +	wp->engine_generation = 1;
 +	TAILQ_INIT(&wp->engine_surfaces);
-@@ -1013,0 +1016,3 @@ window_pane_destroy(struct window_pane *wp)
+@@ -1013,0 +1016,4 @@ window_pane_destroy(struct window_pane *wp)
 +	engine_pane_surface_clear(wp);
++	engine_pane_image_clear(wp);
 +	free(wp->engine_scope);
 +	free(wp->engine_command);
 --- a/cmd.c
 +++ b/cmd.c
-@@ -119,0 +120,6 @@ extern const struct cmd_entry cmd_wait_for_entry;
+@@ -119,0 +120,7 @@ extern const struct cmd_entry cmd_wait_for_entry;
 +extern const struct cmd_entry cmd_launch_pane_app_entry;
++extern const struct cmd_entry cmd_pane_image_entry;
 +extern const struct cmd_entry cmd_pane_presentation_entry;
 +extern const struct cmd_entry cmd_respawn_pane_app_entry;
 +extern const struct cmd_entry cmd_select_pane_surface_entry;
@@ -79,7 +90,8 @@
 +extern const struct cmd_entry cmd_split_pane_app_entry;
 @@ -151,0 +157 @@ const struct cmd_entry *cmd_table[] = {
 +	&cmd_launch_pane_app_entry,
-@@ -169,0 +176 @@ const struct cmd_entry *cmd_table[] = {
+@@ -169,0 +176,2 @@ const struct cmd_entry *cmd_table[] = {
++	&cmd_pane_image_entry,
 +	&cmd_pane_presentation_entry,
 @@ -179,0 +187 @@ const struct cmd_entry *cmd_table[] = {
 +	&cmd_respawn_pane_app_entry,

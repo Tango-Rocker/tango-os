@@ -100,7 +100,7 @@ and statistics; linked outputs may resolve the same canonical grid but never
 share compositor render targets. Grid ownership is preserved when focus moves
 between sessions, and the contract proves nonfocused damage advances the
 correct output renderer.
-Terminal image transport, direct-KMS clipping, ordinary simultaneous
+Direct-KMS clipping, ordinary simultaneous
 text-client acceptance, and final live hardware acceptance remain before
 native mode becomes the default.
 
@@ -173,12 +173,19 @@ therefore remains open while its tmux client changes sessions.
 
 ## Image Preview
 
-The shell listens on `$XDG_RUNTIME_DIR/engineos/preview.sock`, or the equivalent
-path under `$ENGINEOS_STATE_DIR`. The socket accepts same-UID peers, uses
-newline-framed bounded JSON, and lives in a private state directory.
+In native mux mode, pane images are authoritative tmux state. `pane-image`
+loads a bounded PNG/JPEG into the pane console, publishes its image ID, owner,
+byte count, MIME type, generation, and client-view lease, and serves the bytes
+to the shell in versioned 64 KiB chunks. `engine-image-preview` selects this
+transport automatically when `ENGINEOS_MUX_MODE=native`; direct native pane
+image changes through shell IPC are rejected. Images are visible only with the
+backing console and only on the output that owns their lease.
 
-`engine-image-preview` includes tmux pane identity and client tty. The shell
-resolves the exact registered terminal output; ambiguous ownership is rejected.
+The shell still listens on `$XDG_RUNTIME_DIR/engineos/preview.sock`, or the
+equivalent path under `$ENGINEOS_STATE_DIR`, for compositor-owned wallpaper and
+the staged legacy desktop. The socket accepts same-UID peers, uses newline-
+framed bounded JSON, and lives in a private state directory.
+
 PNG/JPEG parsing lives in `shell/src/engineos-image.c`, decoded dimensions are
 bounded, and the scene buffer is clipped to the target pane.
 

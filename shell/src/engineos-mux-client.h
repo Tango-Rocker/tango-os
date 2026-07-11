@@ -82,6 +82,12 @@ struct engineos_mux_pane_model {
 	uint32_t active_surface_id;
 	uint32_t lease_client_id;
 	uint32_t lease_view_id;
+	uint32_t image_id;
+	uint32_t image_bytes;
+	uint32_t image_lease_client_id;
+	uint32_t image_lease_view_id;
+	char image_mime[16];
+	char *image_owner;
 	struct engineos_mux_grid_model grid;
 };
 
@@ -193,6 +199,10 @@ bool engineos_mux_client_send_key(struct engineos_mux_client *client,
 bool engineos_mux_client_send_mouse(struct engineos_mux_client *client,
 	uint32_t view_id, uint32_t x, uint32_t y, const char *event,
 	const char *button, uint32_t modifiers, bool *grid_changed,
+	char *error, size_t error_size);
+bool engineos_mux_client_request_image(struct engineos_mux_client *client,
+	uint32_t pane_id, uint32_t generation, uint32_t image_id,
+	uint32_t expected_bytes, uint8_t **data, size_t *size,
 	char *error, size_t error_size);
 bool engineos_mux_client_request_ui(struct engineos_mux_client *client,
 	uint32_t view_id, bool *grid_changed, char *error, size_t error_size);

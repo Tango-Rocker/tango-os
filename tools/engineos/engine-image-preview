@@ -377,6 +377,61 @@ def send_request(request: dict[str, object], sock_path: str) -> tuple[dict[str, 
     return response, None
 
 
+def native_mux_image_mode(args: argparse.Namespace) -> bool:
+    return (
+        os.environ.get("ENGINEOS_MUX_MODE") == "native"
+        and not args.wallpaper
+        and not args.hide_wallpaper
+    )
+
+
+def native_mux_binary() -> str:
+    return os.environ.get("ENGINEOS_MUX_BIN") or "engine-mux"
+
+
+def send_native_mux_image(
+    args: argparse.Namespace, request: dict[str, object]
+) -> tuple[dict[str, object] | None, str | None]:
+    pane = os.environ.get("TMUX_PANE")
+    if not pane:
+        return None, "native mux pane image requires TMUX_PANE"
+    mux = native_mux_binary()
+    if args.ping:
+        command = [mux, "display-message", "-p", "-t", pane, "#{pane_id}"]
+    elif args.hide:
+        command = [mux, "pane-image", "-t", pane, "hide"]
+        owner = request.get("owner")
+        if isinstance(owner, str) and owner:
+            command.append(owner)
+    else:
+        path = request.get("path")
+        owner = request.get("owner")
+        if not isinstance(path, str) or not isinstance(owner, str) or not owner:
+            return None, "native mux image request is incomplete"
+        command = [mux, "pane-image", "-t", pane, "show", path, owner]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5.0,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f"native mux image command failed: {exc}"
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip()
+        return None, message or f"native mux image command exited {result.returncode}"
+    if args.ping and result.stdout.strip() != pane:
+        return None, "native mux image command resolved a different pane"
+    return {
+        "status": "ok",
+        "transport": "engine-mux/pane-image-v1",
+        "pane_id": pane,
+    }, None
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Request an EngineOS shell image preview")
     action = parser.add_mutually_exclusive_group(required=True)
@@ -434,10 +489,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return args
 
 
-def wait_then_hide(pid: int, owner: str, sock_path: str) -> int:
+def wait_then_hide(args: argparse.Namespace, pid: int, owner: str, sock_path: str) -> int:
     while process_exists(pid):
         time.sleep(0.25)
-    _, ipc_error = send_request({"version": 1, "op": "hide", "owner": owner}, sock_path)
+    request: dict[str, object] = {"version": 1, "op": "hide", "owner": owner}
+    if native_mux_image_mode(args):
+        _, ipc_error = send_native_mux_image(args, request)
+    else:
+        _, ipc_error = send_request(request, sock_path)
     if ipc_error is not None:
         return error(ipc_error, 1)
     return 0
@@ -518,22 +577,32 @@ def main(argv: list[str]) -> int:
     if args.wait_pid is not None:
         if not args.owner:
             return error("--wait-pid requires --owner", 2)
-        return wait_then_hide(args.wait_pid, args.owner, sock_path)
+        return wait_then_hide(args, args.wait_pid, args.owner, sock_path)
 
     request, request_error = build_request(args)
     if request_error is not None or request is None:
         return error(request_error or "failed to build request", 2)
 
     if args.dry_run:
+        # Keep the existing JSON request visible while identifying the authority
+        # that will consume it in native mode.
+        if native_mux_image_mode(args):
+            request["transport"] = "engine-mux/pane-image-v1"
         print(json.dumps(request, sort_keys=True, separators=(",", ":")))
         return 0
 
-    response, ipc_error = send_request(request, sock_path)
+    if native_mux_image_mode(args):
+        response, ipc_error = send_native_mux_image(args, request)
+    else:
+        response, ipc_error = send_request(request, sock_path)
     if ipc_error is not None:
         return error(ipc_error, 1)
     if args.ping:
         caps = response.get("capabilities", []) if response is not None else []
-        print("engine-image-preview: shell preview IPC ready", file=sys.stderr)
+        if native_mux_image_mode(args):
+            print("engine-image-preview: native mux image transport ready", file=sys.stderr)
+        else:
+            print("engine-image-preview: shell preview IPC ready", file=sys.stderr)
         if caps:
             print("engine-image-preview: capabilities=" + ",".join(map(str, caps)), file=sys.stderr)
     elif args.quick_view and parent_looks_like_mc():

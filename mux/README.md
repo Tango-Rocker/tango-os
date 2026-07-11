@@ -11,7 +11,7 @@ session, window, and pane structures.
 `$XDG_RUNTIME_DIR/engineos/mux.sock`. Frames have a fixed network-byte-order
 header and a bounded payload. The implemented v1 messages are handshake,
 complete layout snapshot, full binary terminal-grid snapshot, sparse grid
-damage, scrollback pages, pane input, graphical-view registration, tmux key
+damage, scrollback pages, pane image chunks, pane input, graphical-view registration, tmux key
 input, graphical mouse input, focused-view transfer, semantic UI models, and
 explicit errors. Snapshot requests can name a registered graphical view; the
 response identifies its frontend client, view, and output and contains only
@@ -47,6 +47,12 @@ sequences retain tmux's button and overlay state across frames, with an
 event-loop barrier between actions. The contract proves drag selection, border
 resize, ranged status selection, menu opening, and menu-item activation.
 
+`pane-image` makes encoded PNG/JPEG data part of the authoritative pane
+console. Snapshots carry its image ID, byte count, MIME type, owner, generation,
+and client-view lease. A graphical frontend requests the exact identity in
+bounded 64 KiB chunks; stale image IDs and invalid ranges fail explicitly.
+The compositor decodes only after the declared byte count has been validated.
+
 Run a local contract proof:
 
 ```bash
@@ -55,5 +61,5 @@ meson compile -C build/mux
 ./tools/engineos/eos-test mux
 ```
 
-The next migration proof is retaining and rendering each output's scoped model
-concurrently, followed by terminal-image transport and direct-KMS acceptance.
+The next migration proofs are direct-KMS clipping and simultaneous ordinary
+text-client acceptance.

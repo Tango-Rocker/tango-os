@@ -178,8 +178,10 @@ struct engineos_preview_surface {
 	int image_height;
 	int opacity_percent;
 	bool native_pane;
+	bool mux_owned;
 	uint32_t pane_id;
 	uint32_t pane_generation;
+	uint32_t mux_image_id;
 	uint32_t lease_client_id;
 	uint32_t lease_view_id;
 };
@@ -426,7 +428,7 @@ static struct engineos_mux_pane_output_scene *find_mux_pane_output_scene(
 static struct engineos_mux_pane_model *find_shell_pane_model(
 	struct engineos_shell_server *server, uint32_t pane_id,
 	uint32_t generation);
-static void sync_native_preview_leases(struct engineos_shell_server *server,
+static bool sync_native_preview_leases(struct engineos_shell_server *server,
 	const char *reason);
 static bool refresh_native_output_snapshots(
 	struct engineos_shell_server *server, bool *grid_changed,
@@ -2064,13 +2066,16 @@ static void json_write_string(FILE *file, const char *value) {
 static void write_preview_json(FILE *file,
 		const struct engineos_preview_surface *preview) {
 	fprintf(file, "{\"visible\": %s, \"path\": ",
-		preview != NULL && preview->scene_buffer != NULL ? "true" : "false");
+		preview != NULL && preview->scene_buffer != NULL &&
+		preview->scene_buffer->node.enabled ? "true" : "false");
 	json_write_string(file, preview != NULL ? preview->path : NULL);
 	fprintf(file, ", \"owner\": ");
 	json_write_string(file, preview != NULL ? preview->owner : NULL);
 	fprintf(file,
-		", \"native_pane\": %s, \"pane_id\": \"%%%u\", \"generation\": %u, \"lease_client_id\": %u, \"lease_view_id\": %u, \"x\": %d, \"y\": %d, \"width\": %d, \"height\": %d, \"image_width\": %d, \"image_height\": %d}",
+		", \"native_pane\": %s, \"mux_owned\": %s, \"mux_image_id\": %u, \"pane_id\": \"%%%u\", \"generation\": %u, \"lease_client_id\": %u, \"lease_view_id\": %u, \"x\": %d, \"y\": %d, \"width\": %d, \"height\": %d, \"image_width\": %d, \"image_height\": %d}",
 		preview != NULL && preview->native_pane ? "true" : "false",
+		preview != NULL && preview->mux_owned ? "true" : "false",
+		preview != NULL ? preview->mux_image_id : 0,
 		preview != NULL ? preview->pane_id : 0,
 		preview != NULL ? preview->pane_generation : 0,
 		preview != NULL ? preview->lease_client_id : 0,
@@ -2472,8 +2477,10 @@ static void reset_image_surface(struct engineos_preview_surface *surface) {
 	surface->image_height = 0;
 	surface->opacity_percent = 0;
 	surface->native_pane = false;
+	surface->mux_owned = false;
 	surface->pane_id = 0;
 	surface->pane_generation = 0;
+	surface->mux_image_id = 0;
 	surface->lease_client_id = 0;
 	surface->lease_view_id = 0;
 }
@@ -3189,7 +3196,11 @@ static void sync_native_presentation_visibility(
 		sync_pointer_constraint(server, reason);
 		sync_cursor_image(server, reason);
 	}
-	sync_native_preview_leases(server, reason);
+	if (!sync_native_preview_leases(server, reason)) {
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+		return;
+	}
 	schedule_outputs(server);
 }
 
@@ -3518,10 +3529,110 @@ static bool show_image_preview(struct engineos_shell_server *server,
 	return true;
 }
 
-static void sync_native_preview_leases(struct engineos_shell_server *server,
+static struct engineos_preview_surface *find_mux_image_preview(
+		struct engineos_shell_server *server, uint32_t pane_id,
+		uint32_t generation, uint32_t image_id) {
+	struct engineos_preview_surface *preview;
+	wl_list_for_each(preview, &server->previews, link) {
+		if (preview->mux_owned && preview->pane_id == pane_id &&
+				preview->pane_generation == generation &&
+				preview->mux_image_id == image_id)
+			return preview;
+	}
+	return NULL;
+}
+
+static bool create_mux_image_preview(struct engineos_shell_server *server,
+		struct engineos_mux_pane_model *pane,
+		struct engineos_mux_pane_output_scene *output_scene,
+		char *error, size_t error_size) {
+	uint8_t *encoded = NULL;
+	size_t encoded_size = 0;
+	if (!engineos_mux_client_request_image(&server->mux_client, pane->pane_id,
+			pane->generation, pane->image_id, pane->image_bytes,
+			&encoded, &encoded_size, error, error_size))
+		return false;
+	int image_width = 0, image_height = 0;
+	struct wlr_buffer *buffer = engineos_image_decode_memory(encoded,
+		encoded_size, pane->image_mime, &image_width, &image_height,
+		error, error_size);
+	free(encoded);
+	if (buffer == NULL)
+		return false;
+	long dest_width = output_scene->stats.width;
+	long dest_height = dest_width * image_height / image_width;
+	if (dest_height > output_scene->stats.height) {
+		dest_height = output_scene->stats.height;
+		dest_width = dest_height * image_width / image_height;
+	}
+	if (dest_width <= 0 || dest_height <= 0 || dest_width > INT_MAX ||
+			dest_height > INT_MAX) {
+		wlr_buffer_drop(buffer);
+		snprintf(error, error_size, "mux image destination is invalid");
+		return false;
+	}
+	hide_matching_image_previews(server, NULL, true, pane->pane_id,
+		pane->generation, "replace-mux-pane-image");
+	struct engineos_preview_surface *preview = calloc(1, sizeof(*preview));
+	if (preview == NULL) {
+		wlr_buffer_drop(buffer);
+		snprintf(error, error_size, "failed to allocate mux image state");
+		return false;
+	}
+	preview->buffer = buffer;
+	preview->scene_buffer = wlr_scene_buffer_create(output_scene->tree, buffer);
+	if (preview->scene_buffer == NULL) {
+		wlr_buffer_drop(buffer);
+		preview->buffer = NULL;
+		free(preview);
+		snprintf(error, error_size, "failed to create mux image scene buffer");
+		return false;
+	}
+	char path[96];
+	snprintf(path, sizeof(path), "mux://pane/%u/image/%u", pane->pane_id,
+		pane->image_id);
+	preview->path = strdup(path);
+	preview->owner = strdup(pane->image_owner);
+	if (preview->path == NULL || preview->owner == NULL) {
+		reset_image_surface(preview);
+		free(preview);
+		snprintf(error, error_size, "failed to retain mux image identity");
+		return false;
+	}
+	preview->native_pane = true;
+	preview->mux_owned = true;
+	preview->pane_id = pane->pane_id;
+	preview->pane_generation = pane->generation;
+	preview->mux_image_id = pane->image_id;
+	preview->lease_client_id = pane->image_lease_client_id;
+	preview->lease_view_id = pane->image_lease_view_id;
+	preview->image_width = image_width;
+	preview->image_height = image_height;
+	preview->width = (int)dest_width;
+	preview->height = (int)dest_height;
+	preview->x = (output_scene->stats.width - preview->width) / 2;
+	preview->y = (output_scene->stats.height - preview->height) / 2;
+	wlr_scene_buffer_set_dest_size(preview->scene_buffer,
+		preview->width, preview->height);
+	wlr_scene_node_set_position(&preview->scene_buffer->node,
+		preview->x, preview->y);
+	wlr_scene_node_set_enabled(&preview->scene_buffer->node,
+		!pane->presentation_mapped || strcmp(pane->view_mode, "console") == 0);
+	wlr_scene_node_raise_to_top(&preview->scene_buffer->node);
+	wl_list_insert(server->previews.prev, &preview->link);
+	wlr_log(WLR_INFO,
+		"mux image received pane=%%%u generation=%u image_id=%u bytes=%zu mime=%s owner=%s lease=%u:%u image=%dx%d size=%dx%d",
+		pane->pane_id, pane->generation, pane->image_id, encoded_size,
+		pane->image_mime, pane->image_owner, pane->image_lease_client_id,
+		pane->image_lease_view_id, image_width, image_height,
+		preview->width, preview->height);
+	return true;
+}
+
+static bool sync_native_preview_leases(struct engineos_shell_server *server,
 		const char *reason) {
 	if (server->mux_mode != ENGINEOS_MUX_NATIVE)
-		return;
+		return true;
 	struct engineos_preview_surface *preview, *tmp;
 	bool removed = false;
 	wl_list_for_each_safe(preview, tmp, &server->previews, link) {
@@ -3533,13 +3644,19 @@ static void sync_native_preview_leases(struct engineos_shell_server *server,
 			output_for_pane_model(server, pane);
 		struct engineos_mux_pane_scene *pane_scene = pane != NULL ?
 			find_mux_pane_scene(server, pane->pane_id, pane->generation) : NULL;
-		uint32_t lease_client_id = pane != NULL && pane->presentation_mapped ?
-			pane->lease_client_id : server->mux_client.frontend_client_id;
-		uint32_t lease_view_id = pane != NULL && pane->presentation_mapped ?
-			pane->lease_view_id :
-			(model_output != NULL ? model_output->mux_view_id : 0);
+		uint32_t lease_client_id = preview->mux_owned && pane != NULL ?
+			pane->image_lease_client_id :
+			(pane != NULL && pane->presentation_mapped ? pane->lease_client_id :
+			 server->mux_client.frontend_client_id);
+		uint32_t lease_view_id = preview->mux_owned && pane != NULL ?
+			pane->image_lease_view_id :
+			(pane != NULL && pane->presentation_mapped ? pane->lease_view_id :
+			 (model_output != NULL ? model_output->mux_view_id : 0));
+		bool image_current = !preview->mux_owned || (pane != NULL &&
+			pane->image_id == preview->mux_image_id &&
+			pane->image_id != 0);
 		struct engineos_mux_pane_output_scene *output_scene =
-			pane_scene != NULL && lease_client_id ==
+			image_current && pane_scene != NULL && lease_client_id ==
 				server->mux_client.frontend_client_id && lease_view_id != 0 ?
 			find_mux_pane_output_scene(pane_scene, lease_view_id) : NULL;
 		if (output_scene == NULL) {
@@ -3558,13 +3675,61 @@ static void sync_native_preview_leases(struct engineos_shell_server *server,
 				output_scene->tree);
 		preview->lease_client_id = lease_client_id;
 		preview->lease_view_id = lease_view_id;
+		if (preview->mux_owned) {
+			long width = output_scene->stats.width;
+			long height = width * preview->image_height / preview->image_width;
+			if (height > output_scene->stats.height) {
+				height = output_scene->stats.height;
+				width = height * preview->image_width / preview->image_height;
+			}
+			preview->width = (int)width;
+			preview->height = (int)height;
+			preview->x = (output_scene->stats.width - preview->width) / 2;
+			preview->y = (output_scene->stats.height - preview->height) / 2;
+			wlr_scene_buffer_set_dest_size(preview->scene_buffer,
+				preview->width, preview->height);
+			wlr_scene_node_set_position(&preview->scene_buffer->node,
+				preview->x, preview->y);
+			wlr_scene_node_set_enabled(&preview->scene_buffer->node,
+				!pane->presentation_mapped ||
+				strcmp(pane->view_mode, "console") == 0);
+		}
 		wlr_scene_node_raise_to_top(&preview->scene_buffer->node);
+	}
+	struct engineos_shell_output *output;
+	wl_list_for_each(output, &server->outputs, link) {
+		for (size_t index = 0; output->mux_registered &&
+				index < output->mux_snapshot.pane_count; index++) {
+			struct engineos_mux_pane_model *pane =
+				&output->mux_snapshot.panes[index];
+			if (pane->image_id == 0 || pane->image_lease_client_id !=
+					server->mux_client.frontend_client_id ||
+					pane->image_lease_view_id != output->mux_view_id ||
+					find_mux_image_preview(server, pane->pane_id,
+						pane->generation, pane->image_id) != NULL)
+				continue;
+			struct engineos_mux_pane_scene *pane_scene = find_mux_pane_scene(
+				server, pane->pane_id, pane->generation);
+			struct engineos_mux_pane_output_scene *output_scene =
+				pane_scene != NULL ? find_mux_pane_output_scene(pane_scene,
+					output->mux_view_id) : NULL;
+			char error[256] = {0};
+			if (output_scene == NULL || !create_mux_image_preview(server, pane,
+					output_scene, error, sizeof(error))) {
+				wlr_log(WLR_ERROR,
+					"mux image synchronization failed pane=%%%u image=%u: %s",
+					pane->pane_id, pane->image_id,
+					error[0] != '\0' ? error : "output scene unavailable");
+				return false;
+			}
+		}
 	}
 	if (removed) {
 		write_shell_state(server,
 			reason != NULL ? reason : "native-preview-lease-lost");
 		schedule_outputs(server);
 	}
+	return true;
 }
 
 static bool compute_wallpaper_box(struct engineos_shell_server *server,
@@ -3764,6 +3929,11 @@ static void handle_preview_request_json(struct engineos_shell_server *server,
 		return;
 	}
 	if (strcmp(op, "hide") == 0) {
+		if (server->mux_mode == ENGINEOS_MUX_NATIVE) {
+			preview_write_response(client_fd, "error",
+				"native pane images are owned by engine-mux pane-image");
+			return;
+		}
 		char owner[128] = {0};
 		json_extract_string(request, "owner", owner, sizeof(owner));
 		struct json_object *pane_object = NULL;
@@ -4118,6 +4288,11 @@ static void handle_preview_request_json(struct engineos_shell_server *server,
 	}
 	if (strcmp(op, "show") != 0) {
 		preview_write_response(client_fd, "error", "unsupported op");
+		return;
+	}
+	if (server->mux_mode == ENGINEOS_MUX_NATIVE) {
+		preview_write_response(client_fd, "error",
+			"native pane images are owned by engine-mux pane-image");
 		return;
 	}
 
@@ -4511,12 +4686,19 @@ static void write_shell_state(struct engineos_shell_server *server,
 		fprintf(file, ", \"view_mode\": ");
 		json_write_string(file, pane->view_mode);
 		fprintf(file,
-			", \"mapped\": %s, \"surface_tabs\": %u, \"active_surface_id\": %u, \"lease_client_id\": %u, \"lease_view_id\": %u, \"lease_owned_by_focused_view\": %s, \"grid\": {\"ready\": %s, \"subscribed\": %s, \"revision\": %llu, \"columns\": %u, \"rows\": %u, \"nonblank_cells\": %u}, \"scene\": {\"rendered\": %s, \"output_scene_count\": %zu, \"terminal_visible\": %s, \"pixel_x\": %d, \"pixel_y\": %d, \"pixel_width\": %d, \"pixel_height\": %d, \"glyph_cells\": %u, \"damaged_cells\": %u, \"nonblank_pixels\": %u, \"frame\": %llu, \"renderer\": ",
+			", \"mapped\": %s, \"surface_tabs\": %u, \"active_surface_id\": %u, \"lease_client_id\": %u, \"lease_view_id\": %u, \"lease_owned_by_focused_view\": %s, \"image\": {\"id\": %u, \"bytes\": %u, \"lease_client_id\": %u, \"lease_view_id\": %u, \"mime\": ",
 			pane->presentation_mapped ? "true" : "false",
 			pane->surface_tabs, pane->active_surface_id,
 			pane->lease_client_id, pane->lease_view_id,
 			pane->lease_view_id != 0 && pane->lease_view_id ==
 				server->mux_client.primary_view_id ? "true" : "false",
+			pane->image_id, pane->image_bytes, pane->image_lease_client_id,
+			pane->image_lease_view_id);
+		json_write_string(file, pane->image_id != 0 ? pane->image_mime : NULL);
+		fprintf(file, ", \"owner\": ");
+		json_write_string(file, pane->image_owner);
+		fprintf(file,
+			"}, \"grid\": {\"ready\": %s, \"subscribed\": %s, \"revision\": %llu, \"columns\": %u, \"rows\": %u, \"nonblank_cells\": %u}, \"scene\": {\"rendered\": %s, \"output_scene_count\": %zu, \"terminal_visible\": %s, \"pixel_x\": %d, \"pixel_y\": %d, \"pixel_width\": %d, \"pixel_height\": %d, \"glyph_cells\": %u, \"damaged_cells\": %u, \"nonblank_pixels\": %u, \"frame\": %llu, \"renderer\": ",
 			grid != NULL && grid->ready ? "true" : "false",
 			grid != NULL && grid->subscribed ? "true" : "false",
 			(unsigned long long)(grid != NULL ? grid->revision : 0),

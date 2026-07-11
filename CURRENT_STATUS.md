@@ -66,7 +66,7 @@ These are historical proof artifacts only; they are not the active work path:
   `engineos-tmux-pane-bridge` reports focus and geometry from tmux hooks
   without proxy tabs or a polling daemon. Cube/engine pane launches still use
   the existing `launch-bounds/*.env` path. The 2026-07-09/10 deploy refreshed
-  `engineos-shell 0.1.0-17`, `engineos-tools 0.1.0-35`, and
+  `engineos-shell 0.1.0-17`, `engineos-tools 0.1.0-36`, and
   `engineos-config 0.1.0-3`; force-installed the managed tmux config and
   `/usr/local/bin/engineos-tmux-pane-bridge`; and left
   `/run/user/1000/engineos/shell-state.json` JSON-readable with
@@ -84,7 +84,7 @@ These are historical proof artifacts only; they are not the active work path:
   also replaces tmux's client-terminating bare `new-session` action with
   detached creation followed by an explicit switch of the invoking client.
   The EngineOS command-surface hardening is deployed through
-  `engineos-tools 0.1.0-35`: `eos-source-test` clears installed-session
+  `engineos-tools 0.1.0-36`: `eos-source-test` clears installed-session
   contamination, `eos-proof` fails closed on required evidence, repeatable
   package selection is normalized through `eos-ci local`, and
   `eos-runtime shell restart-live` only reports success when a new
@@ -99,8 +99,8 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
-  `engineos-mux 3.6b-32` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-49`, but native mode is not yet the live desktop
+  `engineos-mux 3.6b-33` with the decoder/renderer/control boundary in
+  `engineos-shell 0.1.0-50`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
@@ -162,7 +162,7 @@ These are historical proof artifacts only; they are not the active work path:
   resizing, ranged status-window selection, status-menu opening, and menu-item
   command activation. The shell routes pointer motion, buttons, and vertical
   scroll through that same boundary. The contract passes against the exact
-  `engineos-mux 3.6b-32` and `engineos-shell 0.1.0-49` package binaries. The
+  `engineos-mux 3.6b-33` and `engineos-shell 0.1.0-50` package binaries. The
   native renderer now keeps FreeType-rasterized, colour-keyed glyphs in a GPU
   texture atlas and draws them into double-buffered per-pane GPU targets.
   Sparse tmux cell damage is retained through the mux client, expanded only
@@ -260,25 +260,28 @@ These are historical proof artifacts only; they are not the active work path:
   lease, temporary graphical clients restore the previous owner on disconnect,
   destroyed or out-of-window views lose ownership, and the shell settles
   concurrent invalidations instead of retaining stale lease state. The exact
-  installed `engineos-mux 3.6b-32` and `engineos-shell 0.1.0-49` binaries pass
+  installed `engineos-mux 3.6b-33` and `engineos-shell 0.1.0-50` binaries pass
   the complete two-output contract through AMD/radeonsi GLES2. Every output
   now owns a layout-positioned mux scene root with a console buffer node for
   every pane. The live XDG toplevel/transient set is parented only beneath the
   leased output's clipped pane subtree; nonowners keep their console copies,
   and a lease outside this compositor detaches and hides the presentation
   subtree. `shell-state.json` reports root coordinates, pane-copy counts, and
-  bound versus visible presentation surfaces per output. Native pane previews
-  are now keyed by pane ID, generation, frontend client, and output-view lease,
-  parented inside the leased pane subtree, rejected when the lease belongs to
-  another graphical client, and reported per output in `shell-state.json`.
-  The preview model is no longer a global singleton: it retains one decoded
-  image per native pane, including pane `%0`, keys each entry by pane ID,
-  generation, frontend client, and output-view lease, and permits owner-scoped
-  removal without disturbing sibling panes. `shell-state.json` publishes the
-  complete `previews` array and per-output counts. The deterministic contract
-  renders two pane images simultaneously and proves that removing either one
-  leaves the other intact; the radeonsi contract also proves their owning
-  output and the legacy preview contract remains green. Native game
+  bound versus visible presentation surfaces per output. Native pane images
+  are now authoritative tmux console state rather than shell-local previews.
+  `pane-image` retains bounded PNG/JPEG bytes, MIME type, owner, image ID, pane
+  generation, and a client-view lease. The frontend advertises
+  `pane-image-v1` and transports versioned 64 KiB chunks; the shell validates
+  the full identity and byte count before memory decoding into the leased pane
+  scene. `engine-image-preview` selects this path in native mode, and the shell
+  rejects direct native pane-image mutation over `preview.sock`. Images are
+  hidden above live graphical presentations and revealed with their backing
+  consoles. `shell-state.json` publishes mux image metadata, decoded scene
+  identity, and per-output visibility. The deterministic contract transports
+  a multi-chunk image larger than 64 KiB, retains two independent pane images,
+  proves owner-scoped removal and nonfocused-output isolation, and exercises
+  console/application toggling. The exact installed radeonsi contract and the
+  legacy preview contract both pass. Native game
   presentations now have an explicit mux type
   on launch and split, preserve that type across respawn, and use direct
   Wayland input with capture, cursor confinement, constraints, and the existing
@@ -328,8 +331,8 @@ These are historical proof artifacts only; they are not the active work path:
   deterministic two-session contract maps a Wayland client and image only on
   the nonfocused output while proving focused input identity remains
   unchanged.
-  Terminal image transport, direct-KMS clipping,
-  and simultaneous ordinary text-client acceptance remain the next boundary.
+  Direct-KMS clipping and simultaneous ordinary text-client acceptance remain
+  the next boundary.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 

@@ -277,6 +277,44 @@ engine_mux_reconcile_leases(void)
 	}
 	if (focused != NULL)
 		engine_mux_transfer_view_leases(focused);
+	RB_FOREACH(window, windows, &windows) {
+		TAILQ_FOREACH(pane, &window->panes, entry) {
+			if (pane->engine_image_id == 0) {
+				pane->engine_image_lease_client_id = 0;
+				pane->engine_image_lease_view_id = 0;
+				continue;
+			}
+			if (pane->engine_mapped && pane->engine_lease_client_id != 0) {
+				pane->engine_image_lease_client_id =
+				    pane->engine_lease_client_id;
+				pane->engine_image_lease_view_id = pane->engine_lease_view_id;
+				continue;
+			}
+			if (focused != NULL && engine_mux_view_contains_pane(focused, pane)) {
+				pane->engine_image_lease_client_id = focused->client_id;
+				pane->engine_image_lease_view_id = focused->id;
+				continue;
+			}
+			view = engine_mux_lease_view_find(
+			    pane->engine_image_lease_client_id,
+			    pane->engine_image_lease_view_id);
+			if (view != NULL && engine_mux_view_contains_pane(view, pane))
+				continue;
+			pane->engine_image_lease_client_id = 0;
+			pane->engine_image_lease_view_id = 0;
+			TAILQ_FOREACH(client, &engine_mux_clients, entry) {
+				TAILQ_FOREACH(view, &client->views, entry) {
+					if (!engine_mux_view_contains_pane(view, pane))
+						continue;
+					pane->engine_image_lease_client_id = view->client_id;
+					pane->engine_image_lease_view_id = view->id;
+					break;
+				}
+				if (pane->engine_image_lease_client_id != 0)
+					break;
+			}
+		}
+	}
 }
 
 static int
@@ -1143,13 +1181,21 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 				evbuffer_add(buffer, ",\"app_command\":", 15);
 				engine_mux_json_string(buffer, pane->engine_command);
 				evbuffer_add_printf(buffer,
-				    ",\"app_pid\":%lld,\"mapped\":%s,\"surface_tabs\":%u,\"active_surface_id\":%u,\"lease_client_id\":%u,\"lease_view_id\":%u}",
+				    ",\"app_pid\":%lld,\"mapped\":%s,\"surface_tabs\":%u,\"active_surface_id\":%u,\"lease_client_id\":%u,\"lease_view_id\":%u,\"image_id\":%u,\"image_bytes\":%zu,\"image_lease_client_id\":%u,\"image_lease_view_id\":%u,\"image_mime\":",
 				    (long long)pane->engine_app_pgrp,
 				    pane->engine_mapped ? "true" : "false",
 				    pane->engine_surface_count,
 				    pane->engine_active_surface_id,
 				    pane->engine_lease_client_id,
-				    pane->engine_lease_view_id);
+				    pane->engine_lease_view_id,
+				    pane->engine_image_id,
+				    pane->engine_image_size,
+				    pane->engine_image_lease_client_id,
+				    pane->engine_image_lease_view_id);
+				engine_mux_json_string(buffer, pane->engine_image_mime);
+				evbuffer_add(buffer, ",\"image_owner\":", 15);
+				engine_mux_json_string(buffer, pane->engine_image_owner);
+				evbuffer_add(buffer, "}", 1);
 
 				engine_mux_hash_bytes(&hash, &session->id,
 				    sizeof session->id);
@@ -1208,6 +1254,17 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 				    sizeof pane->engine_lease_client_id);
 				engine_mux_hash_bytes(&hash, &pane->engine_lease_view_id,
 				    sizeof pane->engine_lease_view_id);
+				engine_mux_hash_bytes(&hash, &pane->engine_image_id,
+				    sizeof pane->engine_image_id);
+				engine_mux_hash_bytes(&hash, &pane->engine_image_size,
+				    sizeof pane->engine_image_size);
+				engine_mux_hash_bytes(&hash,
+				    &pane->engine_image_lease_client_id,
+				    sizeof pane->engine_image_lease_client_id);
+				engine_mux_hash_bytes(&hash, &pane->engine_image_lease_view_id,
+				    sizeof pane->engine_image_lease_view_id);
+				engine_mux_hash_string(&hash, pane->engine_image_mime);
+				engine_mux_hash_string(&hash, pane->engine_image_owner);
 				free(command);
 			}
 			free(layout);
@@ -1707,12 +1764,13 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	struct engine_mux_grid_damage_request damage_request;
 	struct engine_mux_scrollback_request scrollback_request;
 	struct engine_mux_input_header input_header;
+	struct engine_mux_image_request image_request;
 	struct window_pane *pane;
 	u_char *scrollback;
 	size_t scrollback_size;
 	const char *hello =
 	    "{\"schema\":\"engine-mux/hello-v1\",\"server\":\"engine-mux\","
-	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"view-snapshot-v1\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\",\"ui-model-v1\",\"ui-invalidate-v1\",\"tmux-mouse-v1\",\"pane-presentation-v1\",\"presentation-resolve-v1\",\"pane-surface-select-v1\",\"presentation-lease-v1\"]}";
+	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"view-snapshot-v1\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\",\"ui-model-v1\",\"ui-invalidate-v1\",\"tmux-mouse-v1\",\"pane-presentation-v1\",\"presentation-resolve-v1\",\"pane-surface-select-v1\",\"presentation-lease-v1\",\"pane-image-v1\"]}";
 	const char *subscribe_ack =
 	    "{\"schema\":\"engine-mux/grid-subscribe-v1\",\"subscribed\":true}";
 	const char *input_ack =
@@ -2090,6 +2148,78 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 		view->ui_subscribed = 1;
 		view->ui_hash = engine_mux_ui_model_hash(model);
 		json_object_put(model);
+		return;
+	}
+	if (type == ENGINE_MUX_IMAGE_REQUEST) {
+		struct engine_mux_view *view;
+		struct engine_mux_image_chunk_header *chunk;
+		u_char *payload;
+		u_int pane_id, generation, image_id, offset, requested, available;
+		size_t response_size;
+		int visible = 0;
+
+		if (payload_size != sizeof image_request) {
+			free(packet);
+			if (engine_mux_send_error(client->fd, request_id,
+			    "malformed-image-request", "image request has the wrong size") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		memcpy(&image_request, packet + sizeof header, sizeof image_request);
+		free(packet);
+		pane_id = ntohl(image_request.pane_id);
+		generation = ntohl(image_request.generation);
+		image_id = ntohl(image_request.image_id);
+		offset = ntohl(image_request.offset);
+		requested = ntohl(image_request.max_bytes);
+		pane = window_pane_find_by_id(pane_id);
+		TAILQ_FOREACH(view, &client->views, entry) {
+			if (pane != NULL && engine_mux_view_contains_pane(view, pane)) {
+				visible = 1;
+				break;
+			}
+		}
+		if (!visible) {
+			if (engine_mux_send_error(client->fd, request_id,
+			    "pane-not-visible", "image pane is not attached to this frontend") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		if (generation != pane->engine_generation || image_id == 0 ||
+		    image_id != pane->engine_image_id || pane->engine_image_data == NULL) {
+			if (engine_mux_send_error(client->fd, request_id,
+			    "image-resync-required", "pane image identity is not current") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		if (requested == 0 || requested > ENGINE_MUX_IMAGE_CHUNK_MAX ||
+		    offset >= pane->engine_image_size) {
+			if (engine_mux_send_error(client->fd, request_id,
+			    "invalid-image-range", "image byte range is invalid") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		available = (u_int)(pane->engine_image_size - offset);
+		if (available > requested)
+			available = requested;
+		response_size = sizeof *chunk + available;
+		payload = xmalloc(response_size);
+		chunk = (struct engine_mux_image_chunk_header *)payload;
+		memset(chunk, 0, sizeof *chunk);
+		chunk->version = htons(ENGINE_MUX_IMAGE_VERSION);
+		chunk->flags = htons(offset + available == pane->engine_image_size ?
+		    ENGINE_MUX_IMAGE_LAST_CHUNK : 0);
+		chunk->pane_id = htonl(pane_id);
+		chunk->generation = htonl(generation);
+		chunk->image_id = htonl(image_id);
+		chunk->offset = htonl(offset);
+		chunk->total_bytes = htonl((u_int)pane->engine_image_size);
+		chunk->chunk_bytes = htonl(available);
+		memcpy(chunk + 1, pane->engine_image_data + offset, available);
+		if (engine_mux_send_frame(client->fd, ENGINE_MUX_IMAGE_CHUNK,
+		    request_id, engine_mux_revision, (char *)payload, response_size) != 0)
+			engine_mux_client_free(client);
+		free(payload);
 		return;
 	}
 	if (type == ENGINE_MUX_GRID_REQUEST) {

@@ -1,5 +1,8 @@
 #include <sys/types.h>
+#include <sys/stat.h>
 
+#include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,10 +12,12 @@
 #include <systemd/sd-bus.h>
 #include <systemd/sd-login.h>
 
+#include "engine-mux-protocol.h"
 #include "tmux.h"
 
 static enum cmd_retval cmd_pane_presentation_exec(struct cmd *,
     struct cmdq_item *);
+static enum cmd_retval cmd_pane_image_exec(struct cmd *, struct cmdq_item *);
 static enum cmd_retval cmd_launch_pane_app_exec(struct cmd *,
     struct cmdq_item *);
 static enum cmd_retval cmd_signal_pane_app_exec(struct cmd *,
@@ -25,6 +30,16 @@ static enum cmd_retval cmd_select_pane_surface_exec(struct cmd *,
     struct cmdq_item *);
 
 static u_int engine_split_serial;
+
+const struct cmd_entry cmd_pane_image_entry = {
+	.name = "pane-image",
+	.alias = NULL,
+	.args = { "t:", 1, 3, NULL },
+	.usage = CMD_TARGET_PANE_USAGE " show path owner|hide [owner]",
+	.target = { 't', CMD_FIND_PANE, 0 },
+	.flags = CMD_AFTERHOOK,
+	.exec = cmd_pane_image_exec
+};
 
 const struct cmd_entry cmd_pane_presentation_entry = {
 	.name = "pane-presentation",
@@ -114,6 +129,127 @@ engine_pane_changed(struct window_pane *wp)
 {
 	server_redraw_window_borders(wp->window);
 	server_status_window(wp->window);
+}
+
+void
+engine_pane_image_clear(struct window_pane *wp)
+{
+	free(wp->engine_image_owner);
+	free(wp->engine_image_mime);
+	free(wp->engine_image_data);
+	wp->engine_image_owner = NULL;
+	wp->engine_image_mime = NULL;
+	wp->engine_image_data = NULL;
+	wp->engine_image_size = 0;
+	wp->engine_image_id = 0;
+	wp->engine_image_lease_client_id = 0;
+	wp->engine_image_lease_view_id = 0;
+}
+
+static int
+engine_pane_image_load(const char *path, u_char **data, size_t *size,
+    const char **mime, char **cause)
+{
+	struct stat sb;
+	u_char *buffer;
+	ssize_t nread;
+	size_t offset = 0;
+	int fd;
+
+	fd = open(path, O_RDONLY|O_CLOEXEC);
+	if (fd == -1 || fstat(fd, &sb) == -1) {
+		xasprintf(cause, "open image %s: %s", path, strerror(errno));
+		if (fd != -1)
+			close(fd);
+		return (-1);
+	}
+	if (!S_ISREG(sb.st_mode) || sb.st_size <= 0 ||
+	    (uintmax_t)sb.st_size > ENGINE_MUX_IMAGE_BYTES_MAX) {
+		xasprintf(cause, "image must be a nonempty regular file no larger than %u bytes",
+		    ENGINE_MUX_IMAGE_BYTES_MAX);
+		close(fd);
+		return (-1);
+	}
+	buffer = xmalloc((size_t)sb.st_size);
+	while (offset < (size_t)sb.st_size) {
+		nread = read(fd, buffer + offset, (size_t)sb.st_size - offset);
+		if (nread == -1 && errno == EINTR)
+			continue;
+		if (nread <= 0) {
+			xasprintf(cause, "read image %s: %s", path,
+			    nread == 0 ? "unexpected end of file" : strerror(errno));
+			free(buffer);
+			close(fd);
+			return (-1);
+		}
+		offset += (size_t)nread;
+	}
+	close(fd);
+	if (offset >= 8 && memcmp(buffer, "\211PNG\r\n\032\n", 8) == 0)
+		*mime = "image/png";
+	else if (offset >= 3 && buffer[0] == 0xff && buffer[1] == 0xd8 &&
+	    buffer[2] == 0xff)
+		*mime = "image/jpeg";
+	else {
+		*cause = xstrdup("image must contain PNG or JPEG data");
+		free(buffer);
+		return (-1);
+	}
+	*data = buffer;
+	*size = offset;
+	return (0);
+}
+
+static enum cmd_retval
+cmd_pane_image_exec(struct cmd *self, struct cmdq_item *item)
+{
+	struct args *args = cmd_get_args(self);
+	struct window_pane *wp = cmdq_get_target(item)->wp;
+	const char *operation = args_string(args, 0);
+	const char *owner;
+	u_char *data = NULL;
+	size_t size = 0;
+	const char *mime = NULL;
+	char *cause = NULL;
+
+	if (strcmp(operation, "hide") == 0) {
+		if (args_count(args) > 2) {
+			cmdq_error(item, "usage: pane-image hide [owner]");
+			return (CMD_RETURN_ERROR);
+		}
+		owner = args_count(args) == 2 ? args_string(args, 1) : NULL;
+		if (owner == NULL || wp->engine_image_owner == NULL ||
+		    strcmp(owner, wp->engine_image_owner) == 0) {
+			engine_pane_image_clear(wp);
+			engine_pane_changed(wp);
+		}
+		return (CMD_RETURN_NORMAL);
+	}
+	if (strcmp(operation, "show") != 0 || args_count(args) != 3) {
+		cmdq_error(item, "usage: pane-image show path owner|hide [owner]");
+		return (CMD_RETURN_ERROR);
+	}
+	owner = args_string(args, 2);
+	if (*owner == '\0' || strlen(owner) > 255) {
+		cmdq_error(item, "image owner must contain 1 to 255 bytes");
+		return (CMD_RETURN_ERROR);
+	}
+	if (engine_pane_image_load(args_string(args, 1), &data, &size, &mime,
+	    &cause) != 0) {
+		cmdq_error(item, "%s", cause);
+		free(cause);
+		return (CMD_RETURN_ERROR);
+	}
+	engine_pane_image_clear(wp);
+	wp->engine_image_data = data;
+	wp->engine_image_size = size;
+	wp->engine_image_owner = xstrdup(owner);
+	wp->engine_image_mime = xstrdup(mime);
+	if (++wp->engine_image_serial == 0)
+		wp->engine_image_serial++;
+	wp->engine_image_id = wp->engine_image_serial;
+	engine_pane_changed(wp);
+	return (CMD_RETURN_NORMAL);
 }
 
 static void

@@ -102,8 +102,10 @@ static bool clone_grid_model(const struct engineos_mux_grid_model *source,
 
 static void free_pane_models(struct engineos_mux_pane_model *panes,
 		size_t count) {
-	for (size_t index = 0; index < count; index++)
+	for (size_t index = 0; index < count; index++) {
+		free(panes[index].image_owner);
 		free_grid_model(&panes[index].grid);
+	}
 	free(panes);
 }
 
@@ -378,6 +380,9 @@ static bool parse_pane_models(struct engineos_mux_client *client,
 		struct json_object *presentation = NULL, *view_mode = NULL;
 		struct json_object *mapped = NULL, *tabs = NULL, *active_surface = NULL;
 		struct json_object *lease_client = NULL, *lease_view = NULL;
+		struct json_object *image_id = NULL, *image_bytes = NULL;
+		struct json_object *image_lease_client = NULL, *image_lease_view = NULL;
+		struct json_object *image_mime = NULL, *image_owner = NULL;
 		if (!json_object_is_type(pane, json_type_object) ||
 				!json_object_object_get_ex(pane, "pane_id", &id) ||
 				!json_object_object_get_ex(pane, "generation", &generation) ||
@@ -394,8 +399,16 @@ static bool parse_pane_models(struct engineos_mux_client *client,
 				!json_object_object_get_ex(pane, "surface_tabs", &tabs) ||
 				!json_object_object_get_ex(pane, "active_surface_id", &active_surface) ||
 				!json_object_object_get_ex(pane, "lease_client_id", &lease_client) ||
-				!json_object_object_get_ex(pane, "lease_view_id", &lease_view)) {
-			free(models);
+				!json_object_object_get_ex(pane, "lease_view_id", &lease_view) ||
+				!json_object_object_get_ex(pane, "image_id", &image_id) ||
+				!json_object_object_get_ex(pane, "image_bytes", &image_bytes) ||
+				!json_object_object_get_ex(pane, "image_lease_client_id",
+					&image_lease_client) ||
+				!json_object_object_get_ex(pane, "image_lease_view_id",
+					&image_lease_view) ||
+				!json_object_object_get_ex(pane, "image_mime", &image_mime) ||
+				!json_object_object_get_ex(pane, "image_owner", &image_owner)) {
+			free_pane_models(models, count);
 			snprintf(error, error_size, "snapshot pane model is incomplete");
 			return false;
 		}
@@ -414,8 +427,14 @@ static bool parse_pane_models(struct engineos_mux_client *client,
 				!json_object_is_type(tabs, json_type_int) ||
 				!json_object_is_type(active_surface, json_type_int) ||
 				!json_object_is_type(lease_client, json_type_int) ||
-				!json_object_is_type(lease_view, json_type_int)) {
-			free(models);
+				!json_object_is_type(lease_view, json_type_int) ||
+				!json_object_is_type(image_id, json_type_int) ||
+				!json_object_is_type(image_bytes, json_type_int) ||
+				!json_object_is_type(image_lease_client, json_type_int) ||
+				!json_object_is_type(image_lease_view, json_type_int) ||
+				!json_object_is_type(image_mime, json_type_string) ||
+				!json_object_is_type(image_owner, json_type_string)) {
+			free_pane_models(models, count);
 			snprintf(error, error_size, "snapshot pane model types are invalid");
 			return false;
 		}
@@ -432,9 +451,16 @@ static bool parse_pane_models(struct engineos_mux_client *client,
 		int64_t parsed_active_surface = json_object_get_int64(active_surface);
 		int64_t parsed_lease_client = json_object_get_int64(lease_client);
 		int64_t parsed_lease_view = json_object_get_int64(lease_view);
+		int64_t parsed_image_id = json_object_get_int64(image_id);
+		int64_t parsed_image_bytes = json_object_get_int64(image_bytes);
+		int64_t parsed_image_lease_client =
+			json_object_get_int64(image_lease_client);
+		int64_t parsed_image_lease_view = json_object_get_int64(image_lease_view);
 		bool parsed_mapped = json_object_get_boolean(mapped);
 		const char *presentation_text = json_object_get_string(presentation);
 		const char *view_mode_text = json_object_get_string(view_mode);
+		const char *image_mime_text = json_object_get_string(image_mime);
+		const char *image_owner_text = json_object_get_string(image_owner);
 		if (id_text == NULL || *id_text == '\0' || *end != '\0' ||
 				parsed_id > UINT32_MAX ||
 				parsed_generation <= 0 || parsed_generation > UINT32_MAX ||
@@ -446,6 +472,24 @@ static bool parse_pane_models(struct engineos_mux_client *client,
 				parsed_active_surface < 0 || parsed_active_surface > UINT32_MAX ||
 				parsed_lease_client < 0 || parsed_lease_client > UINT32_MAX ||
 				parsed_lease_view < 0 || parsed_lease_view > UINT32_MAX ||
+				parsed_image_id < 0 || parsed_image_id > UINT32_MAX ||
+				parsed_image_bytes < 0 ||
+				parsed_image_bytes > ENGINE_MUX_IMAGE_BYTES_MAX ||
+				parsed_image_lease_client < 0 ||
+				parsed_image_lease_client > UINT32_MAX ||
+				parsed_image_lease_view < 0 ||
+				parsed_image_lease_view > UINT32_MAX ||
+				((parsed_image_id == 0) != (parsed_image_bytes == 0)) ||
+				((parsed_image_lease_client == 0) !=
+				 (parsed_image_lease_view == 0)) ||
+				(parsed_image_id != 0 &&
+				 (image_mime_text == NULL || image_owner_text == NULL ||
+				  (strcmp(image_mime_text, "image/png") != 0 &&
+				   strcmp(image_mime_text, "image/jpeg") != 0) ||
+				  *image_owner_text == '\0')) ||
+				(parsed_image_id == 0 &&
+				 (*image_mime_text != '\0' || *image_owner_text != '\0' ||
+				  parsed_image_lease_client != 0)) ||
 				(parsed_tabs == 0 && parsed_active_surface != 0) ||
 				(parsed_tabs > 0 && parsed_active_surface == 0) ||
 				(parsed_mapped &&
@@ -460,13 +504,13 @@ static bool parse_pane_models(struct engineos_mux_client *client,
 				 strcmp(view_mode_text, "presentation") != 0) ||
 				strlen(presentation_text) >= sizeof(models[index].presentation) ||
 				strlen(view_mode_text) >= sizeof(models[index].view_mode)) {
-			free(models);
+			free_pane_models(models, count);
 			snprintf(error, error_size, "snapshot pane model is invalid");
 			return false;
 		}
 		for (size_t previous = 0; previous < index; previous++) {
 			if (models[previous].pane_id == parsed_id) {
-				free(models);
+				free_pane_models(models, count);
 				snprintf(error, error_size,
 					"snapshot contains duplicate pane identity");
 				return false;
@@ -488,6 +532,21 @@ static bool parse_pane_models(struct engineos_mux_client *client,
 		models[index].active_surface_id = (uint32_t)parsed_active_surface;
 		models[index].lease_client_id = (uint32_t)parsed_lease_client;
 		models[index].lease_view_id = (uint32_t)parsed_lease_view;
+		models[index].image_id = (uint32_t)parsed_image_id;
+		models[index].image_bytes = (uint32_t)parsed_image_bytes;
+		models[index].image_lease_client_id =
+			(uint32_t)parsed_image_lease_client;
+		models[index].image_lease_view_id = (uint32_t)parsed_image_lease_view;
+		if (*image_mime_text != '\0')
+			strcpy(models[index].image_mime, image_mime_text);
+		if (*image_owner_text != '\0') {
+			models[index].image_owner = strdup(image_owner_text);
+			if (models[index].image_owner == NULL) {
+				free_pane_models(models, count);
+				snprintf(error, error_size, "out of memory retaining pane image owner");
+				return false;
+			}
+		}
 	}
 	for (size_t index = 0; index < count; index++) {
 		for (size_t previous = 0; previous < client->pane_count; previous++) {
@@ -2297,6 +2356,155 @@ bool engineos_mux_client_send_mouse(struct engineos_mux_client *client,
 		grid_changed, error, error_size);
 	json_object_put(root);
 	return result;
+}
+
+bool engineos_mux_client_request_image(struct engineos_mux_client *client,
+		uint32_t pane_id, uint32_t generation, uint32_t image_id,
+		uint32_t expected_bytes, uint8_t **data, size_t *size,
+		char *error, size_t error_size) {
+	if (generation == 0 || image_id == 0 || expected_bytes == 0 ||
+			expected_bytes > ENGINE_MUX_IMAGE_BYTES_MAX || data == NULL || size == NULL) {
+		snprintf(error, error_size, "invalid pane image request");
+		return false;
+	}
+	uint8_t *image = malloc(expected_bytes);
+	if (image == NULL) {
+		snprintf(error, error_size, "out of memory receiving pane image");
+		return false;
+	}
+	uint32_t offset = 0;
+	while (offset < expected_bytes) {
+		struct engine_mux_image_request request = {
+			.pane_id = htonl(pane_id),
+			.generation = htonl(generation),
+			.image_id = htonl(image_id),
+			.offset = htonl(offset),
+			.max_bytes = htonl(ENGINE_MUX_IMAGE_CHUNK_MAX),
+		};
+		struct engine_mux_frame_header frame = {
+			.magic = htonl(ENGINE_MUX_MAGIC),
+			.version = htons(ENGINE_MUX_PROTOCOL_VERSION),
+			.type = htons(ENGINE_MUX_IMAGE_REQUEST),
+			.request_id = host_to_be64(UINT64_C(32) +
+				offset / ENGINE_MUX_IMAGE_CHUNK_MAX),
+			.state_revision = host_to_be64(client->revision),
+			.payload_length = htonl(sizeof(request)),
+		};
+		struct iovec parts[] = {
+			{.iov_base = &frame, .iov_len = sizeof(frame)},
+			{.iov_base = &request, .iov_len = sizeof(request)},
+		};
+		struct msghdr message = {.msg_iov = parts, .msg_iovlen = 2};
+		if (sendmsg(client->fd, &message, MSG_NOSIGNAL) < 0) {
+			free(image);
+			snprintf(error, error_size, "pane image send: %s", strerror(errno));
+			return false;
+		}
+		for (;;) {
+			unsigned char packet[sizeof(frame) + ENGINE_MUX_MAX_PAYLOAD];
+			ssize_t count = recv(client->fd, packet, sizeof(packet), 0);
+			if (count < (ssize_t)sizeof(frame)) {
+				free(image);
+				snprintf(error, error_size, "truncated pane image response");
+				return false;
+			}
+			memcpy(&frame, packet, sizeof(frame));
+			uint32_t length = ntohl(frame.payload_length);
+			uint16_t type = ntohs(frame.type);
+			if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
+					ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
+					length > ENGINE_MUX_MAX_PAYLOAD ||
+					sizeof(frame) + length != (size_t)count) {
+				free(image);
+				snprintf(error, error_size, "invalid pane image response frame");
+				return false;
+			}
+			client->revision = be64_to_host(frame.state_revision);
+			if (type == ENGINE_MUX_GRID_INVALIDATED &&
+					length == sizeof(struct engine_mux_grid_request)) {
+				struct engine_mux_grid_request notice;
+				memcpy(&notice, packet + sizeof(frame), sizeof(notice));
+				if (!mark_grid_invalidation(client, ntohl(notice.pane_id),
+						ntohl(notice.generation), error, error_size)) {
+					free(image);
+					return false;
+				}
+				continue;
+			}
+			if (type == ENGINE_MUX_STATE_INVALIDATED && length == 0) {
+				client->state_invalidated_pending = true;
+				continue;
+			}
+			if (type == ENGINE_MUX_UI_INVALIDATED &&
+					length == sizeof(struct engine_mux_ui_invalidation)) {
+				struct engine_mux_ui_invalidation invalidated;
+				memcpy(&invalidated, packet + sizeof(frame), sizeof(invalidated));
+				uint32_t view_id = ntohl(invalidated.view_id);
+				client->ui_invalidation_count++;
+				client->last_ui_invalidated_view_id = view_id;
+				struct engineos_mux_view_snapshot *snapshot =
+					find_view_snapshot(client, view_id);
+				if (snapshot != NULL)
+					snapshot->ui.invalidated = true;
+				continue;
+			}
+			if (type == ENGINE_MUX_ERROR) {
+				char *json = malloc((size_t)length + 1);
+				if (json == NULL) {
+					free(image);
+					snprintf(error, error_size, "out of memory parsing image error");
+					return false;
+				}
+				memcpy(json, packet + sizeof(frame), length);
+				json[length] = '\0';
+				struct json_object *root = json_tokener_parse(json);
+				free(json);
+				struct json_object *message_object = NULL;
+				const char *message_text = "mux server rejected pane image request";
+				if (root != NULL && json_object_object_get_ex(root, "message",
+						&message_object))
+					message_text = json_object_get_string(message_object);
+				snprintf(error, error_size, "%s", message_text);
+				if (root != NULL)
+					json_object_put(root);
+				free(image);
+				return false;
+			}
+			if (type != ENGINE_MUX_IMAGE_CHUNK ||
+					length < sizeof(struct engine_mux_image_chunk_header)) {
+				free(image);
+				snprintf(error, error_size, "unexpected pane image response type %u",
+					type);
+				return false;
+			}
+			struct engine_mux_image_chunk_header chunk;
+			memcpy(&chunk, packet + sizeof(frame), sizeof(chunk));
+			uint32_t chunk_bytes = ntohl(chunk.chunk_bytes);
+			uint16_t flags = ntohs(chunk.flags);
+			if (ntohs(chunk.version) != ENGINE_MUX_IMAGE_VERSION ||
+					ntohl(chunk.pane_id) != pane_id ||
+					ntohl(chunk.generation) != generation ||
+					ntohl(chunk.image_id) != image_id ||
+					ntohl(chunk.offset) != offset ||
+					ntohl(chunk.total_bytes) != expected_bytes || chunk_bytes == 0 ||
+					chunk_bytes > ENGINE_MUX_IMAGE_CHUNK_MAX ||
+					length != sizeof(chunk) + chunk_bytes ||
+					offset + chunk_bytes > expected_bytes ||
+					((flags & ENGINE_MUX_IMAGE_LAST_CHUNK) != 0) !=
+					 (offset + chunk_bytes == expected_bytes)) {
+				free(image);
+				snprintf(error, error_size, "pane image chunk contract is invalid");
+				return false;
+			}
+			memcpy(image + offset, packet + sizeof(frame) + sizeof(chunk),
+				chunk_bytes);
+			offset += chunk_bytes;
+			break;
+		}
+	}
+	*data = image;
+	*size = expected_bytes;
+	return true;
 }
 
 bool engineos_mux_client_request_ui(struct engineos_mux_client *client,

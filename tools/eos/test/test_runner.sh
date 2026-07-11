@@ -174,7 +174,7 @@ run_mux() {
 	local pane_shell_pid="" pane_foreground_pid=""
 	local wayland_display="" unscoped_pid="" scoped_client_pid=""
 	local game_wrapper_command=""
-	local preview_png=""
+	local preview_png="" preview_large_png=""
 	local primary_surface_id="" secondary_surface_id=""
 	local multi_grid_pid="" first_split_pane="" second_split_pane=""
 	local user_runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
@@ -196,6 +196,7 @@ run_mux() {
 	mkdir -p "$fixture/bin"
 	chmod 0700 "$fixture"
 	preview_png="$fixture/lease-preview.png"
+	preview_large_png="$fixture/lease-preview-large.png"
 	python - "$preview_png" <<'PY'
 import base64
 import pathlib
@@ -203,6 +204,35 @@ import sys
 pathlib.Path(sys.argv[1]).write_bytes(base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADAQMAAACOOjyFAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGUExURSJmzP///8VU6LMAAAABYktHRAH/Ai3eAAAAB3RJTUUH6gcCFi0VNn7nGQAAACV0RVh0ZGF0ZTpjcmVhdGUAMjAyNi0wNy0wMlQyMjo0NToyMSswMDowMIBjV7MAAAAldEVYdGRhdGU6bW9kaWZ5ADIwMjYtMDctMDJUMjI6NDU6MjErMDA6MDDxPu8PAAAAKHRFWHRkYXRlOnRpbWVzdGFtcAAyMDI2LTA3LTAyVDIyOjQ1OjIxKzAwOjAwpivO0AAAAAtJREFUCNdjYAABAAAGAAFm9MlsAAAAAElFTkSuQmCC"
 ))
+PY
+	python - "$preview_large_png" <<'PY'
+import binascii
+import pathlib
+import struct
+import sys
+import zlib
+
+width = height = 256
+rows = []
+for y in range(height):
+    row = bytearray([0])
+    for x in range(width):
+        value = (x * 73 + y * 151) & 0xFF
+        row.extend((value, value ^ 0x5A, (value * 37) & 0xFF, 0xFF))
+    rows.append(row)
+
+def chunk(kind: bytes, payload: bytes) -> bytes:
+    return struct.pack(">I", len(payload)) + kind + payload + struct.pack(
+        ">I", binascii.crc32(kind + payload) & 0xFFFFFFFF
+    )
+
+raw = b"".join(rows)
+png = b"\x89PNG\r\n\x1a\n" + chunk(
+    b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+) + chunk(b"IDAT", zlib.compress(raw, level=0)) + chunk(b"IEND", b"")
+pathlib.Path(sys.argv[1]).write_bytes(png)
+if len(png) <= 65536:
+    raise SystemExit("large image fixture did not exceed one mux chunk")
 PY
 	cc -std=c11 -Wall -Wextra -Werror -O2 \
 		"$ROOT/packages/engineos-mux/engine-pane-host.c" \
@@ -1402,50 +1432,65 @@ PY
 			| jq --arg pane "$shell_pane_id" \
 			'{focused_client_id, focused_view_id, pane: (.panes[] | select(.pane_id == $pane))}' \
 			>&2 || true
-		die "presentation lease did not return to the surviving shell output view"
+			die "presentation lease did not return to the surviving shell output view"
 	}
 	python - "$fixture/engineos/preview.sock" "$preview_png" \
-		"$shell_pane_id" "$other_shell_pane" <<'PY'
+		"$shell_pane_id" <<'PY'
 import json
 import socket
 import sys
-for owner, pane in (
-    ("native-mux-lease-proof", sys.argv[3]),
-    ("native-mux-second-pane-proof", sys.argv[4]),
-):
-    request = {
-        "op": "show",
-        "path": sys.argv[2],
-        "owner": owner,
-        "pane": {"pane_id": pane},
-    }
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(3.0)
-        client.connect(sys.argv[1])
-        client.sendall((json.dumps(request) + "\n").encode())
-        response = json.loads(client.recv(4096))
-    if response.get("status") != "ok":
-        raise SystemExit(f"preview request failed for {pane}: {response}")
+request = {
+    "op": "show",
+    "path": sys.argv[2],
+    "owner": "forbidden-shell-image-authority",
+    "pane": {"pane_id": sys.argv[3]},
+}
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+    client.settimeout(3.0)
+    client.connect(sys.argv[1])
+    client.sendall((json.dumps(request) + "\n").encode())
+    response = json.loads(client.recv(4096))
+if response.get("status") != "error" or "owned by engine-mux" not in response.get("error", ""):
+    raise SystemExit(f"native shell accepted direct pane image authority: {response}")
 PY
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		ENGINEOS_MUX_MODE=native ENGINEOS_MUX_BIN="$mux_bin" \
+		ENGINEOS_PREVIEW_OWNER="native-mux-lease-proof" \
+		TMUX_PANE="$shell_pane_id" \
+		"$ROOT/tools/engineos/engine-image-preview" --view "$preview_large_png"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		pane-image -t "$other_shell_pane" show "$preview_png" \
+		"native-mux-second-pane-proof"
 	for _ in {1..100}; do
 		jq -e --arg first "$shell_pane_id" --arg second "$other_shell_pane" \
-			'(.previews | length) == 2 and
+			'(.previews | length) == 2 and all(.previews[]; .mux_owned and
+			  .mux_image_id > 0 and (.path | startswith("mux://pane/"))) and
 			 ([.previews[].pane_id] | unique | sort) == ([$first, $second] | sort) and
 			 all(.previews[] as $preview;
 			   any(.mux.panes[]; .pane_id == $preview.pane_id and
-			     .generation == $preview.generation) and
+			     .generation == $preview.generation and
+			     .image.id == $preview.mux_image_id and
+			     (($preview.pane_id != $first) or .image.bytes > 65536) and
+			     .image.owner == $preview.owner and
+			     .image.lease_client_id == $preview.lease_client_id and
+			     .image.lease_view_id == $preview.lease_view_id) and
 			   $preview.lease_client_id == .mux.frontend_client_id and
 			   $preview.lease_view_id == .mux.client_view_id) and
-			 ([.output_views[] | select(.preview_count == 2)] | length) == 1 and
-			 ([.output_views[].preview_count] | add) == 2' \
+			 any(.previews[]; .pane_id == $first and .visible == false) and
+			 any(.previews[]; .pane_id == $second and .visible == true) and
+			 ([.output_views[] | select(.preview_count == 1)] | length) == 1 and
+			 ([.output_views[].preview_count] | add) == 1' \
 			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
 		sleep 0.02
 	done
 	jq -e --arg first "$shell_pane_id" --arg second "$other_shell_pane" \
-		'(.previews | length) == 2 and
+		'(.previews | length) == 2 and all(.previews[]; .mux_owned and
+		 (.mux_image_id > 0)) and
 		 ([.previews[].pane_id] | unique | sort) == ([$first, $second] | sort) and
-		 ([.output_views[] | select(.preview_count == 2)] | length) == 1 and
-		 ([.output_views[].preview_count] | add) == 2' \
+		 any(.previews[]; .pane_id == $first and .visible == false) and
+		 any(.previews[]; .pane_id == $second and .visible == true) and
+		 ([.output_views[] | select(.preview_count == 1)] | length) == 1 and
+		 ([.output_views[].preview_count] | add) == 1' \
 		"$fixture/engineos/shell-state.json" >/dev/null || {
 		jq '{previews,output_views,mux:{frontend_client_id:.mux.frontend_client_id,
 			client_view_id:.mux.client_view_id,panes:.mux.panes}}' \
@@ -1453,43 +1498,57 @@ PY
 		tail -100 "$fixture/shell-native.log" >&2 || true
 		die "simultaneous pane previews were not keyed to their panes and output lease"
 	}
-	python - "$fixture/engineos/preview.sock" <<'PY'
-import json
-import socket
-import sys
-with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-    client.settimeout(3.0)
-    client.connect(sys.argv[1])
-    client.sendall(b'{"op":"hide","owner":"native-mux-lease-proof"}\n')
-    response = json.loads(client.recv(4096))
-if response.get("status") != "ok":
-    raise SystemExit(f"preview hide failed: {response}")
-PY
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		pane-presentation -t "$shell_pane_id" console
+	for _ in {1..100}; do
+		jq -e --arg pane "$shell_pane_id" \
+			'([.output_views[].preview_count] | add) == 2 and
+			 any(.previews[]; .pane_id == $pane and .mux_owned and .visible)' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg pane "$shell_pane_id" \
+		'([.output_views[].preview_count] | add) == 2 and
+		 any(.previews[]; .pane_id == $pane and .mux_owned and .visible)' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "mux terminal image did not appear with its backing console"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		pane-presentation -t "$shell_pane_id" app
+	for _ in {1..100}; do
+		jq -e --arg pane "$shell_pane_id" \
+			'([.output_views[].preview_count] | add) == 1 and
+			 any(.previews[]; .pane_id == $pane and .mux_owned and
+			   (.visible | not))' "$fixture/engineos/shell-state.json" \
+			>/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg pane "$shell_pane_id" \
+		'([.output_views[].preview_count] | add) == 1 and
+		 any(.previews[]; .pane_id == $pane and .mux_owned and
+		   (.visible | not))' "$fixture/engineos/shell-state.json" >/dev/null ||
+		die "mux terminal image leaked above its graphical presentation"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		ENGINEOS_MUX_MODE=native ENGINEOS_MUX_BIN="$mux_bin" \
+		TMUX_PANE="$shell_pane_id" \
+		"$ROOT/tools/engineos/engine-image-preview" --hide \
+		--owner "native-mux-lease-proof"
 	for _ in {1..100}; do
 		jq -e --arg pane "$other_shell_pane" \
-			'(.previews | length) == 1 and .previews[0].pane_id == $pane and
+			'(.previews | length) == 1 and .previews[0].mux_owned and
+			 .previews[0].mux_image_id > 0 and .previews[0].pane_id == $pane and
 			 .previews[0].owner == "native-mux-second-pane-proof" and
 			 ([.output_views[].preview_count] | add) == 1' \
 			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
 		sleep 0.02
 	done
 	jq -e --arg pane "$other_shell_pane" \
-		'(.previews | length) == 1 and .previews[0].pane_id == $pane and
+		'(.previews | length) == 1 and .previews[0].mux_owned and
+		 .previews[0].mux_image_id > 0 and .previews[0].pane_id == $pane and
 		 .previews[0].owner == "native-mux-second-pane-proof"' \
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "hiding one pane preview removed or mutated its sibling"
-	python - "$fixture/engineos/preview.sock" <<'PY'
-import json
-import socket
-import sys
-with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-    client.settimeout(3.0)
-    client.connect(sys.argv[1])
-    client.sendall(b'{"op":"hide","owner":"native-mux-second-pane-proof"}\n')
-    response = json.loads(client.recv(4096))
-if response.get("status") != "ok":
-    raise SystemExit(f"second preview hide failed: {response}")
-PY
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		pane-image -t "$other_shell_pane" hide "native-mux-second-pane-proof"
 	primary_surface_id="$(jq -er '.windows[] | select(.bound == true and
 		.app_id == "engineos.presentation-proof") | .surface_id' \
 		"$fixture/engineos/shell-state.json")"
@@ -1953,28 +2012,13 @@ PY
 	jq -e '[.output_views[].presentation_surface_count] | add == 0' \
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "nonfocused presentation exit did not restore its output console"
-	python - "$fixture/engineos/preview.sock" "$preview_png" \
-		"$output_session_pane" <<'PY'
-import json
-import socket
-import sys
-request = {
-    "op": "show",
-    "path": sys.argv[2],
-    "owner": "nonfocused-output-preview",
-    "pane": {"pane_id": sys.argv[3]},
-}
-with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-    client.settimeout(3.0)
-    client.connect(sys.argv[1])
-    client.sendall((json.dumps(request) + "\n").encode())
-    response = json.loads(client.recv(4096))
-if response.get("status") != "ok":
-    raise SystemExit(f"preview request failed: {response}")
-PY
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		pane-image -t "$output_session_pane" show "$preview_png" \
+		"nonfocused-output-preview"
 	for _ in {1..100}; do
 		jq -e --arg output "$nonfocused_output" --arg pane "$output_session_pane" \
-			'(.previews | length) == 1 and .previews[0].pane_id == $pane and
+			'(.previews | length) == 1 and .previews[0].mux_owned and
+			 .previews[0].mux_image_id > 0 and .previews[0].pane_id == $pane and
 			 (.previews[0] as $preview |
 			  any(.output_views[]; .output == $output and .preview_count == 1 and
 			   .view_id == $preview.lease_view_id) and
@@ -1983,26 +2027,16 @@ PY
 		sleep 0.02
 	done
 	jq -e --arg output "$nonfocused_output" --arg pane "$output_session_pane" \
-		'(.previews | length) == 1 and .previews[0].pane_id == $pane and
+		'(.previews | length) == 1 and .previews[0].mux_owned and
+		 .previews[0].mux_image_id > 0 and .previews[0].pane_id == $pane and
 		 (.previews[0] as $preview |
 		  any(.output_views[]; .output == $output and .preview_count == 1 and
 		   .view_id == $preview.lease_view_id) and
 		  all(.output_views[]; .output == $output or .preview_count == 0))' \
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "nonfocused preview did not use its retained output lease"
-	python - "$fixture/engineos/preview.sock" "$output_session_pane" <<'PY'
-import json
-import socket
-import sys
-request = {"op": "hide", "pane": {"pane_id": sys.argv[2]}}
-with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-    client.settimeout(3.0)
-    client.connect(sys.argv[1])
-    client.sendall((json.dumps(request) + "\n").encode())
-    response = json.loads(client.recv(4096))
-if response.get("status") != "ok":
-    raise SystemExit(f"preview hide failed: {response}")
-PY
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		pane-image -t "$output_session_pane" hide "nonfocused-output-preview"
 	output_grid_revision="$(jq -er --arg output "$nonfocused_output" \
 		'.output_views[] | select(.output == $output) | .grid_revision' \
 		"$fixture/engineos/shell-state.json")"
@@ -2885,6 +2919,11 @@ PY
     die "image preview dry-run did not include owner token"
   grep -F "\"path\":\"$png\"" "$out" >/dev/null ||
     die "image preview dry-run did not include resolved path"
+	ENGINEOS_MUX_MODE=native TMUX_PANE=%99 \
+		ENGINEOS_PREVIEW_OWNER="native-contract-owner" \
+		"$preview_bin" --view "$png" --dry-run >"$out"
+	grep -F '"transport":"engine-mux/pane-image-v1"' "$out" >/dev/null ||
+		die "native image preview dry-run did not select mux pane image transport"
 
   cat >"$fake_bin/tmux" <<'FAKE'
 #!/usr/bin/env bash
