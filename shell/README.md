@@ -90,26 +90,34 @@ The normal tmux-integrated GUI path is explicit:
 
 ```bash
 eos-app pane launch -- COMMAND [ARGS...]
-eos-app pane focus
-eos-app pane geometry
-eos-app pane unbind
+eos-app pane launch --game -- COMMAND [ARGS...]
+eos-app pane split -h -- COMMAND [ARGS...]
+eos-app pane view app|console|toggle|close
+eos-app pane signal INT|TERM|KILL
+eos-app pane respawn
 eos-app pane list --json
 ```
 
-`pane launch` requires a managed terminal and tmux context. It registers a
-one-shot token with the shell and places the token in the launched client's
-environment. The shell binds only the exact mapped Wayland process carrying
-that pending token. Missing, duplicate, expired, and unknown tokens fail
-explicitly.
+In native mode these wrappers call the authoritative `engine-mux` commands.
+They never register bridge tokens or fall back after a native command fails.
+`--game` selects a game presentation; the shell routes direct Wayland input,
+capture, constraints, and cursor confinement to it. `prefix + v` or `pane view
+toggle` reveals the retained console and releases capture. `eos-app launch
+quake` automatically takes this game-pane path when invoked from a native mux
+pane.
+
+In explicit legacy mode, only `pane launch` retains the staged one-shot token
+path. The remaining native pane commands fail visibly instead of pretending a
+bridge operation is equivalent.
 
 Bindings are stored in memory and published without tokens in
 `shell-state.json`. Bound views use `layout=tmux-pane-gui`, are clipped to the
 owning terminal output and pane rectangle, and are rendered/focused from tmux
 focus events. `eos-app window list|focus|launch` remains diagnostic only.
 
-Cube and Quake still support the older role-specific
+Cube and output-wide legacy Quake launches still support the older role-specific
 `$ENGINEOS_STATE_DIR/launch-bounds/*.env` path for pane/output/fullscreen
-launches. Generic Qt/browser/editor binding does not use those files.
+launches. Native game panes do not use those files.
 
 ## Tmux Bridge
 

@@ -31,8 +31,9 @@
 +};
 +TAILQ_HEAD(engine_pane_surfaces, engine_pane_surface);
 +
-@@ -1170,0 +1197,15 @@ struct window_pane {
+@@ -1170,0 +1197,16 @@ struct window_pane {
 +	enum engine_pane_presentation engine_presentation;
++	enum engine_pane_presentation engine_saved_presentation;
 +	enum engine_pane_view_mode engine_view_mode;
 +	struct engine_pane_surfaces engine_surfaces;
 +	u_int		 engine_generation;
@@ -47,7 +48,7 @@
 +	u_int		 engine_lease_view_id;
 +	int		 engine_mapped;
 +
-@@ -2888,0 +2930,9 @@ void	 engine_mux_frontend_free(void);
+@@ -2888,0 +2930,10 @@ void	 engine_mux_frontend_free(void);
 +/* engine-pane.c */
 +const char *engine_pane_presentation_name(const struct window_pane *);
 +const char *engine_pane_view_mode_name(const struct window_pane *);

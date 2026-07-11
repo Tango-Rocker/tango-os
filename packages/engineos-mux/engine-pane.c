@@ -39,8 +39,8 @@ const struct cmd_entry cmd_pane_presentation_entry = {
 const struct cmd_entry cmd_launch_pane_app_entry = {
 	.name = "launch-pane-app",
 	.alias = NULL,
-	.args = { "t:", 1, -1, NULL },
-	.usage = CMD_TARGET_PANE_USAGE " -- command [argument ...]",
+	.args = { "gt:", 1, -1, NULL },
+	.usage = "[-g] " CMD_TARGET_PANE_USAGE " -- command [argument ...]",
 	.target = { 't', CMD_FIND_PANE, 0 },
 	.flags = CMD_AFTERHOOK,
 	.exec = cmd_launch_pane_app_exec
@@ -69,8 +69,8 @@ const struct cmd_entry cmd_respawn_pane_app_entry = {
 const struct cmd_entry cmd_split_pane_app_entry = {
 	.name = "split-pane-app",
 	.alias = NULL,
-	.args = { "hvt:", 1, -1, NULL },
-	.usage = "[-h|-v] " CMD_TARGET_PANE_USAGE " -- command [argument ...]",
+	.args = { "ghvt:", 1, -1, NULL },
+	.usage = "[-g] [-h|-v] " CMD_TARGET_PANE_USAGE " -- command [argument ...]",
 	.target = { 't', CMD_FIND_PANE, 0 },
 	.flags = CMD_AFTERHOOK,
 	.exec = cmd_split_pane_app_exec
@@ -339,30 +339,41 @@ engine_pane_reset_runtime(struct window_pane *wp, int preserve_command)
 	if (!preserve_command) {
 		free(wp->engine_command);
 		wp->engine_command = NULL;
+		wp->engine_saved_presentation = ENGINE_PANE_TERMINAL;
 	}
 	engine_pane_changed(wp);
 }
 
 static int
-engine_pane_shell_is_foreground(struct window_pane *wp)
+engine_pane_launch_caller_is_foreground(struct window_pane *wp,
+    pid_t caller_pid)
 {
-	pid_t foreground;
+	pid_t caller_pgrp, foreground;
 
 	if (wp->fd == -1 || wp->pid <= 0)
 		return (0);
 	foreground = tcgetpgrp(wp->fd);
-	return (foreground == wp->pid);
+	if (foreground == wp->pid)
+		return (1);
+	if (caller_pid <= 0 || (caller_pgrp = getpgid(caller_pid)) <= 0)
+		return (0);
+	return (caller_pgrp == foreground);
 }
 
 static int
 engine_pane_inject_launch(struct window_pane *wp, const char *command,
-    char **cause)
+    enum engine_pane_presentation presentation, pid_t caller_pid, char **cause)
 {
 	const char *user_runtime;
 	char *line, *escaped_runtime = NULL;
 
-	if (!engine_pane_shell_is_foreground(wp)) {
-		*cause = xstrdup("pane shell is not the foreground process group");
+	if (!engine_pane_launch_caller_is_foreground(wp, caller_pid)) {
+		*cause = xstrdup("pane shell or invoking client is not the foreground process group");
+		return (-1);
+	}
+	if (presentation != ENGINE_PANE_WAYLAND &&
+	    presentation != ENGINE_PANE_GAME) {
+		*cause = xstrdup("unsupported graphical presentation type");
 		return (-1);
 	}
 	if (wp->engine_presentation != ENGINE_PANE_TERMINAL ||
@@ -388,7 +399,8 @@ engine_pane_inject_launch(struct window_pane *wp, const char *command,
 	free(escaped_runtime);
 	bufferevent_write(wp->event, line, strlen(line));
 	free(line);
-	wp->engine_presentation = ENGINE_PANE_WAYLAND;
+	wp->engine_presentation = presentation;
+	wp->engine_saved_presentation = presentation;
 	wp->engine_view_mode = ENGINE_PANE_VIEW_CONSOLE;
 	wp->engine_app_pgrp = 0;
 	wp->engine_launch_deadline = time(NULL) + 15;
@@ -406,7 +418,9 @@ cmd_launch_pane_app_exec(struct cmd *self, struct cmdq_item *item)
 {
 	struct args *args = cmd_get_args(self);
 	struct window_pane *wp = cmdq_get_target(item)->wp;
+	struct client *client = cmdq_get_client(item);
 	char **argv, *command, *cause = NULL;
+	enum engine_pane_presentation presentation;
 	int argc;
 
 	args_to_vector(args, &argc, &argv);
@@ -417,7 +431,10 @@ cmd_launch_pane_app_exec(struct cmd *self, struct cmdq_item *item)
 		cmdq_error(item, "command is empty");
 		return (CMD_RETURN_ERROR);
 	}
-	if (engine_pane_inject_launch(wp, command, &cause) != 0) {
+	presentation = args_has(args, 'g') ? ENGINE_PANE_GAME :
+	    ENGINE_PANE_WAYLAND;
+	if (engine_pane_inject_launch(wp, command, presentation,
+	    client != NULL ? client->pid : 0, &cause) != 0) {
 		cmdq_error(item, "%s", cause);
 		free(cause);
 		free(command);
@@ -559,13 +576,16 @@ static enum cmd_retval
 cmd_respawn_pane_app_exec(__unused struct cmd *self, struct cmdq_item *item)
 {
 	struct window_pane *wp = cmdq_get_target(item)->wp;
+	struct client *client = cmdq_get_client(item);
 	char *cause = NULL;
 
 	if (wp->engine_command == NULL) {
 		cmdq_error(item, "pane has no saved graphical command");
 		return (CMD_RETURN_ERROR);
 	}
-	if (engine_pane_inject_launch(wp, wp->engine_command, &cause) != 0) {
+	if (engine_pane_inject_launch(wp, wp->engine_command,
+	    wp->engine_saved_presentation, client != NULL ? client->pid : 0,
+	    &cause) != 0) {
 		cmdq_error(item, "%s", cause);
 		free(cause);
 		return (CMD_RETURN_ERROR);
@@ -586,6 +606,7 @@ cmd_split_pane_app_exec(struct cmd *self, struct cmdq_item *item)
 	struct spawn_context sc = { 0 };
 	struct cmd_find_state fs;
 	enum layout_type type;
+	enum engine_pane_presentation presentation;
 	char **app_argv, *command, *scope, *cause = NULL;
 	int app_argc, i;
 
@@ -602,6 +623,8 @@ cmd_split_pane_app_exec(struct cmd *self, struct cmdq_item *item)
 		return (CMD_RETURN_ERROR);
 	}
 	type = args_has(args, 'h') ? LAYOUT_LEFTRIGHT : LAYOUT_TOPBOTTOM;
+	presentation = args_has(args, 'g') ? ENGINE_PANE_GAME :
+	    ENGINE_PANE_WAYLAND;
 	window_push_zoom(wp->window, 1, 0);
 	lc = layout_split_pane(wp, type, -1, 0);
 	if (lc == NULL) {
@@ -639,7 +662,8 @@ cmd_split_pane_app_exec(struct cmd *self, struct cmdq_item *item)
 		window_pop_zoom(wp->window);
 		return (CMD_RETURN_ERROR);
 	}
-	new_wp->engine_presentation = ENGINE_PANE_WAYLAND;
+	new_wp->engine_presentation = presentation;
+	new_wp->engine_saved_presentation = presentation;
 	new_wp->engine_view_mode = ENGINE_PANE_VIEW_CONSOLE;
 	new_wp->engine_scope = scope;
 	new_wp->engine_command = command;

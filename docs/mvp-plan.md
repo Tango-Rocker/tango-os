@@ -57,6 +57,8 @@ Acceptance:
 
 - shell restart preserves existing tmux sessions and clients
 - `eos-app pane launch -- COMMAND` binds only the exact launched client
+- native `eos-app pane launch --game -- COMMAND` retains the pane console and
+  releases capture when the console is shown
 - pane focus and geometry are event-driven with no proxy windows or polling
 - MC Quick View renders on the invoking terminal output and pane rectangle
 - stale tokens, panes, and ambiguous output ownership fail explicitly
@@ -68,6 +70,7 @@ eos-app manifest validate
 eos-app pane list --json
 eos-proof mc-preview
 eos-app pane launch -- falkon
+eos-app launch quake
 ```
 
 Remaining evidence: a live Falkon focus-switch stress pass and real screenshot

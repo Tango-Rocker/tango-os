@@ -42,11 +42,16 @@ normal tmux-integrated GUI path is explicit:
 
 ```bash
 eos-app pane launch -- COMMAND [ARGS...]
+eos-app pane launch --game -- COMMAND [ARGS...]
+eos-app pane view toggle
 ```
 
-The launch request creates a one-shot token. The shell accepts only the mapped
-Wayland client carrying that token, stores the binding in memory, publishes a
-token-free record in `shell-state.json`, and clips the view to its pane.
+Native mode routes these wrappers to `engine-mux`, whose transient user scope
+is the authoritative surface-to-pane identity. The compositor accepts only
+clients in that scope and clips them beneath the pane's leased output scene.
+Game presentations use the same identity while enabling direct Wayland input
+and capture. Explicit legacy mode retains the one-shot-token bridge only until
+native live acceptance.
 
 ### Tmux Pane Bridge
 

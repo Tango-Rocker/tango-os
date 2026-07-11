@@ -91,8 +91,19 @@ are now keyed by pane ID, generation, frontend client, and output-view lease;
 their scene buffers live under the leased pane subtree, fail closed for an
 external lease, and appear on exactly one output in the installed radeonsi
 contract. Independent per-output session models, multiple simultaneous pane
-images and terminal image transport, games, direct-KMS clipping, final
-hardware acceptance, and legacy cutover remain open. The server now
+images and terminal image transport, direct-KMS clipping, final hardware
+acceptance, and legacy cutover remain open. Native `game` is now an
+authoritative launch/split presentation that survives respawn.
+`eos-app pane launch|split|view|signal|respawn|list` routes directly to
+`engine-mux` in native mode without launch-token or bridge fallback, and
+`eos-app launch quake` selects a game pane when invoked from a native mux pane.
+The shell gives mapped game presentations direct Wayland input, capture,
+cursor confinement, constraints, emergency-release compatibility, and
+capture-free console toggling. The deterministic installed contract proves
+game launch from the pane foreground job, map, lease isolation, console/app
+toggle, exit, respawn type preservation, and terminal restoration. Real Quake
+with user assets and bare-metal emergency-release acceptance remain open. The
+server now
 exports every
 pane's authoritative cell origin and size,
 and the shell validates and retains the complete pane set instead of discarding
@@ -208,8 +219,8 @@ Implement these authoritative pane objects:
 
 Add native commands:
 
-- `launch-pane-app [-t pane] -- COMMAND`
-- `split-pane-app [-h|-v] -- COMMAND`
+- `launch-pane-app [-g] [-t pane] -- COMMAND`
+- `split-pane-app [-g] [-h|-v] -- COMMAND`
 - `pane-presentation [-t pane] app|console|toggle|close`
 - `signal-pane-app [-t pane] INT|TERM|KILL`
 - `respawn-pane-app [-t pane]`
@@ -253,6 +264,7 @@ Exit criteria:
 Provide these wrappers:
 
 - `eos-app pane launch -- COMMAND`
+- `eos-app pane launch --game -- COMMAND`
 - `eos-app pane split [-h|-v] -- COMMAND`
 - `eos-app pane view app|console|toggle`
 - `eos-app pane signal SIGNAL`

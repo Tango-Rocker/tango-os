@@ -30,7 +30,11 @@ Usage: app.sh launch terminal [args...]
        app.sh launch quake [--smoke] [--pane|--fullscreen|--output] [--map NAME] [--game MOD]
        app.sh recover preview|terminal|terminal-secondary|cube|quake
 	   app.sh terminal register --slot terminal|terminal-secondary [--tty /dev/pts/N]
-       app.sh pane launch -- COMMAND [ARG...]
+       app.sh pane launch [--game] [--pane TMUX_PANE] -- COMMAND [ARG...]
+       app.sh pane split [-h|-v] [--game] [--pane TMUX_PANE] -- COMMAND [ARG...]
+       app.sh pane view [--pane TMUX_PANE] app|console|toggle|close
+       app.sh pane signal [--pane TMUX_PANE] INT|TERM|KILL
+       app.sh pane respawn [--pane TMUX_PANE]
        app.sh pane focus [--pane TMUX_PANE]
        app.sh pane geometry [--pane TMUX_PANE]
        app.sh pane unbind [--pane TMUX_PANE]
@@ -54,7 +58,9 @@ re-layout mapped panel clients without restarting them.
 recover asks the running shell to refresh IPC or relaunch a shell-owned slot
 without restarting the compositor service.
 pane launch binds arbitrary GUI apps to the invoking tmux pane through the
-running shell. window commands remain for diagnostics and manual recovery.
+authoritative native mux when native mode is active. The legacy bridge remains
+available only while the shell is explicitly running in legacy mode. window
+commands remain for diagnostics and manual recovery.
 HELP
 }
 
@@ -866,13 +872,107 @@ pane_target_arg() {
   printf '%s\n' "$pane_id"
 }
 
-run_pane_launch() {
-  [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]] ||
-    die "pane launch requires TMUX and TMUX_PANE"
-  if [[ "${1:-}" == "--" ]]; then
-    shift
+native_pane_mode() {
+  case "${ENGINEOS_MUX_MODE:-}" in
+    native)
+      return 0
+      ;;
+    legacy)
+      return 1
+      ;;
+    "")
+      ;;
+    *)
+      die "ENGINEOS_MUX_MODE must be legacy or native"
+      ;;
+  esac
+  [[ -r "$SHELL_STATE_FILE" ]] || return 1
+  local mode
+  mode="$(python - "$SHELL_STATE_FILE" <<'PY'
+import json
+import sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        state = json.load(handle)
+except (OSError, ValueError) as exc:
+    raise SystemExit(f"cannot parse shell state: {exc}")
+print(state.get("mux", {}).get("mode", "legacy"))
+PY
+)" || die "pane command could not read mux mode from $SHELL_STATE_FILE"
+  case "$mode" in
+    native) return 0 ;;
+    legacy) return 1 ;;
+    *) die "shell state contains an unsupported mux mode: $mode" ;;
+  esac
+}
+
+native_mux_bin() {
+  local candidate="${ENGINEOS_MUX_BIN:-}"
+  if [[ -z "$candidate" ]]; then
+    candidate="$(command -v engine-mux || true)"
   fi
+  [[ -n "$candidate" && -x "$candidate" ]] ||
+    die "native pane command requires engine-mux"
+  printf '%s\n' "$candidate"
+}
+
+native_muxctl_bin() {
+  local candidate="${ENGINEOS_MUXCTL_BIN:-}"
+  if [[ -z "$candidate" ]]; then
+    candidate="$(command -v engine-muxctl || true)"
+  fi
+  [[ -n "$candidate" && -x "$candidate" ]] ||
+    die "native pane list requires engine-muxctl"
+  printf '%s\n' "$candidate"
+}
+
+require_native_pane_mode() {
+  native_pane_mode ||
+    die "pane $1 requires the EngineOS shell to run in native mux mode"
+}
+
+run_pane_launch() {
+  local pane_id="${TMUX_PANE:-}"
+  local game=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --game|-g)
+        game=true
+        shift
+        ;;
+      --pane)
+        shift
+        [[ $# -gt 0 ]] || die "pane launch --pane requires a tmux pane id"
+        pane_id="$1"
+        shift
+        ;;
+      --)
+        shift
+        break
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+  [[ -n "${TMUX:-}" && -n "$pane_id" ]] ||
+    die "pane launch requires TMUX and TMUX_PANE or --pane"
   [[ $# -gt 0 ]] || die "pane launch requires a command"
+
+  if native_pane_mode; then
+    local mux_bin
+    local mux_args=(launch-pane-app)
+    mux_bin="$(native_mux_bin)"
+    [[ "$game" == false ]] || mux_args+=(-g)
+    mux_args+=(-t "$pane_id" --)
+    log_line "pane launch mode=native pane=$pane_id presentation=$([[ "$game" == true ]] && printf game || printf wayland) command=$(quote_cmd "$@")"
+    "$mux_bin" "${mux_args[@]}" "$@"
+    return
+  fi
+  [[ "$game" == false ]] ||
+    die "pane launch --game requires native mux mode"
+  [[ "$pane_id" == "${TMUX_PANE:-}" ]] ||
+    die "legacy pane launch cannot target a different pane"
 
   require_shell_display "pane"
   local token
@@ -887,7 +987,97 @@ run_pane_launch() {
   prepare_client_env
   export ENGINEOS_PANE_LAUNCH_TOKEN="$token"
 	log_line "pane launch pane=$TMUX_PANE display=${WAYLAND_DISPLAY:-missing} command=$(quote_cmd "$@")"
-  exec "$@"
+	exec "$@"
+}
+
+run_pane_split() {
+  local pane_id="${TMUX_PANE:-}"
+  local orientation=""
+  local game=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|-v)
+        [[ -z "$orientation" || "$orientation" == "$1" ]] ||
+          die "pane split horizontal and vertical modes conflict"
+        orientation="$1"
+        shift
+        ;;
+      --game|-g)
+        game=true
+        shift
+        ;;
+      --pane)
+        shift
+        [[ $# -gt 0 ]] || die "pane split --pane requires a tmux pane id"
+        pane_id="$1"
+        shift
+        ;;
+      --)
+        shift
+        break
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+  [[ -n "${TMUX:-}" && -n "$pane_id" ]] ||
+    die "pane split requires TMUX and TMUX_PANE or --pane"
+  [[ $# -gt 0 ]] || die "pane split requires a command"
+  require_native_pane_mode split
+  local mux_bin
+  local mux_args=(split-pane-app)
+  mux_bin="$(native_mux_bin)"
+  [[ -z "$orientation" ]] || mux_args+=("$orientation")
+  [[ "$game" == false ]] || mux_args+=(-g)
+  mux_args+=(-t "$pane_id" --)
+  log_line "pane split mode=native pane=$pane_id presentation=$([[ "$game" == true ]] && printf game || printf wayland) command=$(quote_cmd "$@")"
+  "$mux_bin" "${mux_args[@]}" "$@"
+}
+
+run_pane_view() {
+  local pane_id="${TMUX_PANE:-}"
+  if [[ "${1:-}" == --pane ]]; then
+    shift
+    [[ $# -gt 0 ]] || die "pane view --pane requires a tmux pane id"
+    pane_id="$1"
+    shift
+  fi
+  local mode="${1:-}"
+  shift || true
+  [[ $# -eq 0 ]] || die "pane view takes one mode"
+  case "$mode" in app|console|toggle|close) ;; *)
+    die "pane view requires app, console, toggle, or close" ;;
+  esac
+  [[ -n "$pane_id" ]] || die "pane view requires TMUX_PANE or --pane"
+  require_native_pane_mode view
+  "$(native_mux_bin)" pane-presentation -t "$pane_id" "$mode"
+}
+
+run_pane_signal() {
+  local pane_id="${TMUX_PANE:-}"
+  if [[ "${1:-}" == --pane ]]; then
+    shift
+    [[ $# -gt 0 ]] || die "pane signal --pane requires a tmux pane id"
+    pane_id="$1"
+    shift
+  fi
+  local signal="${1:-}"
+  shift || true
+  [[ $# -eq 0 ]] || die "pane signal takes one signal"
+  case "$signal" in INT|TERM|KILL) ;; *)
+    die "pane signal requires INT, TERM, or KILL" ;;
+  esac
+  [[ -n "$pane_id" ]] || die "pane signal requires TMUX_PANE or --pane"
+  require_native_pane_mode signal
+  "$(native_mux_bin)" signal-pane-app -t "$pane_id" "$signal"
+}
+
+run_pane_respawn() {
+  local pane_id
+  pane_id="$(pane_target_arg "$@")" || return 0
+  require_native_pane_mode respawn
+  "$(native_mux_bin)" respawn-pane-app -t "$pane_id"
 }
 
 run_pane_focus() {
@@ -962,6 +1152,36 @@ run_pane_list() {
     esac
     shift
   done
+
+	if native_pane_mode; then
+		local snapshot
+		snapshot="$("$(native_muxctl_bin)" snapshot)" ||
+			die "native pane snapshot failed"
+		python - "$snapshot" "$json" <<'PY'
+import json
+import sys
+
+state, as_json = json.loads(sys.argv[1]), sys.argv[2] == "true"
+panes = state.get("panes", [])
+if as_json:
+    print(json.dumps({"ok": True, "revision": state.get("revision", 0),
+                      "panes": panes}, separators=(",", ":")))
+else:
+    print("PANE\tACTIVE\tPRESENTATION\tVIEW\tMAPPED\tTABS\tSCOPE\tCOMMAND")
+    for pane in panes:
+        print("{pane_id}\t{active}\t{presentation}\t{view_mode}\t{mapped}\t"
+              "{surface_tabs}\t{scope}\t{command}".format(
+                  pane_id=pane.get("pane_id", ""),
+                  active=bool(pane.get("active", False)),
+                  presentation=pane.get("presentation", "terminal"),
+                  view_mode=pane.get("view_mode", "presentation"),
+                  mapped=bool(pane.get("mapped", False)),
+                  surface_tabs=pane.get("surface_tabs", 0),
+                  scope=pane.get("process_scope", ""),
+                  command=pane.get("app_command") or pane.get("command", "")))
+PY
+		return
+	fi
 
 	local response
 	response="$(send_shell_ipc "$(shell_ipc_socket)" \
@@ -1071,6 +1291,18 @@ run_pane() {
 	case "$sub" in
 	    launch)
 	      run_pane_launch "$@"
+	      ;;
+	    split)
+	      run_pane_split "$@"
+	      ;;
+	    view)
+	      run_pane_view "$@"
+	      ;;
+	    signal)
+	      run_pane_signal "$@"
+	      ;;
+	    respawn)
+	      run_pane_respawn "$@"
 	      ;;
 	    focus)
 	      run_pane_focus "$@"
@@ -1204,6 +1436,29 @@ prepare_quake_layout() {
   log_line "layout app=quake mode=output source=no-tmux"
 }
 
+prepare_native_quake_args() {
+  local saw_window=false
+  QUAKE_LAUNCH_ARGS=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --pane)
+        ;;
+      --output|--no-pane|--fullscreen)
+        die "native pane Quake does not accept $1; launch it outside the pane for output-wide presentation"
+        ;;
+      --window)
+        saw_window=true
+        QUAKE_LAUNCH_ARGS+=("$1")
+        ;;
+      *)
+        QUAKE_LAUNCH_ARGS+=("$1")
+        ;;
+    esac
+    shift
+  done
+  [[ "$saw_window" == true ]] || QUAKE_LAUNCH_ARGS+=(--window)
+}
+
 require_shell_display() {
   if [[ "${ENGINEOS_APP_REQUIRE_WAYLAND:-true}" == "true" && -z "${WAYLAND_DISPLAY:-}" ]]; then
     write_app_state "${1:-unknown}" "failed" "missing-wayland-display"
@@ -1261,6 +1516,14 @@ run_launch() {
     quake)
       require_shell_display "$app"
       prepare_client_env
+		if native_pane_mode && [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]]; then
+			prepare_native_quake_args "$@"
+			write_app_state "$app" "launch-requested" "" "${QUAKE_LAUNCH_ARGS[@]}"
+			log_line "launch app=quake owner=native-mux pane=$TMUX_PANE display=${WAYLAND_DISPLAY:-missing} sdl=${SDL_VIDEODRIVER:-unset} args=${QUAKE_LAUNCH_ARGS[*]}"
+			run_pane_launch --game -- "$(game_cmd_string)" quake play --foreground \
+				"${QUAKE_LAUNCH_ARGS[@]}"
+			return
+		fi
       prepare_quake_layout "$@"
       write_app_state "$app" "launch-requested" "" "${QUAKE_LAUNCH_ARGS[@]}"
       log_line "launch app=quake owner=engineos-shell display=${WAYLAND_DISPLAY:-missing} sdl=${SDL_VIDEODRIVER:-unset} args=${QUAKE_LAUNCH_ARGS[*]}"

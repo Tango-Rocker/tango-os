@@ -21,7 +21,7 @@ Usage:
   eos game quake create PROMPT [--wait] [--inline]
   eos game quake build PROMPT [--wait] [--inline]
   eos game quake edit [JOB_ID]
-  eos game quake play [--map NAME] [--game MOD] [--smoke]
+  eos game quake play [--map NAME] [--game MOD] [--smoke] [--foreground]
   eos game quake reload [--job JOB_ID|--bsp PATH --map NAME]
   eos game quake status [JOB_ID]
   eos game quake proof
@@ -66,6 +66,17 @@ resolve_id1() {
   fi
 }
 
+quake_runner() {
+  local source_runner="$ROOT/engines/quakespasm/engineos/run.sh"
+  if [[ -x "$source_runner" ]]; then
+    printf '%s\n' "$source_runner"
+  elif [[ -x /usr/share/engineos/quake/run.sh ]]; then
+    printf '%s\n' /usr/share/engineos/quake/run.sh
+  else
+    die "Quake runner is missing"
+  fi
+}
+
 write_launch_request() {
 	local map="$1" game="$2" smoke="$3" window="$4" fullscreen="$5" id1="$6"
   mkdir -p "$RUNTIME_DIR" "$STATE_DIR/logs"
@@ -85,7 +96,8 @@ PY
 }
 
 play_quake() {
-	local map="" game="id1" smoke=false window=false fullscreen=false id1
+	local map="" game="id1" smoke=false window=false fullscreen=false
+	local foreground=false id1
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --map) shift; map="${1:-}" ;;
@@ -93,6 +105,7 @@ play_quake() {
 			--smoke) smoke=true ;;
 			--window) window=true ;;
 			--fullscreen) fullscreen=true ;;
+			--foreground) foreground=true ;;
       *) die "unknown quake play option: $1" ;;
     esac
     shift
@@ -102,6 +115,15 @@ play_quake() {
   id1="$(resolve_id1)" || die "Quake assets are not ready; run eos-assets prepare/check quake"
 	[[ "$window" != true || "$fullscreen" != true ]] ||
 		die "quake play cannot combine --window and --fullscreen"
+	if [[ "$foreground" == true ]]; then
+		local runner_args=(--game "$game")
+		[[ -z "$map" ]] || runner_args+=(--map "$map")
+		[[ "$smoke" == false ]] || runner_args+=(--smoke)
+		[[ "$window" == false ]] || runner_args+=(--window)
+		[[ "$fullscreen" == false ]] || runner_args+=(--fullscreen)
+		export ENGINEOS_QUAKE_ID1="$id1"
+		exec "$(quake_runner)" "${runner_args[@]}"
+	fi
 	write_launch_request "$map" "$game" "$smoke" "$window" "$fullscreen" "$id1"
   import_graphical_environment
   systemctl_user restart engineos-quake.service

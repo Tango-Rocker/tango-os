@@ -172,11 +172,14 @@ run_mux() {
 	local pane_scope="" pane_app_pid="" pane_state="" split_pane_id=""
 	local pane_shell_pid="" pane_foreground_pid=""
 	local wayland_display="" unscoped_pid="" scoped_client_pid=""
+	local game_wrapper_command=""
 	local preview_png=""
 	local primary_surface_id="" secondary_surface_id=""
 	local multi_grid_pid="" first_split_pane="" second_split_pane=""
 	local user_runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 	local user_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$user_runtime/bus}"
+	local TMUX="" TMUX_PANE=""
+	export TMUX TMUX_PANE
 
 	if [[ -z "$mux_bin" ]]; then
 		mux_bin="$ROOT/artifacts/build/engineos-mux/engineos-mux/src/tmux-$mux_commit/tmux"
@@ -450,12 +453,12 @@ PY
 		"$fixture/presentation-timeout.txt" >/dev/null ||
 		die "unmapped graphical launch timeout was not reported in the pane console"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
-		split-pane-app -h -t "$pane_id" -- /bin/sh -c \
+		split-pane-app -g -h -t "$pane_id" -- /bin/sh -c \
 		'printf "SPLIT-APP-STDOUT\n"; printf "SPLIT-APP-STDERR\n" >&2; exec sleep 60'
 	split_pane_id="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
 		"$mux_bin" list-panes -t contract -F '#{pane_id} #{pane_presentation}' |
-		awk '$2 == "wayland" { print $1 }')"
-	[[ -n "$split_pane_id" ]] || die "split-pane-app did not create a graphical pane"
+		awk '$2 == "game" { print $1 }')"
+	[[ -n "$split_pane_id" ]] || die "split-pane-app did not create a game pane"
 	for _ in {1..100}; do
 		pane_state="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
 			"$mux_bin" display-message -p -t "$split_pane_id" \
@@ -1481,6 +1484,99 @@ PY
 	done
 	[[ "$pane_state" == 'terminal|presentation|0' ]] ||
 		die "scoped Wayland application exit did not restore the pane console"
+	printf -v game_wrapper_command \
+		'ENGINEOS_MUX_MODE=native ENGINEOS_MUX_BIN=%q ENGINEOS_LOG_DIR=%q %q pane launch --game -- env WAYLAND_DISPLAY=%q %q' \
+		"$mux_bin" "$fixture" "$SCRIPT_DIR/app.sh" \
+		"$fixture/$wayland_display" \
+		"$fixture/bin/engineos-wayland-presentation-client"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -t "$shell_pane_id" -l "$game_wrapper_command"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -t "$shell_pane_id" Enter
+	for _ in {1..150}; do
+		jq -e '.mux.presentation.type == "game" and
+			.mux.presentation.view_mode == "presentation" and
+			.mux.presentation.mapped == true and .input.mode == "game" and
+			.input.capture == true and .cursor.locked == true and
+			([.output_views[] | select(.owns_selected_presentation)] | length) == 1' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '.mux.presentation.type == "game" and .input.mode == "game" and
+		.input.capture == true and .cursor.locked == true' \
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '{mux: .mux.presentation,input,cursor,windows}' \
+			"$fixture/engineos/shell-state.json" >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
+		die "native game launch did not acquire direct presentation input and capture"
+	}
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		ENGINEOS_MUX_MODE=native ENGINEOS_MUX_BIN="$mux_bin" \
+		"$SCRIPT_DIR/app.sh" pane view --pane "$shell_pane_id" console
+	for _ in {1..100}; do
+		jq -e '.mux.presentation.type == "game" and
+			.mux.presentation.view_mode == "console" and
+			.input.mode == "terminal" and .input.capture == false and
+			.cursor.locked == false' "$fixture/engineos/shell-state.json" \
+			>/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '.mux.presentation.view_mode == "console" and
+		.input.mode == "terminal" and .input.capture == false' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "native game console toggle did not release capture"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		ENGINEOS_MUX_MODE=native ENGINEOS_MUX_BIN="$mux_bin" \
+		"$SCRIPT_DIR/app.sh" pane view --pane "$shell_pane_id" app
+	for _ in {1..100}; do
+		jq -e '.mux.presentation.type == "game" and
+			.mux.presentation.view_mode == "presentation" and
+			.input.mode == "game" and .input.capture == true and
+			.cursor.locked == true' "$fixture/engineos/shell-state.json" \
+			>/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '.input.mode == "game" and .input.capture == true and
+		.cursor.locked == true' "$fixture/engineos/shell-state.json" >/dev/null ||
+		die "native game presentation toggle did not restore capture"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		ENGINEOS_MUX_MODE=native ENGINEOS_MUX_BIN="$mux_bin" \
+		"$SCRIPT_DIR/app.sh" pane signal --pane "$shell_pane_id" TERM
+	for _ in {1..150}; do
+		pane_state="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+			"$mux_bin" display-message -p -t "$shell_pane_id" \
+			'#{pane_presentation}|#{pane_view_mode}|#{pane_surface_count}')"
+		[[ "$pane_state" == 'terminal|presentation|0' ]] && break
+		sleep 0.02
+	done
+	[[ "$pane_state" == 'terminal|presentation|0' ]] ||
+		die "native game exit did not restore the pane console"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		ENGINEOS_MUX_MODE=native ENGINEOS_MUX_BIN="$mux_bin" \
+		"$SCRIPT_DIR/app.sh" pane respawn --pane "$shell_pane_id"
+	for _ in {1..150}; do
+		jq -e '.mux.presentation.type == "game" and
+			.mux.presentation.mapped == true and .input.mode == "game" and
+			.input.capture == true' "$fixture/engineos/shell-state.json" \
+			>/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '.mux.presentation.type == "game" and .input.mode == "game" and
+		.input.capture == true' "$fixture/engineos/shell-state.json" >/dev/null ||
+		die "native game respawn did not preserve its presentation type"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		ENGINEOS_MUX_MODE=native ENGINEOS_MUX_BIN="$mux_bin" \
+		"$SCRIPT_DIR/app.sh" pane signal --pane "$shell_pane_id" TERM
+	for _ in {1..150}; do
+		jq -e '.mux.presentation.type == "terminal" and
+			.input.mode == "terminal" and .input.capture == false' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '.mux.presentation.type == "terminal" and
+		.input.mode == "terminal" and .input.capture == false' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "native game respawn exit did not restore terminal input"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		list-clients -F '#{client_name} #{client_flags}' \
 		>"$fixture/graphical-clients.txt"
@@ -2262,6 +2358,12 @@ run_game_workflow() {
 	local err="$tmp_dir/err.txt"
 	local systemctl_log="$tmp_dir/systemctl.log"
 	local request="$tmp_dir/run/quake-launch.json"
+	local service_adapter="$ROOT/tools/game/engineos_quake_service.py"
+	if [[ ! -r "$service_adapter" ]]; then
+		service_adapter="/usr/lib/engineos/game/engineos-quake-service"
+	fi
+	[[ -r "$service_adapter" ]] ||
+		die "Quake service adapter is unavailable"
 	trap 'rm -rf "$tmp_dir"' RETURN
 	mkdir -p "$tmp_dir/run" "$tmp_dir/state" "$tmp_dir/id1"
 	cat >"$tmp_dir/systemctl" <<'FAKE'
@@ -2307,12 +2409,31 @@ PY
 	mkdir -p "$tmp_dir/engines/quakespasm/engineos"
 	cat >"$tmp_dir/engines/quakespasm/engineos/run.sh" <<'FAKE'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >"$HOME/quake-service-args.txt"
+printf '%s\n' "$*" >"${ENGINEOS_FAKE_QUAKE_ARGS:-$HOME/quake-service-args.txt}"
+printf 'id1=%s\n' "${ENGINEOS_QUAKE_ID1:-missing}" >>"${ENGINEOS_FAKE_QUAKE_ARGS:-$HOME/quake-service-args.txt}"
 FAKE
 	chmod +x "$tmp_dir/engines/quakespasm/engineos/run.sh"
+	local systemctl_lines
+	systemctl_lines="$(wc -l <"$systemctl_log")"
+	HOME="$tmp_dir" ENGINEOS_ROOT="$tmp_dir" \
+		ENGINEOS_GAME_RUNTIME_DIR="$tmp_dir/run" \
+		ENGINEOS_GAME_STATE_DIR="$tmp_dir/state" \
+		ENGINEOS_QUAKE_ID1="$tmp_dir/id1" \
+		ENGINEOS_SYSTEMCTL_CMD="$tmp_dir/systemctl" \
+		ENGINEOS_FAKE_SYSTEMCTL_LOG="$systemctl_log" \
+		ENGINEOS_FAKE_QUAKE_ARGS="$tmp_dir/quake-foreground-args.txt" \
+		"$SCRIPT_DIR/game.sh" quake play --foreground --map pane_proof \
+			--game id1 --window
+	grep -F -- '--game id1 --map pane_proof --window' \
+		"$tmp_dir/quake-foreground-args.txt" >/dev/null ||
+		die "foreground Quake workflow did not exec the pane-owned runner"
+	grep -F "id1=$tmp_dir/id1" "$tmp_dir/quake-foreground-args.txt" >/dev/null ||
+		die "foreground Quake workflow did not preserve the validated asset path"
+	[[ "$(wc -l <"$systemctl_log")" == "$systemctl_lines" ]] ||
+		die "foreground Quake workflow escaped into the user service"
 	HOME="$tmp_dir" ENGINEOS_ROOT="$tmp_dir" \
 		ENGINEOS_QUAKE_LAUNCH_REQUEST="$request" \
-		python "$ROOT/tools/game/engineos_quake_service.py"
+		python "$service_adapter"
 	grep -F -- '--map dgen_smoke --game id1 --smoke' "$tmp_dir/quake-service-args.txt" >/dev/null ||
 		die "Quake user-service adapter did not exec the validated launch request"
 	python - "$request" <<'PY'
@@ -2325,7 +2446,7 @@ path.write_text(json.dumps(data), encoding="utf-8")
 PY
 	if HOME="$tmp_dir" ENGINEOS_ROOT="$tmp_dir" \
 			ENGINEOS_QUAKE_LAUNCH_REQUEST="$request" \
-			python "$ROOT/tools/game/engineos_quake_service.py" >"$out" 2>"$err"; then
+			python "$service_adapter" >"$out" 2>"$err"; then
 		die "Quake user-service adapter accepted conflicting display modes"
 	fi
 	grep -F 'window and fullscreen modes are mutually exclusive' "$err" >/dev/null ||
@@ -2738,6 +2859,15 @@ FAKE
 printf 'fake cube %s\n' "$*"
 printf 'libdecor=%s\n' "${SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR:-unset}"
 FAKE
+	cat >"$fake_bin/engine-mux" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$ENGINEOS_FAKE_MUX_CALLS"
+FAKE
+	cat >"$fake_bin/engine-muxctl" <<'FAKE'
+#!/usr/bin/env bash
+[[ "${1:-}" == snapshot ]] || exit 64
+printf '%s\n' '{"schema":"engine-mux/snapshot-v1","revision":42,"panes":[{"pane_id":"%9","active":true,"presentation":"game","view_mode":"presentation","mapped":true,"surface_tabs":1,"process_scope":"engine-pane-proof.scope","app_command":"quake"}]}'
+FAKE
 	  cat >"$fake_bin/tmux" <<'FAKE'
 #!/usr/bin/env bash
 if [[ "$1" == "display-message" ]]; then
@@ -2763,6 +2893,7 @@ if [[ "$1" == "display-message" ]]; then
 fi
 exit 1
 FAKE
+	chmod +x "$fake_bin/engine-mux" "$fake_bin/engine-muxctl"
   cat >"$fake_bin/pkill" <<'FAKE'
 #!/usr/bin/env bash
 exit 1
@@ -3235,6 +3366,68 @@ PY
     die "app window focus did not report focused window"
   grep -F '"op":"focus-window","window_id":7' "$tmp_dir/focus-request.txt" >/dev/null ||
     die "app window focus did not send shell IPC focus request"
+
+	python - "$tmp_dir/run/shell-state.json" <<'PY'
+import json
+import sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    state = json.load(handle)
+state["mux"] = {"mode": "native", "connected": True}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(state, handle)
+PY
+	: >"$tmp_dir/native-mux-calls.txt"
+	PATH="$fake_bin:$PATH" ENGINEOS_LOG_DIR="$log_dir" \
+		ENGINEOS_STATE_DIR="$tmp_dir/run" \
+		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
+		TMUX="/tmp/engine-mux,1,0" TMUX_PANE="%9" \
+		"$SCRIPT_DIR/app.sh" pane launch --game -- quake -window >"$out"
+	PATH="$fake_bin:$PATH" ENGINEOS_LOG_DIR="$log_dir" \
+		ENGINEOS_STATE_DIR="$tmp_dir/run" \
+		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
+		TMUX="/tmp/engine-mux,1,0" TMUX_PANE="%9" \
+		"$SCRIPT_DIR/app.sh" pane split -h --game -- quake -window >"$out"
+	PATH="$fake_bin:$PATH" ENGINEOS_STATE_DIR="$tmp_dir/run" \
+		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
+		TMUX_PANE="%9" "$SCRIPT_DIR/app.sh" pane view console
+	PATH="$fake_bin:$PATH" ENGINEOS_STATE_DIR="$tmp_dir/run" \
+		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
+		TMUX_PANE="%9" "$SCRIPT_DIR/app.sh" pane signal TERM
+	PATH="$fake_bin:$PATH" ENGINEOS_STATE_DIR="$tmp_dir/run" \
+		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
+		TMUX_PANE="%9" "$SCRIPT_DIR/app.sh" pane respawn
+	PATH="$fake_bin:$PATH" ENGINEOS_LOG_DIR="$log_dir" \
+		ENGINEOS_STATE_DIR="$tmp_dir/run" \
+		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
+		ENGINEOS_GAME_CMD="$fake_bin/eos-runtime" \
+		TMUX="/tmp/engine-mux,1,0" TMUX_PANE="%9" \
+		WAYLAND_DISPLAY="engineos-test-wayland" \
+		"$SCRIPT_DIR/app.sh" launch quake --map native_proof >"$out"
+	PATH="$fake_bin:$PATH" ENGINEOS_STATE_DIR="$tmp_dir/run" \
+		"$SCRIPT_DIR/app.sh" pane list --json >"$out"
+	grep -Fx 'launch-pane-app -g -t %9 -- quake -window' \
+		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
+		die "native app pane launch did not select authoritative game presentation"
+	grep -Fx 'split-pane-app -h -g -t %9 -- quake -window' \
+		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
+		die "native app pane split did not preserve orientation and game presentation"
+	grep -Fx 'pane-presentation -t %9 console' \
+		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
+		die "native app pane view did not route to engine-mux"
+	grep -Fx 'signal-pane-app -t %9 TERM' \
+		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
+		die "native app pane signal did not route to engine-mux"
+	grep -Fx 'respawn-pane-app -t %9' "$tmp_dir/native-mux-calls.txt" >/dev/null ||
+		die "native app pane respawn did not route to engine-mux"
+	grep -Fx "launch-pane-app -g -t %9 -- $fake_bin/eos-runtime quake play --foreground --map native_proof --window" \
+		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
+		die "native Quake launch did not route through a game pane"
+	grep -F 'launch app=quake owner=native-mux pane=%9' "$log_dir/app.log" >/dev/null ||
+		die "native Quake launch did not record mux ownership"
+	grep -F '"revision":42' "$out" >/dev/null &&
+		grep -F '"presentation":"game"' "$out" >/dev/null ||
+		die "native app pane list did not return authoritative mux state"
 
   "$SCRIPT_DIR/app.sh" manifest validate >"$out"
   grep -F 'App manifest validation summary: 0 failure(s)' "$out" >/dev/null ||

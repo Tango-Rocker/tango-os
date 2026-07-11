@@ -2914,8 +2914,13 @@ static void sync_native_presentation_visibility(
 		}
 	}
 	if (active != NULL) {
+		struct engineos_mux_pane_model *pane = find_shell_pane_model(server,
+			active->mux_pane_id, active->mux_pane_generation);
+		enum engineos_input_mode expected_mode = pane != NULL &&
+			strcmp(pane->presentation, "game") == 0 ?
+			ENGINEOS_INPUT_GAME : ENGINEOS_INPUT_GRAPHICAL;
 		if (server->focused_view != active ||
-				server->input_mode != ENGINEOS_INPUT_GRAPHICAL)
+				server->input_mode != expected_mode)
 			activate_view(active, reason);
 	} else if (server->focused_view != NULL &&
 			server->focused_view->mux_bound) {
@@ -2923,8 +2928,11 @@ static void sync_native_presentation_visibility(
 		server->focused_view = NULL;
 		wlr_seat_keyboard_notify_clear_focus(server->seat);
 		server->input_mode = ENGINEOS_INPUT_TERMINAL;
+		server->game_capture = false;
 		server->mux_prefix_pending = false;
 		server->mux_consumed_keycode = 0;
+		sync_pointer_constraint(server, reason);
+		sync_cursor_image(server, reason);
 	}
 	sync_native_preview_lease(server, reason);
 	schedule_outputs(server);
@@ -4365,13 +4373,22 @@ static struct engineos_shell_view *view_at_cursor(
 	return view;
 }
 
+static bool view_is_native_mux_game(struct engineos_shell_view *view) {
+	if (view == NULL || !view->mux_bound)
+		return false;
+	struct engineos_mux_pane_model *pane = find_shell_pane_model(view->server,
+		view->mux_pane_id, view->mux_pane_generation);
+	return pane != NULL && strcmp(pane->presentation, "game") == 0;
+}
+
 static bool should_lock_game_cursor(struct engineos_shell_server *server) {
 	return server != NULL &&
 		server->game_capture &&
 		server->input_mode == ENGINEOS_INPUT_GAME &&
 		server->focused_view != NULL &&
 		server->focused_view->mapped &&
-		server->focused_view->role == ENGINEOS_SURFACE_ENGINE;
+		(server->focused_view->role == ENGINEOS_SURFACE_ENGINE ||
+		 view_is_native_mux_game(server->focused_view));
 }
 
 static struct wlr_surface *focused_game_surface(
@@ -4698,10 +4715,15 @@ static void set_input_mode_for_clicked_view(struct engineos_shell_view *view) {
 		return;
 	}
 
-	server->game_capture = false;
+	bool native_game = view_is_native_mux_game(view);
+	server->game_capture = native_game;
 	switch (view->role) {
 	case ENGINEOS_SURFACE_ENGINE:
 		server->input_mode = ENGINEOS_INPUT_GAME;
+		break;
+	case ENGINEOS_SURFACE_MUX_PRESENTATION:
+		server->input_mode = native_game ? ENGINEOS_INPUT_GAME :
+			ENGINEOS_INPUT_GRAPHICAL;
 		break;
 	case ENGINEOS_SURFACE_TERMINAL:
 	case ENGINEOS_SURFACE_TERMINAL_SECONDARY:
@@ -5092,6 +5114,14 @@ static void set_input_mode(struct engineos_shell_server *server,
 		write_shell_state(server, reason);
 		break;
 	case ENGINEOS_INPUT_GAME:
+		if (view_is_native_mux_game(server->focused_view)) {
+				server->input_mode = ENGINEOS_INPUT_GAME;
+				server->game_capture = true;
+				sync_pointer_constraint(server, reason);
+				sync_cursor_image(server, reason);
+				write_shell_state(server, reason);
+				break;
+		}
 		if (find_mapped_role(server, ENGINEOS_SURFACE_ENGINE) != NULL) {
 			set_active_slot(server, ENGINEOS_SURFACE_ENGINE, reason);
 		} else {
@@ -5112,8 +5142,10 @@ static void toggle_game_capture(struct engineos_shell_server *server) {
 	if (server->input_mode != ENGINEOS_INPUT_GAME) {
 		set_input_mode(server, ENGINEOS_INPUT_GAME, "capture-toggle");
 	}
+	bool native_game = view_is_native_mux_game(server->focused_view);
 	if (server->input_mode != ENGINEOS_INPUT_GAME ||
-			find_mapped_role(server, ENGINEOS_SURFACE_ENGINE) == NULL) {
+			(!native_game &&
+			 find_mapped_role(server, ENGINEOS_SURFACE_ENGINE) == NULL)) {
 		server->game_capture = false;
 		wlr_log(WLR_INFO,
 			"input capture=none mode=%s reason=toggle-ignored engine_mapped=false active_slot=%s",
@@ -5230,9 +5262,10 @@ static void activate_view(struct engineos_shell_view *view, const char *reason) 
 		return;
 	}
 
-	server->game_capture = false;
-	server->input_mode = view->mux_bound ?
-		ENGINEOS_INPUT_GRAPHICAL : ENGINEOS_INPUT_TERMINAL;
+	bool native_game = view_is_native_mux_game(view);
+	server->game_capture = native_game;
+	server->input_mode = native_game ? ENGINEOS_INPUT_GAME :
+		(view->mux_bound ? ENGINEOS_INPUT_GRAPHICAL : ENGINEOS_INPUT_TERMINAL);
 	if (view->minimized) {
 		view->minimized = false;
 		wlr_scene_node_set_enabled(&view->scene_tree->node, true);
@@ -5603,7 +5636,8 @@ static bool route_native_graphical_prefix_key(
 		uint32_t keycode, uint32_t modifiers) {
 	if (server->mux_mode != ENGINEOS_MUX_NATIVE ||
 			!server->mux_client.ready ||
-			server->input_mode != ENGINEOS_INPUT_GRAPHICAL)
+			(server->input_mode != ENGINEOS_INPUT_GRAPHICAL &&
+			 server->input_mode != ENGINEOS_INPUT_GAME))
 		return false;
 	if (server->mux_consumed_keycode == event->keycode) {
 		if (event->state == WL_KEYBOARD_KEY_STATE_RELEASED)
@@ -6940,6 +6974,7 @@ static void xdg_surface_map(struct wl_listener *listener, void *data) {
 static void xdg_surface_unmap(struct wl_listener *listener, void *data) {
 	(void)data;
 	struct engineos_shell_view *view = wl_container_of(listener, view, unmap);
+	bool native_game = view_is_native_mux_game(view);
 	view->mapped = false;
 	wlr_scene_node_set_enabled(&view->scene_tree->node, false);
 	if (view->server->mux_mode == ENGINEOS_MUX_NATIVE)
@@ -6953,7 +6988,8 @@ static void xdg_surface_unmap(struct wl_listener *listener, void *data) {
 		wlr_seat_keyboard_notify_clear_focus(view->server->seat);
 	}
 	remove_pane_binding_for_view(view, "view-unmapped");
-	if (view->role == ENGINEOS_SURFACE_ENGINE && view->server->game_capture) {
+	if ((view->role == ENGINEOS_SURFACE_ENGINE || native_game) &&
+			view->server->game_capture) {
 		view->server->game_capture = false;
 		sync_pointer_constraint(view->server, "engine-unmapped");
 		sync_cursor_image(view->server, "engine-unmapped");
@@ -7155,6 +7191,7 @@ static void xdg_surface_destroy(struct wl_listener *listener, void *data) {
 	(void)data;
 	struct engineos_shell_view *view = wl_container_of(listener, view, destroy);
 	struct engineos_shell_server *server = view->server;
+	bool native_game = view_is_native_mux_game(view);
 	if (server->mux_mode == ENGINEOS_MUX_NATIVE && view->mux_bound)
 		native_presentation_unmap(view);
 
@@ -7168,7 +7205,8 @@ static void xdg_surface_destroy(struct wl_listener *listener, void *data) {
 	if (server->moving_view == view) {
 		server->moving_view = NULL;
 	}
-	if (view->role == ENGINEOS_SURFACE_ENGINE && server->game_capture) {
+	if ((view->role == ENGINEOS_SURFACE_ENGINE || native_game) &&
+			server->game_capture) {
 		server->game_capture = false;
 		sync_pointer_constraint(server, "engine-destroyed");
 		sync_cursor_image(server, "engine-destroyed");
