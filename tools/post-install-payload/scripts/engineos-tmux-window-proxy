@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-set -u
-
-printf 'engineos-tmux-window-proxy is deprecated. Launch GUI apps with eos-app pane launch -- COMMAND.\n' >&2
-if command -v eos-app >/dev/null 2>&1; then
-  eos-app pane list
-fi

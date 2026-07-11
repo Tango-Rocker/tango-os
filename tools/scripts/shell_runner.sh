@@ -49,7 +49,7 @@ DEV_SHELL_UNIT="${ENGINEOS_DEV_SHELL_UNIT:-engineos-dev-shell.service}"
 DEV_SHELL_START="${ENGINEOS_DEV_SHELL_START:-engineos-dev-shell-start}"
 PROC_DIR="${ENGINEOS_PROC_DIR:-/proc}"
 KILL_CMD="${ENGINEOS_KILL_CMD:-kill}"
-TMUX_CMD="${ENGINEOS_TMUX_CMD:-tmux}"
+TMUX_CMD="${ENGINEOS_TMUX_CMD:-engine-mux}"
 TMUX_HELPER_DIR="${ENGINEOS_TMUX_HELPER_DIR:-/usr/local/bin}"
 USER_HOME="${ENGINEOS_USER_HOME:-${HOME:-}}"
 PAYLOAD_DIR="${ENGINEOS_POST_INSTALL_PAYLOAD:-}"
@@ -107,8 +107,8 @@ the Runtime graphical entry point and bootstraps the launchpad slots by
 default when the real shell binary is installed.
 
 restart-live restarts engineos-dev-shell.service and verifies that a new
-engineos-shell PID appears. refresh-user refreshes tmux pane bridge helpers,
-sources the managed tmux config, and stops any legacy GUI sync daemon.
+engineos-shell PID appears. refresh-user removes retired bridge helpers and
+sources the managed configuration in the native mux server.
 HELP
 }
 
@@ -354,103 +354,6 @@ proc_uid_matches() {
   [[ "$uid" == "$(id -u)" ]]
 }
 
-tmux_window_sync_daemon_pids() {
-  local pid
-  local argv=()
-  local arg
-  local has_daemon
-  local first_word
-  local proc_path
-
-  for proc_path in "$PROC_DIR"/[0-9]*; do
-    [[ -d "$proc_path" ]] || continue
-    pid="${proc_path##*/}"
-    [[ "$pid" != "$$" ]] || continue
-    proc_uid_matches "$pid" || continue
-    [[ -r "$PROC_DIR/$pid/cmdline" ]] || continue
-    argv=()
-    mapfile -d '' -t argv <"$PROC_DIR/$pid/cmdline" || true
-    [[ "${#argv[@]}" -gt 0 ]] || continue
-    first_word="${argv[0]}"
-    case "${first_word##*/}" in
-      engineos-tmux-window-sync)
-        has_daemon=false
-        for arg in "${argv[@]:1}"; do
-          if [[ "$arg" == "--daemon" ]]; then
-            has_daemon=true
-            break
-          fi
-        done
-        [[ "$has_daemon" == true ]] || continue
-        printf '%s\n' "$pid"
-        ;;
-    esac
-  done
-}
-
-process_alive() {
-  local pid="$1"
-  if [[ "$PROC_DIR" != "/proc" ]]; then
-    [[ -d "$PROC_DIR/$pid" ]]
-    return
-  fi
-  kill -0 "$pid" 2>/dev/null
-}
-
-terminate_pids() {
-  local signal="$1"
-  shift || true
-  [[ "$#" -gt 0 ]] || return 0
-  "$KILL_CMD" "-$signal" "$@" 2>/dev/null || true
-}
-
-stop_tmux_window_sync_daemon() {
-  local dry_run="$1"
-  local daemon_pids=()
-  local pid
-  local waited
-  mapfile -t daemon_pids < <(tmux_window_sync_daemon_pids)
-
-  if [[ "${#daemon_pids[@]}" -gt 0 ]]; then
-    printf '  tmux_sync_old_pids: %s\n' "${daemon_pids[*]}"
-    if [[ "$dry_run" == true ]]; then
-      printf '  would_signal: TERM %s\n' "${daemon_pids[*]}"
-    else
-      terminate_pids TERM "${daemon_pids[@]}"
-      for waited in {1..10}; do
-        local alive=()
-        for pid in "${daemon_pids[@]}"; do
-          process_alive "$pid" && alive+=("$pid")
-        done
-        [[ "${#alive[@]}" -eq 0 ]] && break
-        sleep 0.1
-      done
-      local stubborn=()
-      for pid in "${daemon_pids[@]}"; do
-        process_alive "$pid" && stubborn+=("$pid")
-      done
-      if [[ "${#stubborn[@]}" -gt 0 ]]; then
-        printf '  tmux_sync_stubborn_pids: %s\n' "${stubborn[*]}"
-        terminate_pids KILL "${stubborn[@]}"
-      fi
-    fi
-  else
-    printf '  tmux_sync_old_pids: none\n'
-  fi
-
-  if [[ "$dry_run" == true ]]; then
-    printf '  would_sync: %s run-shell -b %q\n' "$TMUX_CMD" "engineos-tmux-pane-bridge sync"
-    return 0
-  fi
-
-  if "$TMUX_CMD" run-shell -b "engineos-tmux-pane-bridge sync" >/dev/null 2>&1; then
-    printf '  tmux_pane_bridge: synced\n'
-  else
-    printf '  tmux_pane_bridge: skipped reason=no-server-or-run-shell-failed\n'
-  fi
-  return 0
-}
-
 run_refresh_user() {
   local dry_run=false
   local force_config=false
@@ -508,15 +411,20 @@ run_refresh_user() {
     printf '  result:     failed reason=install-tmux-config-failed\n'
     return 1
   fi
-  for helper in engineos-tmux-attach-primary engineos-tmux-pane-bridge engineos-tmux-pane-sync engineos-tmux-window-move engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
-    if ! install_helper_file "$PAYLOAD_DIR/scripts/$helper" "$TMUX_HELPER_DIR/$helper" "$dry_run"; then
-      printf '  result:     failed reason=install-helper-failed helper=%s\n' "$helper"
-      return 1
-    fi
+  for helper in engineos-tmux-attach-primary engineos-tmux-pane-bridge \
+      engineos-tmux-pane-sync engineos-tmux-window-move \
+      engineos-tmux-window-sync engineos-tmux-window-focus \
+      engineos-tmux-window-proxy; do
+		if [[ "$dry_run" == true ]]; then
+			printf '  would_remove: %s\n' "$TMUX_HELPER_DIR/$helper"
+		else
+			rm -f "$TMUX_HELPER_DIR/$helper" 2>/dev/null ||
+				sudo -n rm -f "$TMUX_HELPER_DIR/$helper"
+		fi
   done
 
   if ! have_executable "$TMUX_CMD"; then
-    printf '  tmux:       unavailable; tmux config source and pane bridge sync skipped\n'
+    printf '  mux:        unavailable; native config source skipped\n'
     printf '  result:     partial reason=tmux-unavailable\n'
     return 0
   fi
@@ -532,10 +440,6 @@ run_refresh_user() {
     refresh_reason="tmux-source-failed"
   fi
 
-  if ! stop_tmux_window_sync_daemon "$dry_run"; then
-    refresh_result="partial"
-    refresh_reason="tmux-pane-bridge-sync-failed"
-  fi
   if [[ "$refresh_result" == "partial" ]]; then
     printf '  result:     partial reason=%s\n' "$refresh_reason"
   else

@@ -258,23 +258,19 @@ ensure_pacman_servers() {
 
 configure_tmux() {
   local home
+	local helper
   home="$(user_home "$TARGET_USER")"
   [[ -n "$home" ]] || die "cannot find home for user: $TARGET_USER"
 
   install_managed_tmux_config "$home/.tmux.conf" "$PAYLOAD/assets/tmux.conf" 0644 "$TARGET_USER:$TARGET_USER"
-  if [[ -f "$PAYLOAD/scripts/engineos-tmux-pane-bridge" ]]; then
-    as_root install -Dm0755 "$PAYLOAD/scripts/engineos-tmux-pane-bridge" /usr/local/bin/engineos-tmux-pane-bridge
-    log "installed: /usr/local/bin/engineos-tmux-pane-bridge"
-  else
-    die "tmux pane bridge helper payload missing"
-  fi
-  for helper in engineos-tmux-attach-primary engineos-tmux-pane-sync engineos-tmux-window-move engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
-    if [[ -f "$PAYLOAD/scripts/$helper" ]]; then
-      as_root install -Dm0755 "$PAYLOAD/scripts/$helper" "/usr/local/bin/$helper"
-      log "installed: /usr/local/bin/$helper"
-    else
-      die "tmux window helper payload missing: $helper"
-    fi
+  for helper in engineos-tmux-attach-primary engineos-tmux-pane-bridge \
+      engineos-tmux-pane-sync engineos-tmux-window-move \
+      engineos-tmux-window-sync engineos-tmux-window-focus \
+      engineos-tmux-window-proxy; do
+		if [[ -e "/usr/local/bin/$helper" ]]; then
+			as_root rm -f "/usr/local/bin/$helper"
+			log "removed legacy helper: /usr/local/bin/$helper"
+		fi
   done
 }
 
