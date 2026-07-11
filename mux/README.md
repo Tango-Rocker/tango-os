@@ -13,7 +13,11 @@ header and a bounded payload. The implemented v1 messages are handshake,
 complete layout snapshot, full binary terminal-grid snapshot, sparse grid
 damage, scrollback pages, pane input, graphical-view registration, tmux key
 input, graphical mouse input, focused-view transfer, semantic UI models, and
-explicit errors. The UI
+explicit errors. Snapshot requests can name a registered graphical view; the
+response identifies its frontend client, view, and output and contains only
+that synthetic tmux client's attached session and active window. A stale,
+foreign, or unregistered view is an error rather than an implicit fallback to
+the globally focused client. The UI
 model exports styled status rows, prompts and their input/screen cursors,
 messages, and tmux-rendered menu rows with selection, keys, and command
 metadata. Stale
@@ -51,5 +55,5 @@ meson compile -C build/mux
 ./tools/engineos/eos-test mux
 ```
 
-The next migration proof is the compound pane-presentation and process-scope
-boundary, followed by direct-KMS multi-pane clipping and resize/zoom acceptance.
+The next migration proof is retaining and rendering each output's scoped model
+concurrently, followed by terminal-image transport and direct-KMS acceptance.

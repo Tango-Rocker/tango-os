@@ -166,6 +166,7 @@ run_mux() {
 	local drag_buffer_size="" target_window="" border_pane_id=""
 	local border_width="" resized_width=""
 	local restore_proof="" shell_pane_id=""
+	local view_proof_session="" view_proof_session_id="" view_proof_pane=""
 	local shell_pid="" overlay_pid="" prompt_pid="" shell_client_name=""
 	local initial_native_revision updated_native_revision stable_revision=""
 	local stable_count=0
@@ -275,6 +276,7 @@ PY
 
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" hello >"$fixture/hello.json"
 	jq -e '.server == "engine-mux" and (.capabilities | index("terminal-grid-v1")) and
+		(.capabilities | index("view-snapshot-v1")) and
 		(.capabilities | index("pane-input-v1")) and
 		(.capabilities | index("graphical-view-v1")) and
 		(.capabilities | index("tmux-key-v1")) and
@@ -302,6 +304,34 @@ PY
 		"$fixture/first.json" >/dev/null ||
 		die "mux snapshot did not expose configured prefix keys"
 	pane_id="$(jq -er '.panes[0].pane_id' "$fixture/first.json")"
+	view_proof_session_id="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" new-session -d -s view-proof -P -F '#{session_id}')"
+	view_proof_session="$(jq -er '.panes[0].session_id' "$fixture/first.json")"
+	view_proof_pane="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" display-message -p -t view-proof: '#{pane_id}')"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" \
+		view-session-proof "$view_proof_session" "$view_proof_session_id" \
+		>"$fixture/view-session-proof.json"
+	jq -e --arg first_session "$view_proof_session" \
+		--arg second_session "$view_proof_session_id" \
+		--arg first_pane "$pane_id" --arg second_pane "$view_proof_pane" \
+		'.schema == "engine-mux/view-session-proof-v1" and
+		 .first.snapshot_view_id == 1 and .first.snapshot_client_id > 0 and
+		 .first.snapshot_output == "view-output-a" and
+		 .second.snapshot_view_id == 2 and
+		 .second.snapshot_client_id == .first.snapshot_client_id and
+		 .second.snapshot_output == "view-output-b" and
+		 all(.first.panes[]; .session_id == $first_session) and
+		 all(.second.panes[]; .session_id == $second_session) and
+		 any(.first.panes[]; .pane_id == $first_pane) and
+		 any(.second.panes[]; .pane_id == $second_pane) and
+		 ([.first.panes[].pane_id] | unique | length) == (.first.panes | length) and
+		 ([.second.panes[].pane_id] | unique | length) == (.second.panes | length) and
+		 .invalid_view_error.code == "invalid-view"' \
+		"$fixture/view-session-proof.json" >/dev/null ||
+		die "view-addressed snapshots did not preserve independent session attachment"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		kill-session -t view-proof
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		list-keys -T prefix v | grep -F 'pane-presentation toggle' >/dev/null ||
 		die "engine-mux did not bind prefix+v to the native presentation toggle"

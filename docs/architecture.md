@@ -77,7 +77,9 @@ Selecting `engineos-shell --mux native` is explicit and fail-closed; it does
 not make the current bridge evidence count as native mux acceptance. Native
 pane images are compositor scene objects keyed by pane ID, generation, and the
 tmux-owned client-view lease. Multiple panes may retain images concurrently;
-an image is never reassigned from whichever pane happens to be focused.
+an image is never reassigned from whichever pane happens to be focused. Each
+graphical output's synthetic tmux client also has a view-addressed snapshot;
+the server never substitutes another output's globally focused session.
 
 ### Quake Development
 

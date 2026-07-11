@@ -1036,7 +1036,8 @@ engine_mux_window_seen_before(struct session *target_session,
 
 static char *
 engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
-    size_t *size, struct session *session_filter, int active_window_only)
+	    size_t *size, struct session *session_filter, int active_window_only,
+	    struct engine_mux_view *snapshot_view)
 {
 	struct evbuffer *buffer;
 	struct session *session;
@@ -1054,16 +1055,28 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 	if (buffer == NULL)
 		fatalx("engine mux snapshot allocation failed");
 	evbuffer_add_printf(buffer,
-	    "{\"schema\":\"engine-mux/snapshot-v1\",\"revision\":%llu,\"focused_client_id\":%u,\"focused_view_id\":%u,\"panes\":[",
+	    "{\"schema\":\"engine-mux/snapshot-v1\",\"revision\":%llu,\"focused_client_id\":%u,\"focused_view_id\":%u,\"snapshot_client_id\":%u,\"snapshot_view_id\":%u,\"snapshot_output\":",
 	    (unsigned long long)revision,
 	    engine_mux_focused_view != NULL ?
 	    engine_mux_focused_view->client_id : 0,
-	    engine_mux_focused_view != NULL ? engine_mux_focused_view->id : 0);
+	    engine_mux_focused_view != NULL ? engine_mux_focused_view->id : 0,
+	    snapshot_view != NULL ? snapshot_view->client_id : 0,
+	    snapshot_view != NULL ? snapshot_view->id : 0);
+	engine_mux_json_string(buffer,
+	    snapshot_view != NULL ? snapshot_view->output_name : NULL);
+	evbuffer_add(buffer, ",\"panes\":[", 10);
 	if (engine_mux_focused_view != NULL) {
 		engine_mux_hash_bytes(&hash, &engine_mux_focused_view->client_id,
 		    sizeof engine_mux_focused_view->client_id);
 		engine_mux_hash_bytes(&hash, &engine_mux_focused_view->id,
 		    sizeof engine_mux_focused_view->id);
+	}
+	if (snapshot_view != NULL) {
+		engine_mux_hash_bytes(&hash, &snapshot_view->client_id,
+		    sizeof snapshot_view->client_id);
+		engine_mux_hash_bytes(&hash, &snapshot_view->id,
+		    sizeof snapshot_view->id);
+		engine_mux_hash_string(&hash, snapshot_view->output_name);
 	}
 
 	RB_FOREACH(session, sessions, &sessions) {
@@ -1554,7 +1567,7 @@ engine_mux_frontend_sync(void)
 	engine_mux_reconcile_leases();
 
 	candidate = engine_mux_build_snapshot(engine_mux_revision,
-	    &content_hash, &candidate_size, NULL, 0);
+	    &content_hash, &candidate_size, NULL, 0, NULL);
 	if (engine_mux_snapshot != NULL &&
 	    content_hash == engine_mux_snapshot_hash) {
 		free(candidate);
@@ -1568,7 +1581,7 @@ engine_mux_frontend_sync(void)
 		engine_mux_revision++;
 	free(candidate);
 	candidate = engine_mux_build_snapshot(engine_mux_revision,
-	    &content_hash, &candidate_size, NULL, 0);
+	    &content_hash, &candidate_size, NULL, 0, NULL);
 	free(engine_mux_snapshot);
 	engine_mux_snapshot = candidate;
 	engine_mux_snapshot_size = candidate_size;
@@ -1673,7 +1686,7 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	size_t scrollback_size;
 	const char *hello =
 	    "{\"schema\":\"engine-mux/hello-v1\",\"server\":\"engine-mux\","
-	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\",\"ui-model-v1\",\"ui-invalidate-v1\",\"tmux-mouse-v1\",\"pane-presentation-v1\",\"presentation-resolve-v1\",\"pane-surface-select-v1\",\"presentation-lease-v1\"]}";
+	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"view-snapshot-v1\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\",\"ui-model-v1\",\"ui-invalidate-v1\",\"tmux-mouse-v1\",\"pane-presentation-v1\",\"presentation-resolve-v1\",\"pane-surface-select-v1\",\"presentation-lease-v1\"]}";
 	const char *subscribe_ack =
 	    "{\"schema\":\"engine-mux/grid-subscribe-v1\",\"subscribed\":true}";
 	const char *input_ack =
@@ -1742,43 +1755,69 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 		return;
 	}
 	if (type == ENGINE_MUX_SNAPSHOT_REQUEST) {
-		struct engine_mux_view *view;
+		struct engine_mux_view *view, *snapshot_view = NULL;
 		struct session *snapshot_session = NULL;
-		struct json_object *root = NULL;
+		struct json_object *root = NULL, *view_id_object = NULL;
 		const char *scope = NULL;
 		char *snapshot = NULL;
 		size_t snapshot_size = 0;
 		uint64_t snapshot_hash;
+		u_int requested_view_id;
 
-		TAILQ_FOREACH(view, &client->views, entry) {
-			if (view->tmux_client == NULL ||
-			    view->tmux_client->session == NULL ||
-			    (view->tmux_client->flags & CLIENT_DEAD))
-				continue;
-			if (snapshot_session == NULL)
-				snapshot_session = view->tmux_client->session;
-			if (view->tmux_client->flags & CLIENT_FOCUSED) {
-				snapshot_session = view->tmux_client->session;
-				break;
+		root = engine_mux_parse_json(packet + sizeof header, payload_size);
+		free(packet);
+		if (root == NULL) {
+			if (engine_mux_send_error(client->fd, request_id,
+			    "malformed-json", "snapshot request payload is not valid JSON") != 0)
+				engine_mux_client_free(client);
+			return;
+		}
+		if (json_object_object_get_ex(root, "view_id", &view_id_object)) {
+			if (engine_mux_json_u32(root, "view_id", 1, UINT32_MAX,
+			    &requested_view_id) != 0 ||
+			    (snapshot_view = engine_mux_view_find(client,
+			    requested_view_id)) == NULL ||
+			    snapshot_view->tmux_client == NULL ||
+			    snapshot_view->tmux_client->session == NULL ||
+			    (snapshot_view->tmux_client->flags & CLIENT_DEAD)) {
+				json_object_put(root);
+				if (engine_mux_send_error(client->fd, request_id,
+				    "invalid-view", "snapshot view is not registered and attached") != 0)
+					engine_mux_client_free(client);
+				return;
+			}
+			snapshot_session = snapshot_view->tmux_client->session;
+		} else {
+			TAILQ_FOREACH(view, &client->views, entry) {
+				if (view->tmux_client == NULL ||
+				    view->tmux_client->session == NULL ||
+				    (view->tmux_client->flags & CLIENT_DEAD))
+					continue;
+				if (snapshot_session == NULL) {
+					snapshot_session = view->tmux_client->session;
+					snapshot_view = view;
+				}
+				if (view->tmux_client->flags & CLIENT_FOCUSED) {
+					snapshot_session = view->tmux_client->session;
+					snapshot_view = view;
+					break;
+				}
 			}
 		}
 		if (snapshot_session == NULL) {
-			root = engine_mux_parse_json(packet + sizeof header, payload_size);
-			if (root != NULL)
-				scope = engine_mux_json_string_value(root, "scope", 64);
+			scope = engine_mux_json_string_value(root, "scope", 64);
 			if (scope != NULL && strcmp(scope, "initial-view") == 0) {
 				RB_FOREACH(snapshot_session, sessions, &sessions)
 					break;
 			}
 		}
-		free(packet);
-		if (root != NULL)
-			json_object_put(root);
+		json_object_put(root);
 		client->state_invalidation_pending = 0;
 		engine_mux_frontend_sync();
 		if (snapshot_session != NULL) {
 			snapshot = engine_mux_build_snapshot(engine_mux_revision,
-			    &snapshot_hash, &snapshot_size, snapshot_session, 1);
+			    &snapshot_hash, &snapshot_size, snapshot_session, 1,
+			    snapshot_view);
 		}
 		if (engine_mux_send_frame(client->fd, ENGINE_MUX_SNAPSHOT,
 		    request_id, engine_mux_revision,

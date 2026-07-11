@@ -76,7 +76,9 @@ output. Multiple native panes retain independent previews, including pane
 `%0`; owner-scoped removal leaves sibling images intact. The installed
 radeonsi contract proves decoded images remain on their owning output while
 the legacy preview contract remains green. Independent per-output session
-models, terminal image transport, direct-KMS clipping, ordinary simultaneous
+models now have a server-side view-addressed snapshot boundary and explicit
+focused-output shell refresh; nonfocused per-output caches/renderers remain.
+Terminal image transport, direct-KMS clipping, ordinary simultaneous
 text-client acceptance, and final live hardware acceptance remain before
 native mode becomes the default.
 

@@ -42,6 +42,11 @@ now covers the complete terminal and compound-presentation foundation:
 - Pane previews are keyed by pane ID, generation, frontend client, and output
   lease, render on only the owning output, and coexist independently across
   panes. Owner-scoped removal cannot clear a sibling pane's image.
+- Snapshot requests may address an exact graphical output view. Tmux returns
+  only that synthetic client's attached session and active window, identifies
+  the client/view/output in the response, and rejects stale or foreign view
+  IDs. The shell uses this scope for focused-output refreshes; caching and
+  rendering every nonfocused output concurrently is the next migration step.
 
 ## Remaining acceptance boundary
 

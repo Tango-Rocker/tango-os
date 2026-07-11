@@ -734,7 +734,8 @@ static int focus_proof_session(int fd, uint32_t pane_id,
 }
 
 static int focus_proof_register_view(int fd, uint32_t view_id,
-		const char *session_id, uint32_t columns, uint32_t rows, bool focused,
+		const char *session_id, const char *output, uint32_t columns,
+		uint32_t rows, bool focused,
 		uint64_t request_id, uint64_t *revision) {
 	struct json_object *request = json_object_new_object();
 	if (request == NULL) return -1;
@@ -742,7 +743,7 @@ static int focus_proof_register_view(int fd, uint32_t view_id,
 		json_object_new_string("engine-mux/view-register-v1"));
 	json_object_object_add(request, "view_id", json_object_new_int64(view_id));
 	json_object_object_add(request, "session_id", json_object_new_string(session_id));
-	json_object_object_add(request, "output", json_object_new_string("focus-proof"));
+	json_object_object_add(request, "output", json_object_new_string(output));
 	json_object_object_add(request, "pixel_width",
 		json_object_new_int64((int64_t)columns * 10));
 	json_object_object_add(request, "pixel_height",
@@ -771,9 +772,9 @@ static int request_focus_proof(int fd, uint32_t pane_id) {
 	char *session_id = NULL;
 	if (focus_proof_session(fd, pane_id, &revision, &session_id) != 0)
 		return -1;
-	if (focus_proof_register_view(fd, 1, session_id, 80, 24, true,
+	if (focus_proof_register_view(fd, 1, session_id, "focus-proof", 80, 24, true,
 			201, &revision) != 0 ||
-			focus_proof_register_view(fd, 2, session_id, 100, 30, false,
+			focus_proof_register_view(fd, 2, session_id, "focus-proof", 100, 30, false,
 			202, &revision) != 0) {
 		free(session_id);
 		return -1;
@@ -852,6 +853,69 @@ static int request_focus_proof(int fd, uint32_t pane_id) {
 	return 0;
 }
 
+static struct json_object *request_snapshot_for_view(int fd, uint32_t view_id,
+		uint64_t request_id, uint64_t *revision, uint16_t *response_type) {
+	struct json_object *request = json_object_new_object();
+	if (request == NULL) return NULL;
+	json_object_object_add(request, "schema",
+		json_object_new_string("engine-mux/snapshot-request-v1"));
+	json_object_object_add(request, "view_id", json_object_new_int64(view_id));
+	const char *payload = json_object_to_json_string_ext(request,
+		JSON_C_TO_STRING_PLAIN);
+	char *response = NULL;
+	int result = exchange(fd, ENGINE_MUX_SNAPSHOT_REQUEST, request_id,
+		*revision, payload, response_type, revision, &response);
+	json_object_put(request);
+	if (result != 0) return NULL;
+	struct json_object *parsed = json_tokener_parse(response);
+	free(response);
+	if (parsed == NULL) errno = EPROTO;
+	return parsed;
+}
+
+static int request_view_session_proof(int fd, const char *first_session,
+		const char *second_session) {
+	uint64_t revision = 0;
+	if (focus_proof_register_view(fd, 1, first_session, "view-output-a", 80, 24, true,
+			501, &revision) != 0 ||
+			focus_proof_register_view(fd, 2, second_session, "view-output-b", 100, 30, false,
+			502, &revision) != 0)
+		return -1;
+	uint16_t first_type = 0, second_type = 0, invalid_type = 0;
+	struct json_object *first = request_snapshot_for_view(fd, 1, 503,
+		&revision, &first_type);
+	struct json_object *second = request_snapshot_for_view(fd, 2, 504,
+		&revision, &second_type);
+	struct json_object *invalid = request_snapshot_for_view(fd, 3, 505,
+		&revision, &invalid_type);
+	if (first == NULL || second == NULL || invalid == NULL ||
+			first_type != ENGINE_MUX_SNAPSHOT ||
+			second_type != ENGINE_MUX_SNAPSHOT ||
+			invalid_type != ENGINE_MUX_ERROR) {
+		if (first != NULL) json_object_put(first);
+		if (second != NULL) json_object_put(second);
+		if (invalid != NULL) json_object_put(invalid);
+		errno = EPROTO;
+		return -1;
+	}
+	struct json_object *result = json_object_new_object();
+	if (result == NULL) {
+		json_object_put(first);
+		json_object_put(second);
+		json_object_put(invalid);
+		return -1;
+	}
+	json_object_object_add(result, "schema",
+		json_object_new_string("engine-mux/view-session-proof-v1"));
+	json_object_object_add(result, "first", first);
+	json_object_object_add(result, "second", second);
+	json_object_object_add(result, "invalid_view_error", invalid);
+	printf("%s\n", json_object_to_json_string_ext(result,
+		JSON_C_TO_STRING_PRETTY));
+	json_object_put(result);
+	return 0;
+}
+
 static int parse_mouse_number(const char *text, uint32_t maximum,
 		uint32_t *value) {
 	char *end = NULL;
@@ -871,7 +935,7 @@ static int request_mouse_actions(int fd, uint32_t pane_id, char **actions,
 	char *session_id = NULL;
 	if (focus_proof_session(fd, pane_id, &revision, &session_id) != 0)
 		return -1;
-	if (focus_proof_register_view(fd, 1, session_id, 80, 24, true,
+	if (focus_proof_register_view(fd, 1, session_id, "focus-proof", 80, 24, true,
 			400, &revision) != 0) {
 		free(session_id);
 		return -1;
@@ -1000,7 +1064,7 @@ static int request_ui(int fd, uint32_t pane_id, char **keys,
 	char *session_id = NULL;
 	if (focus_proof_session(fd, pane_id, &revision, &session_id) != 0)
 		return -1;
-	if (focus_proof_register_view(fd, 1, session_id, 80, 24, true,
+	if (focus_proof_register_view(fd, 1, session_id, "focus-proof", 80, 24, true,
 			300, &revision) != 0) {
 		free(session_id);
 		return -1;
@@ -1204,7 +1268,7 @@ static int request_presentation_resolve(int fd, pid_t pid) {
 }
 
 static void usage(FILE *stream, const char *program) {
-	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|multi-grid-proof FIRST_PANE SECOND_PANE|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT|input PANE_ID BYTES|keys PANE_ID KEY...|focus-proof PANE_ID|ui PANE_ID [KEY...]|mouse PANE_ID EVENT BUTTON X Y MODIFIERS|mouse-sequence PANE_ID (EVENT BUTTON X Y MODIFIERS)...|mouse-ui PANE_ID (EVENT BUTTON X Y MODIFIERS)...|presentation-resolve PID|presentation-map PANE_ID GENERATION PID SURFACE_ID ROLE|presentation-unmap PANE_ID GENERATION PID SURFACE_ID\n", program);
+	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|multi-grid-proof FIRST_PANE SECOND_PANE|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT|input PANE_ID BYTES|keys PANE_ID KEY...|focus-proof PANE_ID|view-session-proof FIRST_SESSION SECOND_SESSION|ui PANE_ID [KEY...]|mouse PANE_ID EVENT BUTTON X Y MODIFIERS|mouse-sequence PANE_ID (EVENT BUTTON X Y MODIFIERS)...|mouse-ui PANE_ID (EVENT BUTTON X Y MODIFIERS)...|presentation-resolve PID|presentation-map PANE_ID GENERATION PID SURFACE_ID ROLE|presentation-unmap PANE_ID GENERATION PID SURFACE_ID\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -1236,6 +1300,7 @@ int main(int argc, char **argv) {
 	bool is_input = strcmp(command, "input") == 0;
 	bool is_keys = strcmp(command, "keys") == 0;
 	bool is_focus_proof = strcmp(command, "focus-proof") == 0;
+	bool is_view_session_proof = strcmp(command, "view-session-proof") == 0;
 	bool is_ui = strcmp(command, "ui") == 0;
 	bool is_mouse = strcmp(command, "mouse") == 0;
 	bool is_mouse_sequence = strcmp(command, "mouse-sequence") == 0;
@@ -1253,6 +1318,7 @@ int main(int argc, char **argv) {
 			(is_input && optind + 3 != argc) ||
 			(is_keys && optind + 3 > argc) ||
 			(is_focus_proof && optind + 2 != argc) ||
+			(is_view_session_proof && optind + 3 != argc) ||
 			(is_ui && optind + 2 > argc) ||
 			(is_mouse && optind + 7 != argc) ||
 			(is_presentation_map && optind + 6 != argc) ||
@@ -1260,7 +1326,7 @@ int main(int argc, char **argv) {
 			(is_presentation_resolve && optind + 2 != argc) ||
 			((is_mouse_sequence || is_mouse_ui) &&
 				(mouse_action_arguments == 0 || mouse_action_arguments % 5 != 0)) ||
-			(!is_grid && !is_multi_grid_proof && !is_damage && !is_stale_grid && !is_scrollback && !is_input && !is_keys && !is_focus_proof && !is_ui && !is_mouse && !is_mouse_sequence && !is_mouse_ui && !is_presentation_map && !is_presentation_unmap && !is_presentation_resolve &&
+			(!is_grid && !is_multi_grid_proof && !is_damage && !is_stale_grid && !is_scrollback && !is_input && !is_keys && !is_focus_proof && !is_view_session_proof && !is_ui && !is_mouse && !is_mouse_sequence && !is_mouse_ui && !is_presentation_map && !is_presentation_unmap && !is_presentation_resolve &&
 			 optind + 1 != argc)) {
 		usage(stderr, argv[0]);
 		return 2;
@@ -1294,6 +1360,16 @@ int main(int argc, char **argv) {
 		int result = request_multi_grid_proof(fd, panes[0], panes[1]);
 		if (result != 0)
 			fprintf(stderr, "engine-muxctl: multi-grid proof failed: %s\n",
+				strerror(errno));
+		close(fd);
+		free(owned_socket);
+		return result == 0 ? 0 : 1;
+	}
+	if (is_view_session_proof) {
+		int result = request_view_session_proof(fd, argv[optind + 1],
+			argv[optind + 2]);
+		if (result != 0)
+			fprintf(stderr, "engine-muxctl: view session proof failed: %s\n",
 				strerror(errno));
 		close(fd);
 		free(owned_socket);

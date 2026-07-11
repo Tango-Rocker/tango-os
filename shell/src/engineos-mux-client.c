@@ -1254,10 +1254,33 @@ refresh_again:
 	}
 	struct json_object *snapshot = NULL;
 	bool grid_changed = false;
+	char snapshot_request[128];
+	if (client->primary_view_id != 0) {
+		snprintf(snapshot_request, sizeof(snapshot_request),
+			"{\"schema\":\"engine-mux/snapshot-request-v1\",\"view_id\":%u}",
+			client->primary_view_id);
+	} else {
+		snprintf(snapshot_request, sizeof(snapshot_request), "{}");
+	}
 	if (!exchange_json_request(client, ENGINE_MUX_SNAPSHOT_REQUEST,
-			ENGINE_MUX_SNAPSHOT, "{}", "engine-mux/snapshot-v1", &snapshot,
+			ENGINE_MUX_SNAPSHOT, snapshot_request,
+			"engine-mux/snapshot-v1", &snapshot,
 			&grid_changed, error, error_size))
 		return false;
+	if (client->primary_view_id != 0) {
+		uint32_t snapshot_client_id = 0, snapshot_view_id = 0;
+		if (!json_u32(snapshot, "snapshot_client_id", UINT32_MAX,
+				&snapshot_client_id) ||
+				!json_u32(snapshot, "snapshot_view_id", UINT32_MAX,
+					&snapshot_view_id) ||
+				snapshot_client_id != client->frontend_client_id ||
+				snapshot_view_id != client->primary_view_id) {
+			json_object_put(snapshot);
+			snprintf(error, error_size,
+				"snapshot was not scoped to the requested graphical view");
+			return false;
+		}
+	}
 	struct json_object *panes = NULL;
 	if (!parse_pane_models(client, snapshot, error, error_size)) {
 		json_object_put(snapshot);

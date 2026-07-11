@@ -94,7 +94,13 @@ contract. The shell retains one preview per native pane rather than one global
 preview, handles pane `%0` without a sentinel collision, exposes the complete
 set plus per-output counts, and removes images by owner or exact pane identity.
 The contract renders two pane images simultaneously and proves either can be
-removed without changing its sibling. Independent per-output session models,
+removed without changing its sibling. The frontend now serves view-addressed
+snapshots: each response identifies the requested frontend client, output
+view, and output name and contains only that synthetic tmux client's attached
+session and active window. Invalid view IDs fail explicitly. The contract
+registers two views on different sessions and proves both snapshots remain
+independent while one view is nonfocused; shell refreshes now explicitly name
+their focused output view. Per-output shell model caches and render trees,
 terminal image transport, direct-KMS clipping, final hardware acceptance, and
 legacy cutover remain open. Native `game` is now an
 authoritative launch/split presentation that survives respawn.
