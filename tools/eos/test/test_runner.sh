@@ -175,6 +175,8 @@ run_mux() {
 	local initial_native_revision updated_native_revision stable_revision=""
 	local initial_native_frame updated_native_frame
 	local initial_output_commits updated_output_commits
+	local initial_committed_frames updated_committed_frames
+	local initial_committed_grids updated_committed_grids
 	local stable_count=0
 	local pane_scope="" pane_app_pid="" pane_state="" split_pane_id=""
 	local split_scope=""
@@ -607,6 +609,11 @@ PY
 	done
 	[[ "$key_proof" == accepted ]] ||
 		die "graphical tmux client did not honor the configured prefix key table"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" keys "$pane_id" \
+		Space d C-c >"$fixture/forwarded-keys.json"
+	jq -e '.schema == "engine-mux/keys-v1" and .queued == 3' \
+		"$fixture/forwarded-keys.json" >/dev/null ||
+		die "graphical tmux client rejected keys forwarded to the pane PTY"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		set-option -g mouse on
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
@@ -948,7 +955,8 @@ PY
 			jq -e '.backend == "headless" and .mux.client_view_id > 0 and
 				.mux.grid.rendered == true and .mux.ui.mode == "status" and
 				.mux.ui.status_rows == 1 and (.output_views | length) == 2 and
-				all(.output_views[]; .frame_commits > 0)' \
+				all(.output_views[]; .frame_commits > 0 and
+				  .committed_renderer_frame > 0)' \
 				"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
 		sleep 0.02
 	done
@@ -975,6 +983,10 @@ PY
 		   .grid_subscribed_count == .pane_count and .grid_revision > 0 and
 		   .rendered_pane_count == .pane_count and
 		   .selected_renderer_frame > 0 and .selected_renderer != null and
+		   .scheduled_grid_revision > 0 and
+		   .scheduled_renderer_frame > 0 and
+		   .committed_grid_revision > 0 and
+		   .committed_renderer_frame > 0 and
 		   (.panes | length) == .pane_count and
 		   all(.panes[]; .within_output and .pixel_width > 0 and
 		     .pixel_height > 0 and .frame > 0 and .renderer != null) and
@@ -989,8 +1001,11 @@ PY
 		  .input.view_id == $focused.view_id and
 		  .input.pane_id == $focused.pane_id and
 		  .input.pane_generation == $focused.pane_generation)' \
-		"$fixture/engineos/shell-state.json" >/dev/null ||
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '{mux_grid:.mux.grid,output_views,input,last_reason}' \
+			"$fixture/engineos/shell-state.json" >&2 || true
 		die "shell did not retain an authoritative model for every output view"
+	}
 	jq -e '
 		.mux.panes | length == 2 and
 		([.[].pane_id] | unique | length) == 2 and
@@ -2177,11 +2192,19 @@ PY
 		"$fixture/engineos/shell-state.json")"
 	initial_output_commits="$(jq -er '[.output_views[].frame_commits] | add' \
 		"$fixture/engineos/shell-state.json")"
+	initial_committed_frames="$(jq -er \
+		'[.output_views[].committed_renderer_frame] | add' \
+		"$fixture/engineos/shell-state.json")"
+	initial_committed_grids="$(jq -er \
+		'[.output_views[].committed_grid_revision] | add' \
+		"$fixture/engineos/shell-state.json")"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		send-keys -t "$shell_pane_id" "printf EVENT-DRIVEN-DAMAGE" Enter
 	updated_native_revision="$initial_native_revision"
 	updated_native_frame="$initial_native_frame"
 	updated_output_commits="$initial_output_commits"
+	updated_committed_frames="$initial_committed_frames"
+	updated_committed_grids="$initial_committed_grids"
 	for _ in {1..100}; do
 		updated_native_revision="$(jq -er '.mux.grid.revision' \
 			"$fixture/engineos/shell-state.json")"
@@ -2189,18 +2212,33 @@ PY
 			"$fixture/engineos/shell-state.json")"
 		updated_output_commits="$(jq -er '[.output_views[].frame_commits] | add' \
 			"$fixture/engineos/shell-state.json")"
+		updated_committed_frames="$(jq -er \
+			'[.output_views[].committed_renderer_frame] | add' \
+			"$fixture/engineos/shell-state.json")"
+		updated_committed_grids="$(jq -er \
+			'[.output_views[].committed_grid_revision] | add' \
+			"$fixture/engineos/shell-state.json")"
 		[[ "$updated_native_revision" -gt "$initial_native_revision" &&
 			"$updated_native_frame" -gt "$initial_native_frame" &&
-			"$updated_output_commits" -gt "$initial_output_commits" ]] && break
+			"$updated_output_commits" -gt "$initial_output_commits" &&
+			"$updated_committed_frames" -gt "$initial_committed_frames" &&
+			"$updated_committed_grids" -gt "$initial_committed_grids" ]] && break
 		sleep 0.02
 	done
 	[[ "$updated_native_revision" -gt "$initial_native_revision" &&
 		"$updated_native_frame" -gt "$initial_native_frame" &&
-		"$updated_output_commits" -gt "$initial_output_commits" ]] || {
+		"$updated_output_commits" -gt "$initial_output_commits" &&
+		"$updated_committed_frames" -gt "$initial_committed_frames" &&
+		"$updated_committed_grids" -gt "$initial_committed_grids" ]] || {
 		jq '{mux,last_reason}' "$fixture/engineos/shell-state.json" >&2 || true
 		tail -100 "$fixture/shell-native.log" >&2 || true
-		die "native shell did not render and commit event-driven grid damage without pointer input"
+		die "native shell did not commit the updated pane grid without pointer input"
 	}
+	jq -e 'all(.output_views[];
+		.committed_grid_revision == .grid_revision and
+		.committed_renderer_frame == .selected_renderer_frame)' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "native output commit did not contain the current rendered pane grid"
 	if [[ "$shell_renderer" == gles2 ]]; then
 		jq -e '.mux.grid.damaged_cells > 0 and
 			.mux.grid.damaged_cells < (.mux.grid.columns * .mux.grid.rows) and

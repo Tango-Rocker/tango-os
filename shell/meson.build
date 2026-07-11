@@ -57,6 +57,7 @@ executable(
     'src/engineos-image.c',
     'src/engineos-mux-client.c',
     'src/engineos-terminal-renderer.c',
+    'src/engineos-tmux-key.c',
     xdg_shell_protocol_header,
     pointer_constraints_protocol_header,
   ],
@@ -75,3 +76,15 @@ executable(
   ],
   install: true,
 )
+
+tmux_key_test = executable(
+  'engineos-tmux-key-test',
+  [
+    'tests/tmux-key-name.c',
+    'src/engineos-tmux-key.c',
+  ],
+  c_args: ['-DWLR_USE_UNSTABLE'],
+  include_directories: [include_directories('src')],
+  dependencies: [wlroots_dep, xkbcommon_dep],
+)
+test('tmux-key-name', tmux_key_test)

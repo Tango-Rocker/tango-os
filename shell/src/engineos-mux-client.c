@@ -1791,6 +1791,7 @@ bool engineos_mux_client_send_input(struct engineos_mux_client *client,
 		const void *bytes, size_t length, bool *grid_changed,
 		char *error, size_t error_size) {
 	*grid_changed = false;
+	client->last_request_rejected = false;
 	if (!client->ready || bytes == NULL || length == 0 ||
 			length > ENGINE_MUX_INPUT_MAX) {
 		snprintf(error, error_size, "invalid pane input request");
@@ -2067,6 +2068,7 @@ static bool exchange_json_request(struct engineos_mux_client *client,
 		bool *grid_changed,
 		char *error, size_t error_size) {
 	*grid_changed = false;
+	client->last_request_rejected = false;
 	size_t payload_length = strlen(payload);
 	if (!client->ready || payload_length == 0 ||
 			payload_length > ENGINE_MUX_MAX_PAYLOAD) {
@@ -2178,6 +2180,7 @@ static bool exchange_json_request(struct engineos_mux_client *client,
 			if (json_object_object_get_ex(root, "message", &message_object))
 				server_message = json_object_get_string(message_object);
 			snprintf(error, error_size, "%s", server_message);
+			client->last_request_rejected = true;
 			json_object_put(root);
 			return false;
 		}
@@ -2308,6 +2311,7 @@ bool engineos_mux_client_send_key(struct engineos_mux_client *client,
 		uint32_t view_id, uint32_t pane_id, uint32_t generation,
 		const char *key_name, bool *grid_changed,
 		char *error, size_t error_size) {
+	client->last_request_rejected = false;
 	if (view_id == 0 || generation == 0 ||
 			key_name == NULL || *key_name == '\0') {
 		snprintf(error, error_size, "invalid graphical key request");

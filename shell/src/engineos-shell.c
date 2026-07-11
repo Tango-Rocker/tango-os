@@ -52,6 +52,7 @@
 #include "engineos-image.h"
 #include "engineos-mux-client.h"
 #include "engineos-terminal-renderer.h"
+#include "engineos-tmux-key.h"
 
 #ifndef XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION
 #define XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION 4
@@ -365,6 +366,12 @@ struct engineos_shell_output {
 	struct engineos_mux_view_snapshot mux_snapshot;
 	uint64_t frame_commits;
 	uint64_t frame_failures;
+	uint64_t scheduled_mux_revision;
+	uint64_t scheduled_grid_revision;
+	uint64_t scheduled_renderer_frame;
+	uint64_t committed_mux_revision;
+	uint64_t committed_grid_revision;
+	uint64_t committed_renderer_frame;
 	uint32_t mux_view_id;
 	bool mux_registered;
 };
@@ -2644,21 +2651,31 @@ static struct engineos_mux_pane_model *native_preview_pane_for_request(
 	return focused_mux_pane(server);
 }
 
-static void pane_render_client(struct engineos_shell_server *server,
-		struct engineos_mux_pane_model *grid,
+static bool pane_render_client(struct engineos_shell_server *server,
+		const struct engineos_mux_pane_model *pane,
 		struct engineos_mux_client *render_client) {
 	*render_client = server->mux_client;
-	render_client->grid_revision = grid->grid.revision;
-	render_client->grid_columns = grid->grid.columns;
-	render_client->grid_rows = grid->grid.rows;
-	render_client->grid_cursor_x = grid->grid.cursor_x;
-	render_client->grid_cursor_y = grid->grid.cursor_y;
-	render_client->grid_nonblank_cells = grid->grid.nonblank_cells;
-	render_client->grid_flags = grid->grid.flags;
-	render_client->grid_cells = grid->grid.cells;
-	render_client->grid_damage_cells = grid->grid.damage_cells;
-	render_client->grid_damage_count = grid->grid.damage_count;
-	render_client->grid_full_damage = grid->grid.full_damage;
+	if (pane->pane_id != server->mux_client.pane_id ||
+			pane->generation != server->mux_client.pane_generation) {
+		struct engineos_mux_pane_model *grid =
+			engineos_mux_client_view_pane_grid(&server->mux_client, pane);
+		if (grid == NULL || !grid->grid.ready || grid->grid.cells == NULL)
+			return false;
+		render_client->grid_revision = grid->grid.revision;
+		render_client->grid_columns = grid->grid.columns;
+		render_client->grid_rows = grid->grid.rows;
+		render_client->grid_cursor_x = grid->grid.cursor_x;
+		render_client->grid_cursor_y = grid->grid.cursor_y;
+		render_client->grid_nonblank_cells = grid->grid.nonblank_cells;
+		render_client->grid_flags = grid->grid.flags;
+		render_client->grid_cells = grid->grid.cells;
+		render_client->grid_damage_cells = grid->grid.damage_cells;
+		render_client->grid_damage_count = grid->grid.damage_count;
+		render_client->grid_full_damage = grid->grid.full_damage;
+	}
+	if (render_client->grid_cells == NULL ||
+			render_client->grid_columns == 0 || render_client->grid_rows == 0)
+		return false;
 	render_client->ui_columns = 0;
 	render_client->ui_rows = 0;
 	render_client->ui_status_y = -1;
@@ -2668,6 +2685,7 @@ static void pane_render_client(struct engineos_shell_server *server,
 	render_client->ui_menu_rows = NULL;
 	render_client->ui_menu_row_count = 0;
 	render_client->ui_changed = false;
+	return true;
 }
 
 static void view_ui_render_client(struct engineos_shell_server *server,
@@ -2700,6 +2718,18 @@ static void view_ui_render_client(struct engineos_shell_server *server,
 	render_client->grid_damage_cells = NULL;
 	render_client->grid_damage_count = 0;
 	render_client->grid_full_damage = true;
+}
+
+static void set_terminal_scene_buffer(
+		struct wlr_scene_buffer *scene_buffer,
+		struct engineos_terminal_renderer *renderer) {
+	struct wlr_scene_buffer_set_buffer_options options = {
+		.damage = engineos_terminal_renderer_damage(renderer),
+		.wait_timeline = engineos_terminal_renderer_wait_timeline(renderer),
+		.wait_point = engineos_terminal_renderer_wait_point(renderer),
+	};
+	wlr_scene_buffer_set_buffer_with_options(scene_buffer,
+		engineos_terminal_renderer_buffer(renderer), &options);
 }
 
 static bool create_mux_pane_scene(struct engineos_shell_server *server,
@@ -2762,16 +2792,13 @@ static bool create_mux_pane_output_scene(
 		return false;
 	}
 	output_scene->output = output;
-	struct engineos_mux_pane_model *grid =
-		engineos_mux_client_view_pane_grid(&output->server->mux_client, pane);
-	if (grid == NULL || !grid->grid.ready || grid->grid.cells == NULL) {
+	struct engineos_mux_client render_client;
+	if (!pane_render_client(output->server, pane, &render_client)) {
 		free(output_scene);
 		snprintf(error, error_size,
 			"output pane %%%u has no retained terminal grid", pane->pane_id);
 		return false;
 	}
-	struct engineos_mux_client render_client;
-	pane_render_client(output->server, grid, &render_client);
 	output_scene->renderer = engineos_terminal_renderer_create(
 		output->server->renderer, output->server->allocator, &render_client,
 		error, error_size);
@@ -2784,9 +2811,13 @@ static bool create_mux_pane_output_scene(
 	engineos_terminal_renderer_stats(output_scene->renderer,
 		&output_scene->stats);
 	output_scene->tree = wlr_scene_tree_create(output->mux_scene_tree);
-	if (output_scene->tree != NULL)
+	if (output_scene->tree != NULL) {
 		output_scene->terminal_scene = wlr_scene_buffer_create(
-			output_scene->tree, output_scene->buffer);
+			output_scene->tree, NULL);
+		if (output_scene->terminal_scene != NULL)
+			set_terminal_scene_buffer(output_scene->terminal_scene,
+				output_scene->renderer);
+	}
 	if (output_scene->tree == NULL || output_scene->terminal_scene == NULL) {
 		if (output_scene->tree != NULL)
 			wlr_scene_node_destroy(&output_scene->tree->node);
@@ -2795,13 +2826,22 @@ static bool create_mux_pane_output_scene(
 		snprintf(error, error_size, "failed to create output pane scene nodes");
 		return false;
 	}
-	int cell_width = output_scene->stats.width / (int)grid->grid.columns;
-	int cell_height = output_scene->stats.height / (int)grid->grid.rows;
+	int cell_width = output_scene->stats.width /
+		(int)render_client.grid_columns;
+	int cell_height = output_scene->stats.height /
+		(int)render_client.grid_rows;
 	wlr_scene_node_set_position(&output_scene->tree->node,
 		(int)pane->left * cell_width, (int)pane->top * cell_height);
 	wlr_scene_node_set_enabled(&output_scene->tree->node, pane->visible);
 	wlr_scene_node_set_enabled(&output_scene->terminal_scene->node,
 		!pane_presentation_owned_by_output(output->server, pane, output));
+	if (pane->pane_id == output->mux_snapshot.pane_id &&
+			pane->generation == output->mux_snapshot.pane_generation &&
+			output_scene->terminal_scene->node.enabled) {
+		output->scheduled_mux_revision = output->server->mux_client.revision;
+		output->scheduled_grid_revision = render_client.grid_revision;
+		output->scheduled_renderer_frame = output_scene->stats.frame;
+	}
 	wl_list_insert(pane_scene->output_scenes.prev, &output_scene->link);
 	return true;
 }
@@ -2850,12 +2890,12 @@ static bool create_mux_output_scene(struct engineos_shell_output *output,
 				error_size))
 			return false;
 	}
-	output->mux_ui_scene = wlr_scene_buffer_create(output->mux_scene_tree,
-		engineos_terminal_renderer_buffer(output->mux_ui_renderer));
+	output->mux_ui_scene = wlr_scene_buffer_create(output->mux_scene_tree, NULL);
 	if (output->mux_ui_scene == NULL) {
 		snprintf(error, error_size, "failed to create mux output UI scene");
 		return false;
 	}
+	set_terminal_scene_buffer(output->mux_ui_scene, output->mux_ui_renderer);
 	output->mux_snapshot.ui.changed = false;
 	if (output->mux_view_id == server->mux_client.primary_view_id) {
 		server->mux_ui_scene = output->mux_ui_scene;
@@ -2987,16 +3027,14 @@ static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
 		wl_list_for_each(output_scene, &scene->output_scenes, link) {
 			struct engineos_mux_pane_model *pane = find_output_pane_model(
 				output_scene->output, scene->pane_id, scene->generation);
-			struct engineos_mux_pane_model *grid = pane != NULL ?
-				engineos_mux_client_view_pane_grid(&server->mux_client, pane) : NULL;
-			if (pane == NULL || grid == NULL || !grid->grid.ready) {
+			struct engineos_mux_client render_client;
+			if (pane == NULL ||
+					!pane_render_client(server, pane, &render_client)) {
 				wlr_log(WLR_ERROR,
 					"native output pane lost retained grid pane=%%%u view=%u",
 					scene->pane_id, output_scene->output->mux_view_id);
 				return false;
 			}
-			struct engineos_mux_client render_client;
-			pane_render_client(server, grid, &render_client);
 			if (!engineos_terminal_renderer_update(output_scene->renderer,
 					&render_client, error, sizeof(error))) {
 				wlr_log(WLR_ERROR, "native output pane damage render failed: %s",
@@ -3011,21 +3049,26 @@ static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
 				(int)render_client.grid_columns;
 			int cell_height = output_scene->stats.height /
 				(int)render_client.grid_rows;
-			/*
-			 * The terminal renderer alternates between two GPU buffers. Supplying
-			 * only cell damage here allowed the DRM scene output to retain the
-			 * previous backing buffer until unrelated whole-scene damage occurred.
-			 * GPU drawing remains cell-damaged; the scene buffer swap itself must be
-			 * treated as wholly changed so the new target reaches scanout.
-			 */
-			wlr_scene_buffer_set_buffer_with_damage(output_scene->terminal_scene,
-				output_scene->buffer, NULL);
+			set_terminal_scene_buffer(output_scene->terminal_scene,
+				output_scene->renderer);
 			wlr_scene_node_set_position(&output_scene->tree->node,
 				(int)pane->left * cell_width, (int)pane->top * cell_height);
 			wlr_scene_node_set_enabled(&output_scene->tree->node, pane->visible);
 			wlr_scene_node_set_enabled(&output_scene->terminal_scene->node,
 				!pane_presentation_owned_by_output(server, pane,
 					output_scene->output));
+			if (pane->pane_id ==
+					output_scene->output->mux_snapshot.pane_id &&
+					pane->generation ==
+					output_scene->output->mux_snapshot.pane_generation &&
+					output_scene->terminal_scene->node.enabled) {
+				output_scene->output->scheduled_mux_revision =
+					server->mux_client.revision;
+				output_scene->output->scheduled_grid_revision =
+					render_client.grid_revision;
+				output_scene->output->scheduled_renderer_frame =
+					output_scene->stats.frame;
+			}
 			if (pane->pane_id == output_scene->output->mux_snapshot.pane_id &&
 					pane->generation == output_scene->output->mux_snapshot.pane_generation) {
 				bool exact_view = output_scene->output->mux_view_id ==
@@ -3104,8 +3147,8 @@ static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
 		}
 		engineos_terminal_renderer_stats(output->mux_ui_renderer,
 			&output->mux_ui_stats);
-		wlr_scene_buffer_set_buffer_with_damage(output->mux_ui_scene,
-			engineos_terminal_renderer_buffer(output->mux_ui_renderer), NULL);
+		set_terminal_scene_buffer(output->mux_ui_scene,
+			output->mux_ui_renderer);
 		output->mux_snapshot.ui.changed = false;
 		if (output->mux_view_id == server->mux_client.primary_view_id) {
 			server->mux_ui_scene = output->mux_ui_scene;
@@ -4687,10 +4730,8 @@ static void write_shell_state(struct engineos_shell_server *server,
 			index < ui_output->mux_snapshot.pane_count; index++) {
 		const struct engineos_mux_pane_model *pane =
 			&ui_output->mux_snapshot.panes[index];
-		struct engineos_mux_pane_model *grid_pane =
-			engineos_mux_client_view_pane_grid(&server->mux_client, pane);
-		const struct engineos_mux_grid_model *grid = grid_pane != NULL ?
-			&grid_pane->grid : NULL;
+		struct engineos_mux_client grid_client;
+		bool grid_ready = pane_render_client(server, pane, &grid_client);
 		struct engineos_mux_pane_scene *pane_scene = find_mux_pane_scene(server,
 			pane->pane_id, pane->generation);
 		struct engineos_mux_pane_output_scene *primary_output_scene =
@@ -4702,12 +4743,12 @@ static void write_shell_state(struct engineos_shell_server *server,
 			wl_list_for_each(counted_scene, &pane_scene->output_scenes, link)
 				output_scene_count++;
 		}
-		int cell_width = primary_output_scene != NULL && grid != NULL &&
-			grid->columns != 0 ? primary_output_scene->stats.width /
-			(int)grid->columns : 0;
-		int cell_height = primary_output_scene != NULL && grid != NULL &&
-			grid->rows != 0 ? primary_output_scene->stats.height /
-			(int)grid->rows : 0;
+		int cell_width = primary_output_scene != NULL && grid_ready ?
+			primary_output_scene->stats.width /
+			(int)grid_client.grid_columns : 0;
+		int cell_height = primary_output_scene != NULL && grid_ready ?
+			primary_output_scene->stats.height /
+			(int)grid_client.grid_rows : 0;
 		if (index != 0) {
 			fprintf(file, ",");
 		}
@@ -4734,12 +4775,12 @@ static void write_shell_state(struct engineos_shell_server *server,
 		json_write_string(file, pane->image_owner);
 		fprintf(file,
 			"}, \"grid\": {\"ready\": %s, \"subscribed\": %s, \"revision\": %llu, \"columns\": %u, \"rows\": %u, \"nonblank_cells\": %u}, \"scene\": {\"rendered\": %s, \"output_scene_count\": %zu, \"terminal_visible\": %s, \"pixel_x\": %d, \"pixel_y\": %d, \"pixel_width\": %d, \"pixel_height\": %d, \"glyph_cells\": %u, \"damaged_cells\": %u, \"nonblank_pixels\": %u, \"frame\": %llu, \"renderer\": ",
-			grid != NULL && grid->ready ? "true" : "false",
-			grid != NULL && grid->subscribed ? "true" : "false",
-			(unsigned long long)(grid != NULL ? grid->revision : 0),
-			grid != NULL ? grid->columns : 0,
-			grid != NULL ? grid->rows : 0,
-			grid != NULL ? grid->nonblank_cells : 0,
+			grid_ready ? "true" : "false",
+			grid_ready ? "true" : "false",
+			(unsigned long long)(grid_ready ? grid_client.grid_revision : 0),
+			grid_ready ? grid_client.grid_columns : 0,
+			grid_ready ? grid_client.grid_rows : 0,
+			grid_ready ? grid_client.grid_nonblank_cells : 0,
 			pane_scene != NULL ? "true" : "false",
 			output_scene_count,
 			primary_output_scene != NULL && pane->visible &&
@@ -4785,17 +4826,15 @@ static void write_shell_state(struct engineos_shell_server *server,
 				pane_index++) {
 			struct engineos_mux_pane_model *pane =
 				&shell_output->mux_snapshot.panes[pane_index];
-			struct engineos_mux_pane_model *grid =
-				engineos_mux_client_view_pane_grid(&server->mux_client, pane);
-			if (grid == NULL || !grid->grid.ready)
+			struct engineos_mux_client grid_client;
+			if (!pane_render_client(server, pane, &grid_client))
 				continue;
 			output_grid_ready_count++;
-			if (grid->grid.subscribed)
-				output_grid_subscribed_count++;
+			output_grid_subscribed_count++;
 			if (pane->pane_id == shell_output->mux_snapshot.pane_id &&
 					pane->generation ==
 						shell_output->mux_snapshot.pane_generation)
-				output_grid_revision = grid->grid.revision;
+				output_grid_revision = grid_client.grid_revision;
 		}
 		fprintf(file,
 			", \"model_ready\": %s, \"model_revision\": %llu, \"pane_count\": %zu, \"pane_id\": \"%%%u\", \"pane_generation\": %u, \"grid_ready_count\": %zu, \"grid_subscribed_count\": %zu, \"grid_revision\": %llu",
@@ -4852,7 +4891,7 @@ static void write_shell_state(struct engineos_shell_server *server,
 			}
 		}
 		fprintf(file,
-			", \"pixel_width\": %d, \"pixel_height\": %d, \"scale_milli\": %u, \"scene_x\": %d, \"scene_y\": %d, \"frame_commits\": %llu, \"frame_failures\": %llu, \"console_scene_count\": %zu, \"rendered_pane_count\": %zu, \"selected_renderer_frame\": %llu, \"selected_renderer\": ",
+			", \"pixel_width\": %d, \"pixel_height\": %d, \"scale_milli\": %u, \"scene_x\": %d, \"scene_y\": %d, \"frame_commits\": %llu, \"frame_failures\": %llu, \"scheduled_mux_revision\": %llu, \"scheduled_grid_revision\": %llu, \"scheduled_renderer_frame\": %llu, \"committed_mux_revision\": %llu, \"committed_grid_revision\": %llu, \"committed_renderer_frame\": %llu, \"console_scene_count\": %zu, \"rendered_pane_count\": %zu, \"selected_renderer_frame\": %llu, \"selected_renderer\": ",
 			output_width, output_height,
 			(uint32_t)(shell_output->output->scale * 1000.0 + 0.5),
 			shell_output->mux_scene_tree != NULL ?
@@ -4861,6 +4900,12 @@ static void write_shell_state(struct engineos_shell_server *server,
 				shell_output->mux_scene_tree->node.y : 0,
 			(unsigned long long)shell_output->frame_commits,
 			(unsigned long long)shell_output->frame_failures,
+			(unsigned long long)shell_output->scheduled_mux_revision,
+			(unsigned long long)shell_output->scheduled_grid_revision,
+			(unsigned long long)shell_output->scheduled_renderer_frame,
+			(unsigned long long)shell_output->committed_mux_revision,
+			(unsigned long long)shell_output->committed_grid_revision,
+			(unsigned long long)shell_output->committed_renderer_frame,
 			console_scene_count, rendered_pane_count,
 			(unsigned long long)selected_renderer_frame);
 		json_write_string(file, selected_renderer);
@@ -6345,72 +6390,11 @@ static void keyboard_handle_modifiers(struct wl_listener *listener, void *data) 
 		&keyboard->keyboard->modifiers);
 }
 
-static size_t native_terminal_key_name(struct wlr_keyboard *keyboard,
-		xkb_keysym_t sym, uint32_t keycode, uint32_t modifiers,
-		char key_name[64]) {
-	if (modifiers & WLR_MODIFIER_LOGO) return 0;
-	const char *special = NULL;
-	switch (sym) {
-	case XKB_KEY_Return: special = "Enter"; break;
-	case XKB_KEY_KP_Enter: special = "KPEnter"; break;
-	case XKB_KEY_BackSpace: special = "BSpace"; break;
-	case XKB_KEY_Tab: special = "Tab"; break;
-	case XKB_KEY_ISO_Left_Tab: special = "BTab"; break;
-	case XKB_KEY_Escape: special = "Escape"; break;
-	case XKB_KEY_Up: special = "Up"; break;
-	case XKB_KEY_Down: special = "Down"; break;
-	case XKB_KEY_Right: special = "Right"; break;
-	case XKB_KEY_Left: special = "Left"; break;
-	case XKB_KEY_Home: special = "Home"; break;
-	case XKB_KEY_End: special = "End"; break;
-	case XKB_KEY_Page_Up: special = "PageUp"; break;
-	case XKB_KEY_Page_Down: special = "PageDown"; break;
-	case XKB_KEY_Insert: special = "Insert"; break;
-	case XKB_KEY_Delete: special = "Delete"; break;
-	case XKB_KEY_F1: special = "F1"; break;
-	case XKB_KEY_F2: special = "F2"; break;
-	case XKB_KEY_F3: special = "F3"; break;
-	case XKB_KEY_F4: special = "F4"; break;
-	case XKB_KEY_F5: special = "F5"; break;
-	case XKB_KEY_F6: special = "F6"; break;
-	case XKB_KEY_F7: special = "F7"; break;
-	case XKB_KEY_F8: special = "F8"; break;
-	case XKB_KEY_F9: special = "F9"; break;
-	case XKB_KEY_F10: special = "F10"; break;
-	case XKB_KEY_F11: special = "F11"; break;
-	case XKB_KEY_F12: special = "F12"; break;
-	default: break;
-	}
-	char printable[16] = {0};
-	if (special == NULL) {
-		int count = xkb_state_key_get_utf8(keyboard->xkb_state, keycode,
-			printable, sizeof(printable));
-		if (count <= 0 || count >= (int)sizeof(printable)) return 0;
-		special = printable;
-	}
-	size_t used = 0;
-	if (modifiers & WLR_MODIFIER_CTRL) {
-		memcpy(key_name + used, "C-", 2);
-		used += 2;
-	}
-	if (modifiers & WLR_MODIFIER_ALT) {
-		memcpy(key_name + used, "M-", 2);
-		used += 2;
-	}
-	if ((modifiers & WLR_MODIFIER_SHIFT) && printable[0] == '\0' &&
-			sym != XKB_KEY_ISO_Left_Tab) {
-		memcpy(key_name + used, "S-", 2);
-		used += 2;
-	}
-	size_t special_length = strlen(special);
-	if (used + special_length >= 64) return 0;
-	memcpy(key_name + used, special, special_length + 1);
-	return used + special_length;
-}
-
 static bool route_native_terminal_key(struct engineos_shell_server *server,
 		struct wlr_keyboard *keyboard, struct wlr_keyboard_key_event *event,
 		xkb_keysym_t sym, uint32_t keycode, uint32_t modifiers) {
+	(void)keyboard;
+	(void)keycode;
 	if (server->mux_mode != ENGINEOS_MUX_NATIVE || !server->mux_client.ready ||
 			server->input_mode != ENGINEOS_INPUT_TERMINAL) return false;
 	if (event->state != WL_KEYBOARD_KEY_STATE_PRESSED) return true;
@@ -6424,15 +6408,20 @@ static bool route_native_terminal_key(struct engineos_shell_server *server,
 		return true;
 	}
 	char key_name[64];
-	size_t length = native_terminal_key_name(keyboard, sym, keycode,
-		modifiers, key_name);
+	size_t length = engineos_tmux_key_name(sym, modifiers, key_name);
 	if (length == 0) return true;
 	bool grid_changed = false;
 	char error[256] = {0};
 	if (!engineos_mux_client_send_key(&server->mux_client,
 			output->mux_view_id, pane->pane_id, pane->generation, key_name,
 			&grid_changed, error, sizeof(error))) {
-		wlr_log(WLR_ERROR, "native tmux key failed key=%s: %s", key_name, error);
+		if (server->mux_client.last_request_rejected) {
+			wlr_log(WLR_ERROR,
+				"native tmux key rejected key=%s: %s", key_name, error);
+			return true;
+		}
+		wlr_log(WLR_ERROR, "native tmux key transport failed key=%s: %s",
+			key_name, error);
 		server->mux_client.ready = false;
 		wl_display_terminate(server->display);
 		return true;
@@ -6469,6 +6458,8 @@ static bool route_native_graphical_prefix_key(
 		struct engineos_shell_server *server, struct wlr_keyboard *keyboard,
 		struct wlr_keyboard_key_event *event, xkb_keysym_t sym,
 		uint32_t keycode, uint32_t modifiers) {
+	(void)keyboard;
+	(void)keycode;
 	if (server->mux_mode != ENGINEOS_MUX_NATIVE ||
 			!server->mux_client.ready ||
 			(server->input_mode != ENGINEOS_INPUT_GRAPHICAL &&
@@ -6482,8 +6473,7 @@ static bool route_native_graphical_prefix_key(
 	if (event->state != WL_KEYBOARD_KEY_STATE_PRESSED)
 		return false;
 	char key_name[64];
-	if (native_terminal_key_name(keyboard, sym, keycode, modifiers,
-			key_name) == 0)
+	if (engineos_tmux_key_name(sym, modifiers, key_name) == 0)
 		return false;
 	bool prefix = strcmp(key_name, server->mux_client.prefix) == 0 ||
 		(strcmp(server->mux_client.prefix2, "None") != 0 &&
@@ -6506,7 +6496,16 @@ static bool route_native_graphical_prefix_key(
 			output->mux_view_id, pane->pane_id, pane->generation, key_name,
 			&grid_changed,
 			error, sizeof(error))) {
-		wlr_log(WLR_ERROR, "native graphical prefix key failed key=%s: %s",
+		if (server->mux_client.last_request_rejected) {
+			wlr_log(WLR_ERROR,
+				"native graphical prefix key rejected key=%s: %s",
+				key_name, error);
+			server->mux_prefix_pending = false;
+			server->mux_consumed_keycode = event->keycode;
+			return true;
+		}
+		wlr_log(WLR_ERROR,
+			"native graphical prefix key transport failed key=%s: %s",
 			key_name, error);
 		server->mux_client.ready = false;
 		wl_display_terminate(server->display);
@@ -6914,24 +6913,21 @@ static bool route_native_terminal_mouse_at(struct engineos_shell_server *server,
 	server->mux_pointer_x = x;
 	server->mux_pointer_y = y;
 	server->mux_pointer_cell_valid = true;
-	bool ui_grid_changed = false;
-	if (!engineos_mux_client_request_view_ui(&server->mux_client, view_id,
-			&output->mux_snapshot, &ui_grid_changed, error, sizeof(error))) {
-		wlr_log(WLR_ERROR, "native tmux mouse UI refresh failed: %s", error);
-		server->mux_client.ready = false;
-		wl_display_terminate(server->display);
-		return true;
+	bool ui_invalidated = false;
+	struct engineos_shell_output *ui_output;
+	wl_list_for_each(ui_output, &server->outputs, link) {
+		if (ui_output->mux_registered &&
+				ui_output->mux_snapshot.ui.invalidated) {
+			ui_invalidated = true;
+			break;
+		}
 	}
-	if (!refresh_native_output_snapshots(server, &grid_changed, error,
-			sizeof(error))) {
-		wlr_log(WLR_ERROR, "native tmux mouse output refresh failed: %s", error);
-		server->mux_client.ready = false;
-		wl_display_terminate(server->display);
+	if (!grid_changed && !ui_invalidated &&
+			!server->mux_client.state_invalidated_pending)
 		return true;
-	}
 	if (!refresh_native_terminal_scene(server,
-			grid_changed || ui_grid_changed ?
-			"native-mouse-grid-and-ui-damage" : "native-mouse-ui-damage")) {
+			grid_changed ? "native-mouse-grid-damage" :
+			"native-mouse-state-or-ui-damage")) {
 		server->mux_client.ready = false;
 		wl_display_terminate(server->display);
 	}
@@ -7198,7 +7194,6 @@ static void pointer_destroy(struct wl_listener *listener, void *data) {
 
 	wlr_log(WLR_INFO, "pointer destroyed device=%s",
 		pointer->device->name != NULL ? pointer->device->name : "(unnamed)");
-	wlr_cursor_detach_input_device(server->cursor, pointer->device);
 	wl_list_remove(&pointer->link);
 	wl_list_remove(&pointer->destroy.link);
 	if (server->pointer_count > 0) {
@@ -7230,6 +7225,23 @@ static void server_new_pointer(struct engineos_shell_server *server,
 		device->name != NULL ? device->name : "(unnamed)");
 }
 
+static bool native_mux_outputs_committed(
+		const struct engineos_shell_server *server) {
+	const struct engineos_shell_output *output;
+	wl_list_for_each(output, &server->outputs, link) {
+		if (!output->mux_registered || output->scheduled_renderer_frame == 0)
+			continue;
+		if (output->committed_mux_revision !=
+				output->scheduled_mux_revision ||
+				output->committed_grid_revision !=
+				output->scheduled_grid_revision ||
+				output->committed_renderer_frame !=
+				output->scheduled_renderer_frame)
+			return false;
+	}
+	return true;
+}
+
 static void output_frame(struct wl_listener *listener, void *data) {
 	(void)data;
 	struct engineos_shell_output *output =
@@ -7246,8 +7258,24 @@ static void output_frame(struct wl_listener *listener, void *data) {
 	}
 	bool first_commit = output->frame_commits == 0;
 	output->frame_commits++;
+	bool mux_commit_changed = false;
+	if (output->mux_registered && output->scheduled_renderer_frame != 0 &&
+			(output->committed_mux_revision !=
+				output->scheduled_mux_revision ||
+			 output->committed_grid_revision !=
+				output->scheduled_grid_revision ||
+			 output->committed_renderer_frame !=
+				output->scheduled_renderer_frame)) {
+		output->committed_mux_revision = output->scheduled_mux_revision;
+		output->committed_grid_revision = output->scheduled_grid_revision;
+		output->committed_renderer_frame = output->scheduled_renderer_frame;
+		mux_commit_changed = true;
+	}
 	if (first_commit)
 		write_shell_state(output->server, "output-first-frame");
+	else if (mux_commit_changed &&
+			native_mux_outputs_committed(output->server))
+		write_shell_state(output->server, "output-mux-frame-committed");
 
 	struct timespec now;
 	clock_gettime(CLOCK_MONOTONIC, &now);

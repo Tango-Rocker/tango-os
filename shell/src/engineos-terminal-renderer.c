@@ -16,6 +16,7 @@
 #include <string.h>
 #include <wchar.h>
 #include <wlr/render/allocator.h>
+#include <wlr/render/drm_syncobj.h>
 #include <wlr/render/drm_format_set.h>
 #include <wlr/render/gles2.h>
 #include <wlr/render/pass.h>
@@ -327,6 +328,9 @@ struct engineos_terminal_renderer {
 	struct wlr_buffer *buffer;
 	struct wlr_buffer *gpu_buffers[2];
 	struct wlr_texture *gpu_buffer_textures[2];
+	struct wlr_drm_syncobj_timeline *timeline;
+	uint64_t timeline_point;
+	uint64_t gpu_buffer_points[2];
 	unsigned int gpu_buffer_index;
 	struct wlr_texture *atlas;
 	FT_Library library;
@@ -699,6 +703,7 @@ static bool terminal_allocate_buffers(struct engineos_terminal_renderer *termina
 			wlr_buffer_drop(terminal->gpu_buffers[index]);
 		terminal->gpu_buffers[index] = buffers[index];
 		terminal->gpu_buffer_textures[index] = textures[index];
+		terminal->gpu_buffer_points[index] = 0;
 	}
 	terminal->gpu_buffer_index = 0;
 	if (terminal->gpu_buffers[0] == NULL) {
@@ -716,6 +721,9 @@ static void pass_copy_target(struct engineos_terminal_renderer *terminal,
 		.transform = WL_OUTPUT_TRANSFORM_NORMAL,
 		.filter_mode = WLR_SCALE_FILTER_NEAREST,
 		.blend_mode = WLR_RENDER_BLEND_MODE_NONE,
+		.wait_timeline = terminal->gpu_buffer_points[source] != 0 ?
+			terminal->timeline : NULL,
+		.wait_point = terminal->gpu_buffer_points[source],
 	};
 	wlr_render_pass_add_texture(pass, &options);
 }
@@ -829,8 +837,17 @@ static bool gpu_update(struct engineos_terminal_renderer *terminal,
 	}
 	unsigned int source = terminal->gpu_buffer_index;
 	unsigned int destination = reallocated ? 0 : 1 - source;
+	struct wlr_buffer_pass_options pass_options = {0};
+	const struct wlr_buffer_pass_options *pass_options_ptr = NULL;
+	uint64_t signal_point = 0;
+	if (terminal->timeline != NULL) {
+		signal_point = ++terminal->timeline_point;
+		pass_options.signal_timeline = terminal->timeline;
+		pass_options.signal_point = signal_point;
+		pass_options_ptr = &pass_options;
+	}
 	struct wlr_render_pass *pass = wlr_renderer_begin_buffer_pass(
-		terminal->renderer, terminal->gpu_buffers[destination], NULL);
+		terminal->renderer, terminal->gpu_buffers[destination], pass_options_ptr);
 	if (pass == NULL) {
 		free(mask);
 		snprintf(error, error_size, "failed to begin GPU terminal render pass");
@@ -881,6 +898,7 @@ static bool gpu_update(struct engineos_terminal_renderer *terminal,
 			!readback_nonblank_pixels(terminal, destination, width, height,
 				&terminal->stats.nonblank_pixels, error, error_size)) return false;
 	terminal->gpu_buffer_index = destination;
+	terminal->gpu_buffer_points[destination] = signal_point;
 	terminal->cursor_x = client->grid_cursor_x;
 	terminal->cursor_y = client->grid_cursor_y;
 	terminal->cursor_visible =
@@ -940,6 +958,15 @@ struct engineos_terminal_renderer *engineos_terminal_renderer_create(
 		goto fail;
 	}
 	terminal->gpu = true;
+	if (renderer->features.timeline) {
+		int drm_fd = wlr_renderer_get_drm_fd(renderer);
+		if (drm_fd < 0 || (terminal->timeline =
+				wlr_drm_syncobj_timeline_create(drm_fd)) == NULL) {
+			snprintf(error, error_size,
+				"failed to create GPU terminal synchronization timeline");
+			goto fail;
+		}
+	}
 	FcPattern *pattern = FcNameParse((const FcChar8 *)"monospace");
 	if (pattern == NULL) {
 		snprintf(error, error_size, "failed to create terminal font pattern");
@@ -995,6 +1022,17 @@ struct wlr_buffer *engineos_terminal_renderer_buffer(
 		terminal->buffer;
 }
 
+struct wlr_drm_syncobj_timeline *engineos_terminal_renderer_wait_timeline(
+		const struct engineos_terminal_renderer *terminal) {
+	return terminal->gpu ? terminal->timeline : NULL;
+}
+
+uint64_t engineos_terminal_renderer_wait_point(
+		const struct engineos_terminal_renderer *terminal) {
+	return terminal->gpu && terminal->timeline != NULL ?
+		terminal->gpu_buffer_points[terminal->gpu_buffer_index] : 0;
+}
+
 const pixman_region32_t *engineos_terminal_renderer_damage(
 		const struct engineos_terminal_renderer *terminal) {
 	return &terminal->damage;
@@ -1015,6 +1053,7 @@ void engineos_terminal_renderer_destroy(
 		struct engineos_terminal_renderer *terminal) {
 	if (terminal == NULL) return;
 	if (terminal->atlas != NULL) wlr_texture_destroy(terminal->atlas);
+	wlr_drm_syncobj_timeline_unref(terminal->timeline);
 	if (terminal->buffer != NULL) wlr_buffer_drop(terminal->buffer);
 	for (size_t index = 0; index < 2; index++) {
 		if (terminal->gpu_buffer_textures[index] != NULL)

@@ -9,6 +9,7 @@
 struct engineos_mux_client;
 struct wlr_allocator;
 struct wlr_buffer;
+struct wlr_drm_syncobj_timeline;
 struct wlr_renderer;
 
 struct engineos_terminal_renderer;
@@ -37,6 +38,10 @@ bool engineos_terminal_renderer_update(
 	struct engineos_terminal_renderer *terminal,
 	const struct engineos_mux_client *client, char *error, size_t error_size);
 struct wlr_buffer *engineos_terminal_renderer_buffer(
+	const struct engineos_terminal_renderer *terminal);
+struct wlr_drm_syncobj_timeline *engineos_terminal_renderer_wait_timeline(
+	const struct engineos_terminal_renderer *terminal);
+uint64_t engineos_terminal_renderer_wait_point(
 	const struct engineos_terminal_renderer *terminal);
 const pixman_region32_t *engineos_terminal_renderer_damage(
 	const struct engineos_terminal_renderer *terminal);

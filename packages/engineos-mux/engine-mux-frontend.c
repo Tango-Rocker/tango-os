@@ -622,11 +622,8 @@ engine_mux_key_dispatch(struct engine_mux_client *client,
 	}
 	event = xcalloc(1, sizeof *event);
 	event->key = key|KEYC_SENT;
-	if (!server_client_handle_key(view->tmux_client, event)) {
+	if (!server_client_handle_key(view->tmux_client, event))
 		free(event);
-		*cause = xstrdup("graphical tmux client is not accepting input");
-		return (-1);
-	}
 	return (0);
 }
 

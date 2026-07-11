@@ -1,6 +1,6 @@
 pkgname=engineos-mux
 pkgver=3.6b
-pkgrel=38
+pkgrel=39
 _commit=0623d1e968423ad0c192e0d8debf1258671063d5
 pkgdesc="EngineOS tmux 3.6b graphical frontend protocol foundation"
 arch=('x86_64')
@@ -29,7 +29,7 @@ sha256sums=('2c212f7ee2d925b01ec20ab5bb3a906c17b6a8652fe521fcaaf498f800b4d1fa'
             '492a467aac874af3b49791e37be5bb572bfcf5eace28574aa514c15d7bc734b9'
             '592d31c1a38987282520102f617ce699430c35b4cd2d1ecfc2f6a14c5992e767'
             'c98a0184cde19f14e32f61595f622748f064f2294a1a285adb920eb03eaba593'
-            '2fd6e40f84337b276cca20c0b2287d73a65b029d60a6f626bd97db4d7c925bc7'
+            'a4b4e0255d132361882b74b3a3390bb51610fef4a5fab305977342f4cd237dd6'
             'cdad7a4fb6c706fb77863825c42218351cc1d4ab37131a835fc81a7d92967b1a'
             '4a94b8db1a630f41201e218bf7d8cda3b45b820a1059f52216bc9b806b264399'
             'baaaa7bbb1ab42a407818fbf0d23f2467d00d7ed7d66553f5fb78faaf270c211')
