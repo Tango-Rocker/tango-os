@@ -64,7 +64,7 @@ These are historical proof artifacts only; they are not the active work path:
   `engineos-dev-shell-start` creates or reuses the authoritative `engineos`
   session, requires its frontend socket, disables launchpad bootstrap for that
   run, and fails closed if native mux preparation fails. The active package set
-  is `engineos-mux 3.6b-41`, `engineos-shell 0.1.0-71`,
+  is `engineos-mux 3.6b-41`, `engineos-shell 0.1.0-73`,
   `engineos-tools 0.1.0-51`, and `engineos-config 0.1.0-6`. The live tty1 shell
   has two registered graphical output clients, uses the DRM/libinput backend
   and radeonsi GPU glyph atlas, and starts no shell-owned foot client. The
@@ -120,6 +120,31 @@ These are historical proof artifacts only; they are not the active work path:
   a click on its client close control, and the resulting immediate surface
   unmap. The full GLES2/radeonsi mux contract passes and the direct-TTY system
   service remains active with zero restarts and no new coredump.
+  Menu dismissal previously left its glyphs on screen even after the mux UI
+  model became inactive. Grim isolated this to the transparent GPU target:
+  alpha-zero source-over drawing preserved the old destination instead of
+  clearing it. Installed `0.1.0-73` uses replacement blending for transparent
+  clears. The GLES2/radeonsi contract now captures the compositor before,
+  during, and after a menu transition; the open menu changed 13,999 RGB channel
+  bytes and the closed pane region returned exactly to baseline with zero
+  changed bytes. The live post-close capture at
+  `artifacts/captures/menu-clear-20260711/03-closed.png` is clean with zero
+  output frame failures or new coredumps. Grim also makes a
+  separate remaining defect explicit: tmux alternate-character-set menu border
+  cells still render as literal `q` glyphs and need correct cell-attribute
+  translation in the glyph-provider work.
+  The live proof's forced focused-client session switch also exposed a distinct
+  retained-grid ordering failure: a newly focused pane could exist in the
+  primary snapshot without a grid, causing lookup to mask the ready copy or
+  skip requesting it before scene creation. That pre-fix run exited once and
+  systemd recovered without a coredump. Shell `0.1.0-73` now treats only
+  grid-ready pane models as retained grids; the native contract moves the
+  focused graphical client to a new session, requires its subscribed grid and
+  rendered scene, then restores the original session without terminating the
+  compositor. The installed live proof repeated that transition through a
+  fresh session and back to `engineos-side`; compositor PID 416254 survived,
+  both outputs retained complete subscribed/rendered grids with zero frame
+  failures, and the system service remained active with zero restarts.
   The shell now exposes wlroots screencopy plus xdg-output geometry, making
   `grim` a real supported capture client. The focused contract produced a
   correctly sized 1280x720 PNG with both pixman and radeonsi GLES2. Installed
@@ -162,7 +187,7 @@ These are historical proof artifacts only; they are not the active work path:
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
   `engineos-mux 3.6b-41` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-71`, and native mode is the live EngineDev desktop
+  `engineos-shell 0.1.0-73`, and native mode is the live EngineDev desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The

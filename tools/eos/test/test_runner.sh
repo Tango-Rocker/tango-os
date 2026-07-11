@@ -2258,6 +2258,10 @@ PY
 	done
 	[[ "$stable_count" -ge 5 ]] ||
 		die "native shell grid did not settle before UI overlay proof"
+	command -v grim >/dev/null ||
+		die "native mux UI overlay proof requires grim"
+	XDG_RUNTIME_DIR="$fixture" WAYLAND_DISPLAY=wayland-0 \
+		grim -t ppm "$fixture/ui-before-menu.ppm"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		display-menu -c "$shell_client_name" -T SHELL-MENU \
 		Pick p 'set-option -g @engineos-shell-menu picked' \
@@ -2282,6 +2286,8 @@ PY
 		tail -100 "$fixture/shell-native.log" >&2 || true
 		die "native shell did not consume and render menu UI invalidation"
 	}
+	XDG_RUNTIME_DIR="$fixture" WAYLAND_DISPLAY=wayland-0 \
+		grim -t ppm "$fixture/ui-menu-open.ppm"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		command-prompt -t "$shell_client_name" \
 		>"$fixture/prompt.log" 2>&1 &
@@ -2300,6 +2306,68 @@ PY
 		tail -80 "$fixture/shell-native.log" >&2 || true
 		die "native shell did not consume and render prompt UI invalidation"
 	}
+	XDG_RUNTIME_DIR="$fixture" WAYLAND_DISPLAY=wayland-0 \
+		grim -t ppm "$fixture/ui-menu-closed.ppm"
+	python - "$fixture/ui-before-menu.ppm" "$fixture/ui-menu-open.ppm" \
+		"$fixture/ui-menu-closed.ppm" <<'PY'
+import sys
+
+
+def read_ppm(path):
+    with open(path, "rb") as stream:
+        def token():
+            while True:
+                byte = stream.read(1)
+                if not byte:
+                    raise SystemExit(f"truncated PPM header: {path}")
+                if byte == b"#":
+                    stream.readline()
+                    continue
+                if not byte.isspace():
+                    break
+            value = bytearray(byte)
+            while True:
+                byte = stream.read(1)
+                if not byte or byte.isspace():
+                    return bytes(value)
+                value.extend(byte)
+
+        if token() != b"P6":
+            raise SystemExit(f"grim did not produce binary PPM: {path}")
+        width, height, maximum = int(token()), int(token()), int(token())
+        if maximum != 255:
+            raise SystemExit(f"unsupported PPM channel maximum in {path}: {maximum}")
+        pixels = stream.read()
+    expected = width * height * 3
+    if len(pixels) != expected:
+        raise SystemExit(
+            f"invalid PPM payload in {path}: {len(pixels)} != {expected}")
+    return width, height, pixels
+
+
+before = read_ppm(sys.argv[1])
+opened = read_ppm(sys.argv[2])
+closed = read_ppm(sys.argv[3])
+if before[:2] != opened[:2] or before[:2] != closed[:2]:
+    raise SystemExit("grim UI proof captures changed dimensions")
+
+width, height = before[:2]
+# Prompts legitimately replace the status line. The pane/menu area above the
+# bottom 32 pixels must otherwise return byte-for-byte to its pre-menu frame.
+proof_bytes = width * max(height - 32, 0) * 3
+open_difference = sum(
+    left != right for left, right in zip(before[2][:proof_bytes], opened[2][:proof_bytes]))
+closed_difference = sum(
+    left != right for left, right in zip(before[2][:proof_bytes], closed[2][:proof_bytes]))
+if open_difference == 0:
+    raise SystemExit("grim UI proof did not observe the open menu")
+if closed_difference != 0:
+    raise SystemExit(
+        f"closed menu retained {closed_difference} changed channel bytes")
+print(
+    f"grim menu clear passed open_changed_channels={open_difference} "
+    f"closed_changed_channels={closed_difference}")
+PY
 	shell_pane_id="$(jq -er '.mux.pane_id' \
 		"$fixture/engineos/shell-state.json")"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
@@ -2402,7 +2470,8 @@ PY
 			"$fixture/engineos/shell-state.json" >/dev/null ||
 			die "GLES2 terminal renderer did not retain sparse cell damage"
 	fi
-	local focused_session nonfocused_output nonfocused_client
+	local focused_session focused_client focused_grid_session focused_grid_pane
+	local nonfocused_output nonfocused_client
 	local output_session_id output_session_pane output_grid_revision
 	local updated_output_grid_revision output_renderer_frame
 	local updated_output_renderer_frame output_ui_frame updated_output_ui_frame
@@ -2582,6 +2651,60 @@ PY
 	[[ "$updated_output_grid_revision" -gt "$output_grid_revision" &&
 		"$updated_output_renderer_frame" -gt "$output_renderer_frame" ]] ||
 		die "nonfocused output grid damage did not advance its retained renderer"
+	focused_client="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" list-clients -F '#{client_name}|#{client_flags}' | \
+		awk -F '|' '$2 ~ /focused/ { print $1; exit }')"
+	[[ "$focused_client" == engineos-view-* ]] ||
+		die "focused shell output did not retain an addressable tmux client"
+	focused_grid_session="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" new-session -d -s focused-grid-race -P -F '#{session_id}')"
+	focused_grid_pane="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" display-message -p -t focused-grid-race: '#{pane_id}')"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		switch-client -c "$focused_client" -t "$focused_grid_session"
+	for _ in {1..150}; do
+		jq -e --arg session "$focused_grid_session" \
+			--arg pane "$focused_grid_pane" \
+			'.mux.session_id == $session and .mux.pane_id == $pane and
+			 any(.output_views[]; .focused and .session_id == $session and
+			   .pane_id == $pane and .grid_ready_count == .pane_count and
+			   .grid_subscribed_count == .pane_count and
+			   .rendered_pane_count == .pane_count)' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg session "$focused_grid_session" --arg pane "$focused_grid_pane" \
+		'.mux.session_id == $session and .mux.pane_id == $pane and
+		 any(.output_views[]; .focused and .session_id == $session and
+		   .pane_id == $pane and .grid_ready_count == .pane_count and
+		   .grid_subscribed_count == .pane_count and
+		   .rendered_pane_count == .pane_count)' \
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '{mux:{session_id:.mux.session_id,pane_id:.mux.pane_id},output_views,last_reason}' \
+			"$fixture/engineos/shell-state.json" >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
+		die "focused session switch did not acquire its new pane grid before scene creation"
+	}
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		switch-client -c "$focused_client" -t "$focused_session"
+	for _ in {1..150}; do
+		jq -e --arg session "$focused_session" \
+			'.mux.session_id == $session and
+			 any(.output_views[]; .focused and .session_id == $session and
+			   .grid_ready_count == .pane_count and
+			   .grid_subscribed_count == .pane_count)' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg session "$focused_session" \
+		'.mux.session_id == $session and
+		 any(.output_views[]; .focused and .session_id == $session and
+		   .grid_ready_count == .pane_count and
+		   .grid_subscribed_count == .pane_count)' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "focused output did not restore its original retained grids"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		kill-session -t "$focused_grid_session"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		switch-client -c "$nonfocused_client" -t "$focused_session"
 	for _ in {1..150}; do

@@ -551,7 +551,11 @@ static void pass_rect(struct wlr_render_pass *pass, int x, int y,
 		.box = {.x = x, .y = y, .width = width, .height = height},
 		.color = render_colour(colour, alpha),
 		.clip = clip,
-		.blend_mode = alpha == 1.0f ? WLR_RENDER_BLEND_MODE_NONE :
+		/* Alpha-zero is a render-target clear, not a source-over draw. Blending a
+		 * transparent source preserves the destination and leaves closed menus
+		 * visible in the compositor UI overlay. */
+		.blend_mode = (alpha == 0.0f || alpha == 1.0f) ?
+			WLR_RENDER_BLEND_MODE_NONE :
 			WLR_RENDER_BLEND_MODE_PREMULTIPLIED,
 	};
 	wlr_render_pass_add_rect(pass, &options);

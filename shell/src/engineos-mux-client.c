@@ -109,12 +109,13 @@ static void free_pane_models(struct engineos_mux_pane_model *panes,
 	free(panes);
 }
 
-static struct engineos_mux_pane_model *find_pane_model(
+static struct engineos_mux_pane_model *find_retained_pane_grid(
 		struct engineos_mux_client *client, uint32_t pane_id,
 		uint32_t generation) {
 	for (size_t index = 0; index < client->pane_count; index++) {
 		if (client->panes[index].pane_id == pane_id &&
-				client->panes[index].generation == generation)
+				client->panes[index].generation == generation &&
+				client->panes[index].grid.ready)
 			return &client->panes[index];
 	}
 	for (size_t view = 0; view < client->view_snapshot_count; view++) {
@@ -168,7 +169,7 @@ static bool mark_grid_invalidation(struct engineos_mux_client *client,
 		client->selected_grid_damage_pending = true;
 		return true;
 	}
-	struct engineos_mux_pane_model *pane = find_pane_model(client, pane_id,
+	struct engineos_mux_pane_model *pane = find_retained_pane_grid(client, pane_id,
 		generation);
 	if (pane == NULL || !pane->grid.ready || !pane->grid.subscribed) {
 		snprintf(error, error_size,
@@ -1762,7 +1763,7 @@ bool engineos_mux_client_request_view_snapshot(
 		return false;
 	for (size_t index = 0; index < snapshot->pane_count; index++) {
 		struct engineos_mux_pane_model *pane = &snapshot->panes[index];
-		if (pane->grid.ready || find_pane_model(client, pane->pane_id,
+		if (pane->grid.ready || find_retained_pane_grid(client, pane->pane_id,
 				pane->generation) != NULL)
 			continue;
 		if (!request_pane_grid(client, pane, error, error_size) ||
@@ -1778,7 +1779,7 @@ struct engineos_mux_pane_model *engineos_mux_client_view_pane_grid(
 		const struct engineos_mux_pane_model *pane) {
 	if (client == NULL || pane == NULL)
 		return NULL;
-	return find_pane_model(client, pane->pane_id, pane->generation);
+	return find_retained_pane_grid(client, pane->pane_id, pane->generation);
 }
 
 bool engineos_mux_client_handle_event(struct engineos_mux_client *client,
@@ -1847,7 +1848,7 @@ bool engineos_mux_client_handle_event(struct engineos_mux_client *client,
 	uint32_t generation = ntohl(invalidated.generation);
 	if (pane_id == client->pane_id && generation == client->pane_generation)
 		return receive_grid_damage(client, grid_changed, error, error_size);
-	struct engineos_mux_pane_model *pane = find_pane_model(client, pane_id,
+	struct engineos_mux_pane_model *pane = find_retained_pane_grid(client, pane_id,
 		generation);
 	if (pane == NULL || !pane->grid.ready || !pane->grid.subscribed) {
 		snprintf(error, error_size, "grid invalidation has no retained pane model");
