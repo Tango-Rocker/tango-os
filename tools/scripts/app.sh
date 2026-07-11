@@ -931,6 +931,26 @@ require_native_pane_mode() {
     die "pane $1 requires the EngineOS shell to run in native mux mode"
 }
 
+PANE_COMMAND=()
+adapt_pane_command() {
+  PANE_COMMAND=("$@")
+  [[ ${#PANE_COMMAND[@]} -gt 0 ]] || return
+  case "${PANE_COMMAND[0]##*/}" in
+    falkon)
+      local argument dedicated=false
+      for argument in "${PANE_COMMAND[@]:1}"; do
+        case "$argument" in
+          --no-remote|-r) dedicated=true ;;
+        esac
+      done
+      if [[ "$dedicated" == false ]]; then
+        PANE_COMMAND=("${PANE_COMMAND[0]}" --no-remote
+          "${PANE_COMMAND[@]:1}")
+      fi
+      ;;
+  esac
+}
+
 run_pane_launch() {
   local pane_id="${TMUX_PANE:-}"
   local game=false
@@ -958,6 +978,8 @@ run_pane_launch() {
   [[ -n "${TMUX:-}" && -n "$pane_id" ]] ||
     die "pane launch requires TMUX and TMUX_PANE or --pane"
   [[ $# -gt 0 ]] || die "pane launch requires a command"
+  adapt_pane_command "$@"
+  set -- "${PANE_COMMAND[@]}"
 
   if native_pane_mode; then
     local mux_bin
@@ -1024,6 +1046,8 @@ run_pane_split() {
   [[ -n "${TMUX:-}" && -n "$pane_id" ]] ||
     die "pane split requires TMUX and TMUX_PANE or --pane"
   [[ $# -gt 0 ]] || die "pane split requires a command"
+  adapt_pane_command "$@"
+  set -- "${PANE_COMMAND[@]}"
   require_native_pane_mode split
   local mux_bin
   local mux_args=(split-pane-app)
@@ -1835,6 +1859,7 @@ run_manifest_validate() {
   manifest_expect_app_id terminal foot
   manifest_expect_nonempty terminal log
   manifest_expect_value terminal input normal
+  manifest_expect_value terminal instance dedicated
 
   manifest_expect_value terminal-secondary slot terminal-secondary
   manifest_expect_value terminal-secondary role terminal-secondary
@@ -1843,6 +1868,7 @@ run_manifest_validate() {
   manifest_expect_app_id terminal-secondary engineos-terminal-secondary
   manifest_expect_nonempty terminal-secondary log
   manifest_expect_value terminal-secondary input normal
+  manifest_expect_value terminal-secondary instance dedicated
 
   manifest_expect_value cube slot cube
   manifest_expect_value cube role cube
@@ -1852,6 +1878,7 @@ run_manifest_validate() {
   manifest_expect_app_id cube engineos-cube
   manifest_expect_value cube health gl-renderer-and-frames
   manifest_expect_value cube input normal
+  manifest_expect_value cube instance dedicated
 
   manifest_expect_value quake slot engine
   manifest_expect_value quake role engine
@@ -1861,6 +1888,15 @@ run_manifest_validate() {
   manifest_expect_app_id quake quakespasm
   manifest_expect_value quake assets quake
   manifest_expect_value quake input game
+  manifest_expect_value quake instance dedicated
+
+  manifest_expect_value falkon slot pane
+  manifest_expect_value falkon role pane
+  manifest_expect_value falkon command "eos-app pane launch -- falkon"
+  manifest_expect_value falkon package falkon
+  manifest_expect_app_id falkon org.kde.falkon
+  manifest_expect_value falkon input normal
+  manifest_expect_value falkon instance dedicated
 
   printf 'App manifest validation summary: %s failure(s)\n' "$manifest_failures"
   [[ "$manifest_failures" -eq 0 ]]

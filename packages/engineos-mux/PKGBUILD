@@ -1,6 +1,6 @@
 pkgname=engineos-mux
 pkgver=3.6b
-pkgrel=34
+pkgrel=36
 _commit=0623d1e968423ad0c192e0d8debf1258671063d5
 pkgdesc="EngineOS tmux 3.6b graphical frontend protocol foundation"
 arch=('x86_64')
@@ -25,10 +25,10 @@ sha256sums=('2c212f7ee2d925b01ec20ab5bb3a906c17b6a8652fe521fcaaf498f800b4d1fa'
             'c7f3fbcd68f53f4227614e03cfb7e5f91d3069b68ad03dccf4ead6c13c742e11'
             '1d8d061eaa8aca3df1ab4d0517c6fad2d62b7e8fe60e6aac637ed6b1e68febdf'
             '492a467aac874af3b49791e37be5bb572bfcf5eace28574aa514c15d7bc734b9'
-            '0daefd9359e4dc3500a4525020d94ebf78f6b9cb06621356ed78537aa6b3f4f0'
+            '2fd6e40f84337b276cca20c0b2287d73a65b029d60a6f626bd97db4d7c925bc7'
             'cdad7a4fb6c706fb77863825c42218351cc1d4ab37131a835fc81a7d92967b1a'
             '4a94b8db1a630f41201e218bf7d8cda3b45b820a1059f52216bc9b806b264399'
-            'ebfa4c5ca40656cfac4a883f98fc6ff81177af16d9fe6bc4c0de93b6558a8553')
+            'baaaa7bbb1ab42a407818fbf0d23f2467d00d7ed7d66553f5fb78faaf270c211')
 
 prepare() {
   local _engineos_root
@@ -55,8 +55,9 @@ build() {
 	cd "$_source_dir"
 	./configure --prefix=/usr --enable-utempter --enable-systemd
 	make
-	${CC:-cc} ${CFLAGS} ${CPPFLAGS} ${LDFLAGS} \
-	  -o "$srcdir/engine-pane-host" "$srcdir/engine-pane-host.c"
+	${CC:-cc} ${CFLAGS} ${CPPFLAGS} \
+	  -o "$srcdir/engine-pane-host" "$srcdir/engine-pane-host.c" \
+	  ${LDFLAGS} $(pkg-config --libs libsystemd)
 
   meson setup "$srcdir/mux-build" "$_engineos_root/mux" \
     --prefix=/usr \

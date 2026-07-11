@@ -172,6 +172,7 @@ run_mux() {
 	local initial_native_revision updated_native_revision stable_revision=""
 	local stable_count=0
 	local pane_scope="" pane_app_pid="" pane_state="" split_pane_id=""
+	local split_scope=""
 	local pane_shell_pid="" pane_foreground_pid=""
 	local wayland_display="" unscoped_pid="" scoped_client_pid=""
 	local game_wrapper_command=""
@@ -237,8 +238,9 @@ if len(png) <= 65536:
     raise SystemExit("large image fixture did not exceed one mux chunk")
 PY
 	cc -std=c11 -Wall -Wextra -Werror -O2 \
+		$(pkg-config --cflags libsystemd) \
 		"$ROOT/packages/engineos-mux/engine-pane-host.c" \
-		-o "$fixture/bin/engine-pane-host"
+		-o "$fixture/bin/engine-pane-host" $(pkg-config --libs libsystemd)
 	local wayland_protocols_dir
 	wayland_protocols_dir="$(pkg-config wayland-protocols --variable=pkgdatadir)"
 	wayland-scanner client-header \
@@ -344,6 +346,17 @@ PY
 		"$fixture/first.json" >/dev/null ||
 		die "mux snapshot did not expose configured prefix keys"
 	pane_id="$(jq -er '.panes[0].pane_id' "$fixture/first.json")"
+	local large_grid_pane
+	large_grid_pane="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" new-session -d -s large-grid -x 240 -y 67 \
+		-P -F '#{pane_id}' /bin/sh)"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" grid \
+		"$large_grid_pane" >"$fixture/large-grid.json"
+	jq -e '.columns == 240 and .rows == 67 and .cell_count == 16080' \
+		"$fixture/large-grid.json" >/dev/null ||
+		die "near-limit terminal grid did not cross the seqpacket transport"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		kill-session -t large-grid
 	view_proof_session_id="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
 		"$mux_bin" new-session -d -s view-proof -P -F '#{session_id}')"
 	view_proof_session="$(jq -er '.panes[0].session_id' "$fixture/first.json")"
@@ -538,6 +551,7 @@ PY
 	done
 	[[ "$pane_state" =~ ^engine-pane-split-[0-9]+-[0-9]+\.scope\|[1-9][0-9]*$ ]] ||
 		die "split-pane-app host did not expose its foreground scoped process"
+	split_scope="${pane_state%%|*}"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		signal-pane-app -t "$split_pane_id" TERM
 	for _ in {1..250}; do
@@ -552,6 +566,14 @@ PY
 			capture-pane -p -t "$split_pane_id" -S -40 >&2 || true
 		die "engine-pane-host did not preserve the pane and start a login shell: $pane_state"
 	}
+	for _ in {1..100}; do
+		[[ "$(systemctl --user show "$split_scope" -p ActiveState --value \
+			2>/dev/null || true)" != active ]] && break
+		sleep 0.02
+	done
+	[[ "$(systemctl --user show "$split_scope" -p ActiveState --value \
+		2>/dev/null || true)" != active ]] ||
+		die "engine-pane-host left an empty application scope active: $split_scope"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		kill-pane -t "$split_pane_id"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
@@ -4057,6 +4079,16 @@ PY
 		ENGINEOS_STATE_DIR="$tmp_dir/run" \
 		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
 		TMUX="/tmp/engine-mux,1,0" TMUX_PANE="%9" \
+		"$SCRIPT_DIR/app.sh" pane launch -- falkon about:blank >"$out"
+	PATH="$fake_bin:$PATH" ENGINEOS_LOG_DIR="$log_dir" \
+		ENGINEOS_STATE_DIR="$tmp_dir/run" \
+		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
+		TMUX="/tmp/engine-mux,1,0" TMUX_PANE="%9" \
+		"$SCRIPT_DIR/app.sh" pane split -v -- falkon -r about:blank >"$out"
+	PATH="$fake_bin:$PATH" ENGINEOS_LOG_DIR="$log_dir" \
+		ENGINEOS_STATE_DIR="$tmp_dir/run" \
+		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
+		TMUX="/tmp/engine-mux,1,0" TMUX_PANE="%9" \
 		"$SCRIPT_DIR/app.sh" pane split -h --game -- quake -window >"$out"
 	PATH="$fake_bin:$PATH" ENGINEOS_STATE_DIR="$tmp_dir/run" \
 		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
@@ -4079,6 +4111,12 @@ PY
 	grep -Fx 'launch-pane-app -g -t %9 -- quake -window' \
 		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
 		die "native app pane launch did not select authoritative game presentation"
+	grep -Fx 'launch-pane-app -t %9 -- falkon --no-remote about:blank' \
+		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
+		die "native Falkon launch did not add the dedicated-instance adapter"
+	grep -Fx 'split-pane-app -v -t %9 -- falkon -r about:blank' \
+		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
+		die "native Falkon split duplicated an explicit dedicated-instance flag"
 	grep -Fx 'split-pane-app -h -g -t %9 -- quake -window' \
 		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
 		die "native app pane split did not preserve orientation and game presentation"
@@ -4106,6 +4144,10 @@ PY
     die "app manifest validation did not check cube app id"
   grep -F 'terminal-secondary.app_ids contains engineos-terminal-secondary' "$out" >/dev/null ||
     die "app manifest validation did not check secondary terminal app id"
+  grep -F 'falkon.instance = dedicated' "$out" >/dev/null ||
+    die "app manifest validation did not require dedicated Falkon instances"
+  grep -F 'falkon.app_ids contains org.kde.falkon' "$out" >/dev/null ||
+    die "app manifest validation did not check Falkon app id"
 
   printf 'app launcher smoke test passed\n'
 }

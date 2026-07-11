@@ -76,8 +76,9 @@ These are historical proof artifacts only; they are not the active work path:
   restarts preserved one tmux server and its two attached clients: primary
   `/dev/pts/0` remains on session `2`, and secondary `/dev/pts/1` remains on
   `engineos-side`; no detached `engineos` session or proxy windows were
-  created. `eos-app manifest validate` passes after restart. The live Falkon
-  pane visual proof is still pending. The managed right-click status-window
+  created. `eos-app manifest validate` passes after restart. This bridge is now
+  rollback-only: the live native Falkon pane contract passes through the
+  isolated native-mux proof described below. The managed right-click status-window
   menu now includes `Move to Session...`; with one destination it moves the
   clicked stable window ID immediately, avoiding tmux's unreliable nested
   mouse menus, and resynchronizes pane geometry. The managed session-name menu
@@ -99,8 +100,8 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
-  `engineos-mux 3.6b-34` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-52`, but native mode is not yet the live desktop
+  `engineos-mux 3.6b-36` with the decoder/renderer/control boundary in
+  `engineos-shell 0.1.0-53`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
@@ -356,8 +357,20 @@ These are historical proof artifacts only; they are not the active work path:
   resize, zoom, and unzoom. Both outputs reported positive frame commits and
   zero commit failures. The proof restored the prior legacy desktop and
   removed its isolated mux server. Evidence is retained in
-  `/var/log/engineos/proof-native-kms-20260711T100643Z/`. Real Falkon and Quake
-  pane sessions are the next native acceptance boundary before cutover.
+  `/var/log/engineos/proof-native-kms-20260711T100643Z/`.
+  `eos-proof native-falkon` now passes the corresponding real application
+  boundary on tty1. Falkon launches through `eos-app` with an enforced
+  `--no-remote` dedicated instance, maps as `org.kde.falkon` only after its PID
+  resolves to the pane's transient user scope, owns the pane PTY foreground
+  process group, and keeps its live console output. The proof switches between
+  presentation and console, signals the app, verifies the shell regains the
+  foreground PTY and accepts a post-exit marker, then restores legacy mode.
+  Evidence is retained in
+  `/var/log/engineos/proof-native-falkon-20260711T104436Z/`. The same checkpoint
+  raises mux frontend/client socket buffers so a valid 240x67 grid cannot fail
+  as `grid-too-large`, and `engine-pane-host` explicitly retires empty split
+  application scopes before starting the replacement login shell. Real Quake,
+  recovery/input acceptance, upstream-suite closure, and cutover remain open.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 
@@ -396,7 +409,7 @@ Bare-metal/source-checkout loop:
 ./tools/engineos/eos-ci local --test agent --install --clean-generated --no-validate-repo
 eos-app manifest validate
 eos-proof mc-preview
-eos-app pane launch -- falkon
+eos-proof native-falkon
 eos-game quake proof
 eos-proof shell-launch --bare-metal
 ```

@@ -1323,6 +1323,15 @@ bool engineos_mux_client_connect(struct engineos_mux_client *client,
 		snprintf(error, error_size, "socket: %s", strerror(errno));
 		return false;
 	}
+	int socket_buffer_size = 2 * ENGINE_MUX_MAX_PAYLOAD;
+	if (setsockopt(client->fd, SOL_SOCKET, SO_SNDBUF, &socket_buffer_size,
+			sizeof(socket_buffer_size)) < 0 ||
+			setsockopt(client->fd, SOL_SOCKET, SO_RCVBUF, &socket_buffer_size,
+				sizeof(socket_buffer_size)) < 0) {
+		snprintf(error, error_size, "socket buffers: %s", strerror(errno));
+		engineos_mux_client_destroy(client);
+		return false;
+	}
 	struct sockaddr_un address = {.sun_family = AF_UNIX};
 	if (strlen(socket_path) >= sizeof(address.sun_path)) {
 		snprintf(error, error_size, "socket path is too long");

@@ -47,6 +47,14 @@ static int connect_socket(const char *path) {
 	if (fd < 0) {
 		return -1;
 	}
+	int socket_buffer_size = 2 * ENGINE_MUX_MAX_PAYLOAD;
+	if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &socket_buffer_size,
+			sizeof(socket_buffer_size)) < 0 ||
+			setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &socket_buffer_size,
+				sizeof(socket_buffer_size)) < 0) {
+		close(fd);
+		return -1;
+	}
 	struct sockaddr_un address = {.sun_family = AF_UNIX};
 	if (strlen(path) >= sizeof(address.sun_path)) {
 		close(fd);

@@ -14,6 +14,7 @@ log = "terminal.log"
 health = "terminal-owner-log"
 input = "normal"
 capture = "none"
+instance = "dedicated"
 
 [apps.terminal-secondary]
 slot = "terminal-secondary"
@@ -25,6 +26,7 @@ log = "terminal.log"
 health = "terminal-owner-log"
 input = "normal"
 capture = "none"
+instance = "dedicated"
 
 [apps.cube]
 slot = "cube"
@@ -37,6 +39,7 @@ log = "cube.log"
 health = "gl-renderer-and-frames"
 input = "normal"
 capture = "none"
+instance = "dedicated"
 
 [apps.quake]
 slot = "engine"
@@ -50,3 +53,16 @@ assets = "quake"
 health = "engine-mapped-or-asset-guidance"
 input = "game"
 capture = "optional"
+instance = "dedicated"
+
+[apps.falkon]
+slot = "pane"
+role = "pane"
+command = "eos-app pane launch -- falkon"
+package = "falkon"
+app_ids = ["org.kde.falkon", "falkon"]
+log = "app.log"
+health = "pane-presentation"
+input = "normal"
+capture = "none"
+instance = "dedicated"

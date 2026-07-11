@@ -2496,6 +2496,14 @@ engine_mux_accept(__unused int fd, __unused short events, __unused void *data)
 	    &address_size, SOCK_NONBLOCK|SOCK_CLOEXEC);
 	if (client_fd == -1)
 		return;
+	int socket_buffer_size = 2 * ENGINE_MUX_MAX_PAYLOAD;
+	if (setsockopt(client_fd, SOL_SOCKET, SO_SNDBUF, &socket_buffer_size,
+	    sizeof socket_buffer_size) == -1 ||
+	    setsockopt(client_fd, SOL_SOCKET, SO_RCVBUF, &socket_buffer_size,
+	    sizeof socket_buffer_size) == -1) {
+		close(client_fd);
+		return;
+	}
 	credentials_size = sizeof credentials;
 	if (getsockopt(client_fd, SOL_SOCKET, SO_PEERCRED, &credentials,
 	    &credentials_size) == -1 || credentials.uid != getuid()) {

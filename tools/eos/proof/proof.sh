@@ -25,6 +25,7 @@ Usage: proof.sh build-lab [--dry-run] [--profile enginedev]
        proof.sh shell-launch [--vm|--runtime|--bare-metal] [--dry-run]
        proof.sh launchpad [--vm|--runtime|--bare-metal] [--dry-run]
        proof.sh native-kms
+       proof.sh native-falkon
        proof.sh visual [--dry-run] [--allow-metadata]
        proof.sh mc-preview [--dry-run] [--visual]
 
@@ -48,6 +49,10 @@ The launchpad proof verifies the terminal, cube, and engine slot contract.
 The native-kms proof temporarily runs the live tty1 shell against an isolated
 two-pane native mux session, proves real DRM/GBM/radeonsi output commits through
 split, resize, and zoom, then restores the prior shell mode.
+The native-falkon proof temporarily runs the live tty1 shell against an isolated
+native mux pane, launches a dedicated Falkon instance through eos-app, proves
+scope ownership and console toggling, closes it, proves prompt restoration, and
+then restores the prior shell mode.
 The visual proof requires a real frame image by default; metadata-only capture
 is diagnostic unless --allow-metadata is explicitly passed.
 The mc-preview proof runs the Quick View/image-preview acceptance path and can
@@ -55,47 +60,73 @@ optionally include a visual frame capture.
 HELP
 }
 
-NATIVE_KMS_CLEANED=true
-NATIVE_KMS_MANAGER_CHANGED=false
-NATIVE_KMS_SHELL_SWITCHED=false
-NATIVE_KMS_FIXTURE=""
-NATIVE_KMS_RUNTIME=""
-NATIVE_KMS_MUX_BIN=""
-NATIVE_KMS_OLD_MODE=""
-NATIVE_KMS_OLD_SOCKET=""
-NATIVE_KMS_RUNTIME_CMD=""
-NATIVE_KMS_SYSTEMCTL=()
+NATIVE_LIVE_CLEANED=true
+NATIVE_LIVE_MANAGER_CHANGED=false
+NATIVE_LIVE_SHELL_SWITCHED=false
+NATIVE_LIVE_FIXTURE=""
+NATIVE_LIVE_RUNTIME=""
+NATIVE_LIVE_MUX_BIN=""
+NATIVE_LIVE_OLD_MODE=""
+NATIVE_LIVE_OLD_SOCKET=""
+NATIVE_LIVE_RUNTIME_CMD=""
+NATIVE_LIVE_SYSTEMCTL=()
 
-native_kms_restore_environment() {
-  local assignment
-  for assignment in "$NATIVE_KMS_OLD_MODE" "$NATIVE_KMS_OLD_SOCKET"; do
-    if [[ -n "$assignment" ]]; then
-      "${NATIVE_KMS_SYSTEMCTL[@]}" set-environment "$assignment"
-    fi
-  done
-  [[ -n "$NATIVE_KMS_OLD_MODE" ]] ||
-    "${NATIVE_KMS_SYSTEMCTL[@]}" unset-environment ENGINEOS_MUX_MODE
-  [[ -n "$NATIVE_KMS_OLD_SOCKET" ]] ||
-    "${NATIVE_KMS_SYSTEMCTL[@]}" unset-environment ENGINEOS_MUX_SOCKET
+native_live_begin() {
+  NATIVE_LIVE_CLEANED=false
+  NATIVE_LIVE_MANAGER_CHANGED=false
+  NATIVE_LIVE_SHELL_SWITCHED=false
+  NATIVE_LIVE_FIXTURE="$1"
+  NATIVE_LIVE_RUNTIME="$2"
+  NATIVE_LIVE_MUX_BIN="$3"
+  NATIVE_LIVE_RUNTIME_CMD="$4"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    NATIVE_LIVE_SYSTEMCTL=(systemctl)
+  else
+    NATIVE_LIVE_SYSTEMCTL=(sudo -n systemctl)
+  fi
+  NATIVE_LIVE_OLD_MODE="$(systemctl show-environment |
+    sed -n '/^ENGINEOS_MUX_MODE=/{p;q;}')"
+  NATIVE_LIVE_OLD_SOCKET="$(systemctl show-environment |
+    sed -n '/^ENGINEOS_MUX_SOCKET=/{p;q;}')"
+  trap native_live_cleanup EXIT
+  trap 'exit 130' INT TERM
 }
 
-native_kms_cleanup() {
+native_live_restore_environment() {
+  local assignment
+  for assignment in "$NATIVE_LIVE_OLD_MODE" "$NATIVE_LIVE_OLD_SOCKET"; do
+    if [[ -n "$assignment" ]]; then
+      "${NATIVE_LIVE_SYSTEMCTL[@]}" set-environment "$assignment"
+    fi
+  done
+  [[ -n "$NATIVE_LIVE_OLD_MODE" ]] ||
+    "${NATIVE_LIVE_SYSTEMCTL[@]}" unset-environment ENGINEOS_MUX_MODE
+  [[ -n "$NATIVE_LIVE_OLD_SOCKET" ]] ||
+    "${NATIVE_LIVE_SYSTEMCTL[@]}" unset-environment ENGINEOS_MUX_SOCKET
+}
+
+native_live_restart_shell() {
+  "${NATIVE_LIVE_SYSTEMCTL[@]}" reset-failed engineos-dev-shell.service
+  "$NATIVE_LIVE_RUNTIME_CMD" shell restart-live --timeout 20
+}
+
+native_live_cleanup() {
   local incoming_rc=$?
   local cleanup_rc=0
-  [[ "$NATIVE_KMS_CLEANED" == false ]] || return "$incoming_rc"
-  NATIVE_KMS_CLEANED=true
+  [[ "$NATIVE_LIVE_CLEANED" == false ]] || return "$incoming_rc"
+  NATIVE_LIVE_CLEANED=true
   set +e
-  if [[ "$NATIVE_KMS_MANAGER_CHANGED" == true ]]; then
-    native_kms_restore_environment || cleanup_rc=$?
+  if [[ "$NATIVE_LIVE_MANAGER_CHANGED" == true ]]; then
+    native_live_restore_environment || cleanup_rc=$?
   fi
-  if [[ "$NATIVE_KMS_SHELL_SWITCHED" == true ]]; then
-    "$NATIVE_KMS_RUNTIME_CMD" shell restart-live --timeout 20 || cleanup_rc=$?
+  if [[ "$NATIVE_LIVE_SHELL_SWITCHED" == true ]]; then
+    native_live_restart_shell || cleanup_rc=$?
   fi
-  if [[ -n "$NATIVE_KMS_MUX_BIN" && -n "$NATIVE_KMS_RUNTIME" ]]; then
-    XDG_RUNTIME_DIR="$NATIVE_KMS_RUNTIME" TMUX_TMPDIR="$NATIVE_KMS_RUNTIME" \
-      "$NATIVE_KMS_MUX_BIN" kill-server >/dev/null 2>&1 || true
+  if [[ -n "$NATIVE_LIVE_MUX_BIN" && -n "$NATIVE_LIVE_RUNTIME" ]]; then
+    XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+      "$NATIVE_LIVE_MUX_BIN" kill-server >/dev/null 2>&1 || true
   fi
-  [[ -z "$NATIVE_KMS_FIXTURE" ]] || rm -rf "$NATIVE_KMS_FIXTURE"
+  [[ -z "$NATIVE_LIVE_FIXTURE" ]] || rm -rf "$NATIVE_LIVE_FIXTURE"
   set -e
   if (( incoming_rc != 0 )); then
     return "$incoming_rc"
@@ -103,19 +134,26 @@ native_kms_cleanup() {
   return "$cleanup_rc"
 }
 
-wait_for_native_kms_state() {
+wait_for_native_state() {
   local state_file="$1"
   local filter="$2"
   local description="$3"
+  local attempts="${4:-200}"
+  if (( $# >= 4 )); then
+    shift 4
+  else
+    shift 3
+  fi
+  local jq_args=("$@")
   local attempt
-  for attempt in {1..200}; do
-    if jq -e "$filter" "$state_file" >/dev/null 2>&1; then
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if jq -e "${jq_args[@]}" "$filter" "$state_file" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.05
   done
-  jq "$filter" "$state_file" >/dev/null 2>&1 || true
-  die "native KMS state did not reach $description"
+  jq "${jq_args[@]}" "$filter" "$state_file" >/dev/null 2>&1 || true
+  die "native shell state did not reach $description"
 }
 
 validate_native_kms_split_state() {
@@ -180,22 +218,7 @@ proof_native_kms() {
   cp "$state_file" "$artifact_dir/before.json"
   log_start="$(wc -l <"$shell_log")"
 
-  NATIVE_KMS_CLEANED=false
-  NATIVE_KMS_MANAGER_CHANGED=false
-  NATIVE_KMS_SHELL_SWITCHED=false
-  NATIVE_KMS_FIXTURE="$fixture"
-  NATIVE_KMS_RUNTIME="$fixture/runtime"
-  NATIVE_KMS_MUX_BIN="$mux_bin"
-  NATIVE_KMS_RUNTIME_CMD="$runtime_cmd"
-  if [[ "$(id -u)" -eq 0 ]]; then
-    NATIVE_KMS_SYSTEMCTL=(systemctl)
-  else
-    NATIVE_KMS_SYSTEMCTL=(sudo -n systemctl)
-  fi
-  NATIVE_KMS_OLD_MODE="$(systemctl show-environment | sed -n '/^ENGINEOS_MUX_MODE=/{p;q;}')"
-  NATIVE_KMS_OLD_SOCKET="$(systemctl show-environment | sed -n '/^ENGINEOS_MUX_SOCKET=/{p;q;}')"
-  trap native_kms_cleanup EXIT
-  trap 'exit 130' INT TERM
+  native_live_begin "$fixture" "$fixture/runtime" "$mux_bin" "$runtime_cmd"
 
   printf 'EngineOS native KMS proof\n'
   printf '  state:    %s\n' "$state_file"
@@ -203,24 +226,24 @@ proof_native_kms() {
   printf '  artifacts:%s\n' "$artifact_dir"
   printf '  restore:  %s\n' "$initial_mode"
 
-  XDG_RUNTIME_DIR="$NATIVE_KMS_RUNTIME" TMUX_TMPDIR="$NATIVE_KMS_RUNTIME" \
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
     "$mux_bin" new-session -d -s engineos-kms-proof -x 120 -y 36 \
       'printf "LEFT-KMS-PROOF\\n"; exec sh'
-  XDG_RUNTIME_DIR="$NATIVE_KMS_RUNTIME" TMUX_TMPDIR="$NATIVE_KMS_RUNTIME" \
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
     "$mux_bin" split-window -h -t '=engineos-kms-proof:' \
       'printf "RIGHT-KMS-PROOF\\n"; exec sh'
-  XDG_RUNTIME_DIR="$NATIVE_KMS_RUNTIME" TMUX_TMPDIR="$NATIVE_KMS_RUNTIME" \
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
     "$mux_bin" select-layout -t '=engineos-kms-proof:' even-horizontal
-  local mux_socket="$NATIVE_KMS_RUNTIME/engineos/mux.sock"
+  local mux_socket="$NATIVE_LIVE_RUNTIME/engineos/mux.sock"
   [[ -S "$mux_socket" ]] || die "isolated native mux frontend socket missing"
 
-  "${NATIVE_KMS_SYSTEMCTL[@]}" set-environment \
+  "${NATIVE_LIVE_SYSTEMCTL[@]}" set-environment \
     ENGINEOS_MUX_MODE=native ENGINEOS_MUX_SOCKET="$mux_socket"
-  NATIVE_KMS_MANAGER_CHANGED=true
-  NATIVE_KMS_SHELL_SWITCHED=true
-  "$runtime_cmd" shell restart-live --timeout 20
+  NATIVE_LIVE_MANAGER_CHANGED=true
+  NATIVE_LIVE_SHELL_SWITCHED=true
+  native_live_restart_shell
 
-  wait_for_native_kms_state "$state_file" '
+  wait_for_native_state "$state_file" '
     .mode == "tty" and .backend == "drm,libinput" and
     .mux.mode == "native" and .mux.connected == true and
     (.mux.panes | length) == 2 and
@@ -233,22 +256,22 @@ proof_native_kms() {
   initial_columns="$(jq '.mux.panes[0].columns' "$state_file")"
   initial_frames="$(jq '[.output_views[].panes[].frame] | add' "$state_file")"
 
-  XDG_RUNTIME_DIR="$NATIVE_KMS_RUNTIME" TMUX_TMPDIR="$NATIVE_KMS_RUNTIME" \
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
     "$mux_bin" resize-pane -t '%0' -R 8
-  XDG_RUNTIME_DIR="$NATIVE_KMS_RUNTIME" TMUX_TMPDIR="$NATIVE_KMS_RUNTIME" \
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
     "$mux_bin" send-keys -t '%0' 'printf "LEFT-RESIZED-KMS\\n"' Enter
-  XDG_RUNTIME_DIR="$NATIVE_KMS_RUNTIME" TMUX_TMPDIR="$NATIVE_KMS_RUNTIME" \
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
     "$mux_bin" send-keys -t '%1' 'printf "RIGHT-RESIZED-KMS\\n"' Enter
-  wait_for_native_kms_state "$state_file" ".mux.panes[0].columns != $initial_columns and
+  wait_for_native_state "$state_file" ".mux.panes[0].columns != $initial_columns and
     ([.output_views[].panes[].frame] | add) > $initial_frames" \
     "resized nonblank pane frames"
   validate_native_kms_split_state "$state_file"
   cp "$state_file" "$artifact_dir/resized.json"
   resized_frames="$(jq '[.output_views[].panes[].frame] | add' "$state_file")"
 
-  XDG_RUNTIME_DIR="$NATIVE_KMS_RUNTIME" TMUX_TMPDIR="$NATIVE_KMS_RUNTIME" \
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
     "$mux_bin" resize-pane -Z -t '%1'
-  wait_for_native_kms_state "$state_file" '
+  wait_for_native_state "$state_file" '
     ([.mux.panes[] | select(.visible)] | length) == 1 and
     ([.output_views[] | select(
       ([.panes[] | select(.visible)] | length) == 1 and
@@ -260,9 +283,9 @@ proof_native_kms() {
   ' "zoomed single-pane clipping"
   cp "$state_file" "$artifact_dir/zoomed.json"
 
-  XDG_RUNTIME_DIR="$NATIVE_KMS_RUNTIME" TMUX_TMPDIR="$NATIVE_KMS_RUNTIME" \
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
     "$mux_bin" resize-pane -Z -t '%1'
-  wait_for_native_kms_state "$state_file" "
+  wait_for_native_state "$state_file" "
     ([.mux.panes[] | select(.visible)] | length) == 2 and
     ([.output_views[].panes[].frame] | add) > $resized_frames
   " "unzoomed split clipping"
@@ -284,12 +307,207 @@ proof_native_kms() {
     die "native KMS scene output commit failed"
   fi
 
-  native_kms_cleanup
+  native_live_cleanup
   trap - EXIT INT TERM
-  wait_for_native_kms_state "$state_file" ".mux.mode == \"$initial_mode\"" \
+  wait_for_native_state "$state_file" ".mux.mode == \"$initial_mode\"" \
     "restored $initial_mode shell mode"
   cp "$state_file" "$artifact_dir/restored.json"
   printf 'Native KMS clipping proof passed.\n'
+  printf 'Proof artifacts: %s\n' "$artifact_dir"
+}
+
+proof_native_falkon() {
+  [[ $# -eq 0 ]] || die "native-falkon proof takes no options"
+  have_cmd jq || die "native-falkon proof requires jq"
+  have_cmd systemctl || die "native-falkon proof requires systemctl"
+  have_cmd falkon || die "native-falkon proof requires Falkon"
+  have_cmd sudo || [[ "$(id -u)" -eq 0 ]] ||
+    die "native-falkon proof requires sudo or root"
+
+  local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  local state_dir="$runtime_dir/engineos"
+  local state_file="$state_dir/shell-state.json"
+  local log_dir="${ENGINEOS_LOG_DIR:-$(default_log_dir)}"
+  local stamp="$(timestamp_utc)"
+  local artifact_dir="$log_dir/proof-native-falkon-$stamp"
+  local fixture="${TMPDIR:-/tmp}/engineos-native-falkon-proof-$$"
+  local mux_bin="${ENGINEOS_MUX_BIN:-$(command -v engine-mux || true)}"
+  local muxctl_bin="${ENGINEOS_MUXCTL_BIN:-$(command -v engine-muxctl || true)}"
+  local app_cmd="$(eos_command eos-app)"
+  local runtime_cmd="$(eos_command eos-runtime)"
+  local initial_mode="" pane_id="" pane_shell_pid=""
+  local pane_state="" pane_scope="" pane_app_pid="" pane_launch_command=""
+  local foreground_pgrp="" app_pgrp="" shell_command=""
+
+  [[ -x "$mux_bin" ]] || die "native-falkon proof requires installed engine-mux"
+  [[ -x "$muxctl_bin" ]] ||
+    die "native-falkon proof requires installed engine-muxctl"
+  app_cmd="$(command -v "$app_cmd" || true)"
+  [[ -x "$app_cmd" ]] || die "native-falkon proof requires eos-app"
+  [[ -r "$state_file" ]] || die "live shell state missing: $state_file"
+  [[ -c /dev/tty1 ]] || die "native-falkon proof requires tty1"
+  systemctl is-active --quiet engineos-dev-shell.service ||
+    die "engineos-dev-shell.service is not active"
+  jq -e '.mode == "tty"' "$state_file" >/dev/null ||
+    die "live shell is not currently attached to tty/DRM"
+
+  mkdir -p "$artifact_dir" "$fixture/runtime" "$fixture/home" \
+    "$fixture/config" "$fixture/cache" "$fixture/data"
+  chmod 0700 "$fixture" "$fixture/runtime" "$fixture/home" \
+    "$fixture/config" "$fixture/cache" "$fixture/data"
+  initial_mode="$(jq -r '.mux.mode' "$state_file")"
+  cp "$state_file" "$artifact_dir/before.json"
+  native_live_begin "$fixture" "$fixture/runtime" "$mux_bin" "$runtime_cmd"
+
+  printf 'EngineOS native Falkon proof\n'
+  printf '  state:     %s\n' "$state_file"
+  printf '  artifacts: %s\n' "$artifact_dir"
+  printf '  restore:   %s\n' "$initial_mode"
+
+  printf -v shell_command \
+    'export XDG_RUNTIME_DIR=%q WAYLAND_DISPLAY=wayland-0 QT_QPA_PLATFORM=wayland HOME=%q XDG_CONFIG_HOME=%q XDG_CACHE_HOME=%q XDG_DATA_HOME=%q; printf "FALKON-SHELL-BEFORE\\n"; exec /bin/sh' \
+    "$runtime_dir" "$fixture/home" "$fixture/config" "$fixture/cache" \
+    "$fixture/data"
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+    ENGINEOS_USER_RUNTIME_DIR="$runtime_dir" \
+    "$mux_bin" new-session -d -s engineos-falkon-proof -x 120 -y 36 \
+      "$shell_command"
+  pane_id="$(XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" \
+    TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" "$mux_bin" display-message -p \
+      -t '=engineos-falkon-proof:' '#{pane_id}')"
+  pane_shell_pid="$(XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" \
+    TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" "$mux_bin" display-message -p \
+      -t "$pane_id" '#{pane_pid}')"
+  [[ "$pane_id" == %* && "$pane_shell_pid" =~ ^[1-9][0-9]*$ ]] ||
+    die "isolated Falkon pane did not expose stable pane and shell IDs"
+  local mux_socket="$NATIVE_LIVE_RUNTIME/engineos/mux.sock"
+  [[ -S "$mux_socket" ]] || die "isolated native mux frontend socket missing"
+
+  "${NATIVE_LIVE_SYSTEMCTL[@]}" set-environment \
+    ENGINEOS_MUX_MODE=native ENGINEOS_MUX_SOCKET="$mux_socket"
+  NATIVE_LIVE_MANAGER_CHANGED=true
+  NATIVE_LIVE_SHELL_SWITCHED=true
+  native_live_restart_shell
+  wait_for_native_state "$state_file" '
+    .mode == "tty" and .backend == "drm,libinput" and
+    .wayland_display == "wayland-0" and
+    .mux.mode == "native" and .mux.connected == true and
+    .mux.pane_id == $pane and .mux.presentation.type == "terminal" and
+    .mux.presentation.terminal_visible == true and
+    (.output_views | length) > 0
+  ' "isolated terminal pane on direct KMS" 200 --arg pane "$pane_id"
+  cp "$state_file" "$artifact_dir/terminal.json"
+
+  printf -v pane_launch_command \
+    'ENGINEOS_STATE_DIR=%q ENGINEOS_LOG_DIR=%q ENGINEOS_MUX_BIN=%q %q pane launch -- falkon --profile engineos-proof about:blank' \
+    "$state_dir" "$artifact_dir" "$mux_bin" "$app_cmd"
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+    "$mux_bin" send-keys -t "$pane_id" -l "$pane_launch_command"
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+    "$mux_bin" send-keys -t "$pane_id" Enter
+
+  wait_for_native_state "$state_file" '
+    .mux.pane_id == $pane and
+    .mux.presentation.type == "wayland" and
+    .mux.presentation.view_mode == "presentation" and
+    .mux.presentation.mapped == true and
+    .mux.presentation.surface_tabs >= 1 and
+    .mux.presentation.terminal_visible == false and
+    .mux.presentation.lease_owned_by_focused_view == true and
+    .input.mode == "graphical" and
+    any(.windows[]; .bound == true and .pane_id == $pane and
+      (.app_id == "org.kde.falkon" or .app_id == "falkon") and
+      .client_pid > 0 and .presentation_visible == true)
+  ' "scoped Falkon presentation" 400 --arg pane "$pane_id"
+  cp "$state_file" "$artifact_dir/presentation.json"
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" "$muxctl_bin" snapshot \
+    >"$artifact_dir/mux-presentation.json"
+  pane_state="$(XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" \
+    TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" "$mux_bin" display-message -p \
+      -t "$pane_id" \
+      '#{pane_presentation}|#{pane_view_mode}|#{pane_presentation_scope}|#{pane_app_pid}')"
+  printf '%s\n' "$pane_state" >"$artifact_dir/pane-state.txt"
+  IFS='|' read -r _ _ pane_scope pane_app_pid <<<"$pane_state"
+  [[ "$pane_scope" == engine-pane-*.scope ]] ||
+    die "Falkon launch lacks a dedicated transient scope"
+  [[ "$pane_app_pid" =~ ^[1-9][0-9]*$ ]] ||
+    die "Falkon launch lacks an authoritative application PID"
+  jq -e --arg pane "$pane_id" '
+    any(.panes[]; .pane_id == $pane and
+      (.app_command | startswith("falkon --no-remote ")))
+  ' "$artifact_dir/mux-presentation.json" >/dev/null ||
+    die "Falkon launch adapter did not enforce --no-remote"
+  systemctl --user show "$pane_scope" -p Id -p ActiveState -p SubState \
+    -p ControlGroup -p MainPID >"$artifact_dir/scope-active.txt"
+  grep -F "/$pane_scope" "/proc/$pane_app_pid/cgroup" >/dev/null ||
+    die "Falkon PID is outside its authoritative pane scope"
+  foreground_pgrp="$(ps -o tpgid= -p "$pane_shell_pid" | tr -d ' ')"
+  app_pgrp="$(ps -o pgid= -p "$pane_app_pid" | tr -d ' ')"
+  [[ -n "$foreground_pgrp" && "$foreground_pgrp" == "$app_pgrp" ]] ||
+    die "Falkon is not the pane PTY foreground process group"
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+    "$mux_bin" capture-pane -p -S -200 -t "$pane_id" \
+    >"$artifact_dir/console-during.txt"
+  grep -F 'FALKON-SHELL-BEFORE' "$artifact_dir/console-during.txt" >/dev/null ||
+    die "Falkon backing console lost its pre-launch output"
+
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+    "$mux_bin" pane-presentation -t "$pane_id" console
+  wait_for_native_state "$state_file" '
+    .mux.presentation.type == "wayland" and
+    .mux.presentation.view_mode == "console" and
+    .mux.presentation.terminal_visible == true and
+    .input.mode == "terminal" and
+    all(.windows[]; .bound == false or .visible == false)
+  ' "live Falkon backing console"
+  cp "$state_file" "$artifact_dir/console.json"
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+    "$mux_bin" pane-presentation -t "$pane_id" app
+  wait_for_native_state "$state_file" '
+    .mux.presentation.type == "wayland" and
+    .mux.presentation.view_mode == "presentation" and
+    .mux.presentation.terminal_visible == false and
+    .input.mode == "graphical" and
+    any(.windows[]; .bound == true and .visible == true)
+  ' "restored Falkon presentation"
+
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+    "$mux_bin" signal-pane-app -t "$pane_id" TERM
+  wait_for_native_state "$state_file" '
+    .mux.presentation.type == "terminal" and
+    .mux.presentation.terminal_visible == true and
+    .input.mode == "terminal" and
+    all(.windows[]; .bound == false)
+  ' "console after Falkon exit" 400
+  for _ in {1..200}; do
+    foreground_pgrp="$(ps -o tpgid= -p "$pane_shell_pid" | tr -d ' ')"
+    [[ "$foreground_pgrp" == "$pane_shell_pid" ]] && break
+    sleep 0.05
+  done
+  [[ "$foreground_pgrp" == "$pane_shell_pid" ]] ||
+    die "pane shell did not regain the PTY foreground process group"
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+    "$mux_bin" send-keys -t "$pane_id" -l 'printf "FALKON-SHELL-AFTER\n"'
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+    "$mux_bin" send-keys -t "$pane_id" Enter
+  for _ in {1..100}; do
+    XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+      "$mux_bin" capture-pane -p -S -200 -t "$pane_id" \
+      >"$artifact_dir/console-after.txt"
+    grep -F 'FALKON-SHELL-AFTER' "$artifact_dir/console-after.txt" \
+      >/dev/null && break
+    sleep 0.05
+  done
+  grep -F 'FALKON-SHELL-AFTER' "$artifact_dir/console-after.txt" >/dev/null ||
+    die "pane shell did not accept input after Falkon exited"
+  cp "$state_file" "$artifact_dir/exited.json"
+
+  native_live_cleanup
+  trap - EXIT INT TERM
+  wait_for_native_state "$state_file" ".mux.mode == \"$initial_mode\"" \
+    "restored $initial_mode shell mode"
+  cp "$state_file" "$artifact_dir/restored.json"
+  printf 'Native Falkon pane proof passed.\n'
   printf 'Proof artifacts: %s\n' "$artifact_dir"
 }
 
@@ -1125,6 +1343,9 @@ case "$ACTION" in
     ;;
   native-kms)
     proof_native_kms "$@"
+    ;;
+  native-falkon)
+    proof_native_falkon "$@"
     ;;
   visual)
     proof_visual "$@"

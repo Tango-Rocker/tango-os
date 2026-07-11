@@ -12,6 +12,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <systemd/sd-bus.h>
+
 static void
 usage(const char *program)
 {
@@ -89,6 +91,30 @@ run_app_scope(const char *scope, int argc, char **argv)
 	return (-1);
 }
 
+static int
+stop_app_scope(const char *scope)
+{
+	sd_bus_error error = SD_BUS_ERROR_NULL;
+	sd_bus_message *reply = NULL;
+	sd_bus *bus = NULL;
+	int result;
+
+	result = sd_bus_default_user(&bus);
+	if (result < 0)
+		goto out;
+	result = sd_bus_call_method(bus, "org.freedesktop.systemd1",
+	    "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager",
+	    "StopUnit", &error, &reply, "ss", scope, "replace");
+	if (result < 0 && error.name != NULL &&
+	    strcmp(error.name, "org.freedesktop.systemd1.NoSuchUnit") == 0)
+		result = 0;
+out:
+	sd_bus_error_free(&error);
+	sd_bus_message_unref(reply);
+	sd_bus_unref(bus);
+	return (result);
+}
+
 static void
 start_login_shell(void)
 {
@@ -127,5 +153,8 @@ main(int argc, char **argv)
 	if (status < 0)
 		fprintf(stderr, "engine-pane-host: application scope failed: %s\n",
 		    strerror(errno));
+	if (stop_app_scope(scope) < 0)
+		fprintf(stderr, "engine-pane-host: could not retire application scope %s\n",
+		    scope);
 	start_login_shell();
 }
