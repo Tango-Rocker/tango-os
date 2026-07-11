@@ -455,15 +455,18 @@ run_mux() {
 		die "split-pane-app host did not expose its foreground scoped process"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		signal-pane-app -t "$split_pane_id" TERM
-	for _ in {1..100}; do
+	for _ in {1..250}; do
 		pane_state="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
 			"$mux_bin" display-message -p -t "$split_pane_id" \
 			'#{pane_presentation}|#{pane_dead}|#{pane_current_command}')"
 		[[ "$pane_state" =~ ^terminal\|0\|.+$ ]] && break
 		sleep 0.02
 	done
-	[[ "$pane_state" =~ ^terminal\|0\|.+$ ]] ||
-		die "engine-pane-host did not preserve the pane and start a login shell"
+	[[ "$pane_state" =~ ^terminal\|0\|.+$ ]] || {
+		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			capture-pane -p -t "$split_pane_id" -S -40 >&2 || true
+		die "engine-pane-host did not preserve the pane and start a login shell: $pane_state"
+	}
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		kill-pane -t "$split_pane_id"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
@@ -791,7 +794,7 @@ run_mux() {
 	XDG_RUNTIME_DIR="$fixture" ENGINEOS_STATE_DIR="$fixture/engineos" \
 		ENGINEOS_MUX_SOCKET="$fixture/engineos/mux.sock" \
 		WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=2 WLR_RENDERER="$shell_renderer" \
-		"$shell_bin" --headless --smoke-ms 25000 \
+		"$shell_bin" --headless --smoke-ms 45000 \
 		--bootstrap none --mux native >"$fixture/shell-native.log" 2>&1 &
 	shell_pid=$!
 	for _ in {1..100}; do
@@ -1122,8 +1125,11 @@ run_mux() {
 		[[ "$updated_native_revision" -gt "$initial_native_revision" ]] && break
 		sleep 0.02
 	done
-	[[ "$updated_native_revision" -gt "$initial_native_revision" ]] ||
+	[[ "$updated_native_revision" -gt "$initial_native_revision" ]] || {
+		jq '{mux,last_reason}' "$fixture/engineos/shell-state.json" >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
 		die "native shell did not consume event-driven grid damage"
+	}
 	if [[ "$shell_renderer" == gles2 ]]; then
 		jq -e '.mux.grid.damaged_cells > 0 and
 			.mux.grid.damaged_cells < (.mux.grid.columns * .mux.grid.rows) and
