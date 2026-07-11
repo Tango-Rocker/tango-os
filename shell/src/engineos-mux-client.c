@@ -1389,9 +1389,103 @@ refresh_again:
 	return true;
 }
 
+bool engineos_mux_client_request_view_snapshot(
+		struct engineos_mux_client *client, uint32_t view_id,
+		struct engineos_mux_view_snapshot *snapshot, bool *grid_changed,
+		char *error, size_t error_size) {
+	if (view_id == 0 || snapshot == NULL || grid_changed == NULL) {
+		snprintf(error, error_size, "invalid graphical view snapshot request");
+		return false;
+	}
+	char request[128];
+	snprintf(request, sizeof(request),
+		"{\"schema\":\"engine-mux/snapshot-request-v1\",\"view_id\":%u}",
+		view_id);
+	struct json_object *root = NULL;
+	if (!exchange_json_request(client, ENGINE_MUX_SNAPSHOT_REQUEST,
+			ENGINE_MUX_SNAPSHOT, request, "engine-mux/snapshot-v1", &root,
+			grid_changed, error, error_size))
+		return false;
+
+	uint32_t client_id = 0, response_view_id = 0;
+	struct json_object *output_object = NULL, *panes_object = NULL;
+	if (!json_u32(root, "snapshot_client_id", UINT32_MAX, &client_id) ||
+			!json_u32(root, "snapshot_view_id", UINT32_MAX,
+				&response_view_id) ||
+			client_id != client->frontend_client_id ||
+			response_view_id != view_id ||
+			!json_object_object_get_ex(root, "snapshot_output", &output_object) ||
+			!json_object_is_type(output_object, json_type_string) ||
+			!json_object_object_get_ex(root, "panes", &panes_object) ||
+			!json_object_is_type(panes_object, json_type_array)) {
+		json_object_put(root);
+		snprintf(error, error_size,
+			"snapshot was not scoped to the requested graphical view");
+		return false;
+	}
+
+	struct engineos_mux_client parsed = {0};
+	parsed.fd = -1;
+	if (!parse_pane_models(&parsed, root, error, error_size)) {
+		json_object_put(root);
+		return false;
+	}
+	size_t selected = 0;
+	for (size_t index = 0; index < parsed.pane_count; index++) {
+		if (parsed.panes[index].window_active && parsed.panes[index].active) {
+			selected = index;
+			break;
+		}
+	}
+	struct json_object *selected_object =
+		json_object_array_get_idx(panes_object, selected);
+	struct json_object *session_object = NULL;
+	const char *output = json_object_get_string(output_object);
+	if (selected_object == NULL ||
+			!json_object_object_get_ex(selected_object, "session_id",
+				&session_object) ||
+			!json_object_is_type(session_object, json_type_string)) {
+		free_pane_models(parsed.panes, parsed.pane_count);
+		json_object_put(root);
+		snprintf(error, error_size, "view snapshot has no selected session");
+		return false;
+	}
+	const char *session = json_object_get_string(session_object);
+	char *new_output = output != NULL ? strdup(output) : NULL;
+	char *new_session = session != NULL ? strdup(session) : NULL;
+	if (new_output == NULL || new_output[0] == '\0' || new_session == NULL ||
+			new_session[0] != '$') {
+		free(new_output);
+		free(new_session);
+		free_pane_models(parsed.panes, parsed.pane_count);
+		json_object_put(root);
+		snprintf(error, error_size, "view snapshot identity is invalid");
+		return false;
+	}
+
+	struct engineos_mux_view_snapshot replacement = {
+		.revision = client->revision,
+		.client_id = client_id,
+		.view_id = response_view_id,
+		.pane_id = parsed.panes[selected].pane_id,
+		.pane_generation = parsed.panes[selected].generation,
+		.output = new_output,
+		.session_id = new_session,
+		.panes = parsed.panes,
+		.pane_count = parsed.pane_count,
+		.ready = true,
+	};
+	json_object_put(root);
+	engineos_mux_view_snapshot_destroy(snapshot);
+	*snapshot = replacement;
+	return true;
+}
+
 bool engineos_mux_client_handle_event(struct engineos_mux_client *client,
-		bool *grid_changed, char *error, size_t error_size) {
+		bool *grid_changed, bool *state_changed, char *error,
+		size_t error_size) {
 	*grid_changed = false;
+	*state_changed = false;
 	struct engine_mux_frame_header frame;
 	unsigned char packet[sizeof(frame) + sizeof(struct engine_mux_grid_request)];
 	ssize_t count = recv(client->fd, packet, sizeof(packet), 0);
@@ -1426,6 +1520,7 @@ bool engineos_mux_client_handle_event(struct engineos_mux_client *client,
 	}
 	if (type == ENGINE_MUX_STATE_INVALIDATED && length == 0) {
 		*grid_changed = true;
+		*state_changed = true;
 		return true;
 	}
 	if (type != ENGINE_MUX_GRID_INVALIDATED ||
@@ -2169,6 +2264,16 @@ void engineos_mux_pane_model_clear_render_damage(
 	pane->grid.damage_cells = NULL;
 	pane->grid.damage_count = 0;
 	pane->grid.full_damage = false;
+}
+
+void engineos_mux_view_snapshot_destroy(
+		struct engineos_mux_view_snapshot *snapshot) {
+	if (snapshot == NULL)
+		return;
+	free(snapshot->output);
+	free(snapshot->session_id);
+	free_pane_models(snapshot->panes, snapshot->pane_count);
+	memset(snapshot, 0, sizeof(*snapshot));
 }
 
 void engineos_mux_client_destroy(struct engineos_mux_client *client) {

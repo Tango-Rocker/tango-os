@@ -357,6 +357,7 @@ struct engineos_shell_output {
 	struct wl_listener destroy;
 	struct wlr_scene_tree *mux_scene_tree;
 	struct wlr_scene_buffer *mux_ui_scene;
+	struct engineos_mux_view_snapshot mux_snapshot;
 	uint32_t mux_view_id;
 	bool mux_registered;
 };
@@ -2980,6 +2981,30 @@ static void sync_native_presentation_visibility(
 	schedule_outputs(server);
 }
 
+static bool refresh_native_output_snapshots(
+		struct engineos_shell_server *server, bool *grid_changed,
+		char *error, size_t error_size) {
+	struct engineos_shell_output *output;
+	wl_list_for_each(output, &server->outputs, link) {
+		if (!output->mux_registered)
+			continue;
+		bool changed = false;
+		if (!engineos_mux_client_request_view_snapshot(&server->mux_client,
+				output->mux_view_id, &output->mux_snapshot, &changed,
+				error, error_size))
+			return false;
+		if (output->mux_snapshot.output == NULL ||
+				strcmp(output->mux_snapshot.output, output->output->name) != 0) {
+			snprintf(error, error_size,
+				"mux output snapshot identity changed for view %u",
+				output->mux_view_id);
+			return false;
+		}
+		*grid_changed = *grid_changed || changed;
+	}
+	return true;
+}
+
 static int native_mux_event(int fd, uint32_t mask, void *data) {
 	(void)fd;
 	struct engineos_shell_server *server = data;
@@ -2989,10 +3014,10 @@ static int native_mux_event(int fd, uint32_t mask, void *data) {
 		wl_display_terminate(server->display);
 		return 0;
 	}
-	bool changed = false;
+	bool changed = false, state_changed = false;
 	char error[256] = {0};
 	if (!engineos_mux_client_handle_event(&server->mux_client, &changed,
-			error, sizeof(error))) {
+			&state_changed, error, sizeof(error))) {
 		wlr_log(WLR_ERROR, "native mux update failed: %s", error);
 		server->mux_client.ready = false;
 		wl_display_terminate(server->display);
@@ -3004,6 +3029,16 @@ static int native_mux_event(int fd, uint32_t mask, void *data) {
 		server->mux_client.ready = false;
 		wl_display_terminate(server->display);
 		return 0;
+	}
+	if (state_changed) {
+		if (!refresh_native_output_snapshots(server, &changed, error,
+				sizeof(error))) {
+			wlr_log(WLR_ERROR,
+				"native mux output snapshot refresh failed: %s", error);
+			server->mux_client.ready = false;
+			wl_display_terminate(server->display);
+			return 0;
+		}
 	}
 	sync_native_presentation_visibility(server, "native-presentation-state");
 	if (changed && !refresh_native_terminal_scene(server,
@@ -4209,7 +4244,14 @@ static void write_shell_state(struct engineos_shell_server *server,
 		json_write_string(file, shell_output->output->name);
 		fprintf(file,
 			", \"session_id\": ");
-		json_write_string(file, server->mux_client.session_id);
+		json_write_string(file, shell_output->mux_snapshot.session_id);
+		fprintf(file,
+			", \"model_ready\": %s, \"model_revision\": %llu, \"pane_count\": %zu, \"pane_id\": \"%%%u\", \"pane_generation\": %u",
+			shell_output->mux_snapshot.ready ? "true" : "false",
+			(unsigned long long)shell_output->mux_snapshot.revision,
+			shell_output->mux_snapshot.pane_count,
+			shell_output->mux_snapshot.pane_id,
+			shell_output->mux_snapshot.pane_generation);
 		size_t console_scene_count = 0, presentation_surface_count = 0;
 		size_t bound_presentation_surface_count = 0;
 		size_t preview_count = 0;
@@ -6532,6 +6574,7 @@ static void output_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&output->frame.link);
 	wl_list_remove(&output->destroy.link);
 	destroy_mux_output_scene(output);
+	engineos_mux_view_snapshot_destroy(&output->mux_snapshot);
 	if (output->scene_output != NULL) {
 		wlr_scene_output_destroy(output->scene_output);
 		output->scene_output = NULL;
@@ -6544,6 +6587,7 @@ static void destroy_shell_output(struct engineos_shell_output *output) {
 	remove_listener_if_linked(&output->frame);
 	remove_listener_if_linked(&output->destroy);
 	destroy_mux_output_scene(output);
+	engineos_mux_view_snapshot_destroy(&output->mux_snapshot);
 	if (output->scene_output != NULL) {
 		wlr_scene_output_destroy(output->scene_output);
 		output->scene_output = NULL;
@@ -6638,6 +6682,24 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 			return;
 		}
 		shell_output->mux_registered = true;
+		bool snapshot_grid_changed = false;
+		if (!engineos_mux_client_request_view_snapshot(&server->mux_client,
+				shell_output->mux_view_id, &shell_output->mux_snapshot,
+				&snapshot_grid_changed, error, sizeof(error))) {
+			wlr_log(WLR_ERROR, "native mux output snapshot failed: %s", error);
+			server->mux_client.ready = false;
+			wl_display_terminate(server->display);
+			return;
+		}
+		if (strcmp(shell_output->mux_snapshot.output, output_name) != 0) {
+			wlr_log(WLR_ERROR,
+				"native mux output snapshot identity mismatch view=%u",
+				shell_output->mux_view_id);
+			server->mux_client.ready = false;
+			wl_display_terminate(server->display);
+			return;
+		}
+		grid_changed = grid_changed || snapshot_grid_changed;
 		if (!create_mux_output_scene(shell_output, error, sizeof(error))) {
 			wlr_log(WLR_ERROR, "native mux output scene failed: %s", error);
 			server->mux_client.ready = false;
@@ -6660,7 +6722,7 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 		wlr_log(WLR_INFO,
 			"native mux view registered view=%u output=%s session=%s grid=%ux%u focused=%s",
 			shell_output->mux_view_id, output_name,
-			server->mux_client.session_id,
+			shell_output->mux_snapshot.session_id,
 			server->mux_client.grid_columns, server->mux_client.grid_rows,
 			focused ? "true" : "false");
 		if (server->mux_client.primary_view_id != 0 &&

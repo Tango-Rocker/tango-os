@@ -100,7 +100,7 @@ These are historical proof artifacts only; they are not the active work path:
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
   `engineos-mux 3.6b-31` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-44`, but native mode is not yet the live desktop
+  `engineos-shell 0.1.0-45`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
@@ -162,7 +162,7 @@ These are historical proof artifacts only; they are not the active work path:
   resizing, ranged status-window selection, status-menu opening, and menu-item
   command activation. The shell routes pointer motion, buttons, and vertical
   scroll through that same boundary. The contract passes against the exact
-  `engineos-mux 3.6b-31` and `engineos-shell 0.1.0-44` package binaries. The
+  `engineos-mux 3.6b-31` and `engineos-shell 0.1.0-45` package binaries. The
   native renderer now keeps FreeType-rasterized, colour-keyed glyphs in a GPU
   texture atlas and draws them into double-buffered per-pane GPU targets.
   Sparse tmux cell damage is retained through the mux client, expanded only
@@ -260,7 +260,7 @@ These are historical proof artifacts only; they are not the active work path:
   lease, temporary graphical clients restore the previous owner on disconnect,
   destroyed or out-of-window views lose ownership, and the shell settles
   concurrent invalidations instead of retaining stale lease state. The exact
-  installed `engineos-mux 3.6b-31` and `engineos-shell 0.1.0-44` binaries pass
+  installed `engineos-mux 3.6b-31` and `engineos-shell 0.1.0-45` binaries pass
   the complete two-output contract through AMD/radeonsi GLES2. Every output
   now owns a layout-positioned mux scene root with a console buffer node for
   every pane. The live XDG toplevel/transient set is parented only beneath the
@@ -296,8 +296,15 @@ These are historical proof artifacts only; they are not the active work path:
   focused view. A deterministic two-session contract proves two views on one
   frontend connection retain disjoint session attachments even while only one
   is focused, and the shell now explicitly addresses its focused output when
-  refreshing state. Per-output shell caches/render trees remain the next part
-  of the independent output model. Terminal image transport, direct-KMS clipping,
+  refreshing state. The shell also retains a validated view-addressed model
+  for every registered output, including its authoritative session, selected
+  pane, pane generation, pane count, and revision. The pixman source contract
+  and exact installed AMD/radeonsi contract move only the nonfocused output's
+  synthetic tmux client to a temporary session, prove both output models
+  remain present simultaneously, and prove the model follows reattachment.
+  Independent per-output grid/UI
+  renderers and input promotion remain the next part of the output model.
+  Terminal image transport, direct-KMS clipping,
   and simultaneous ordinary text-client acceptance remain the next boundary.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).

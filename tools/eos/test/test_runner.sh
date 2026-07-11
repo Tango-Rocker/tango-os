@@ -887,6 +887,14 @@ PY
 		tail -100 "$fixture/shell-native.log" >&2 || true
 		die "shell state did not identify its graphical mux client view"
 	}
+	jq -e --arg session "$(jq -er '.mux.session_id' \
+			"$fixture/engineos/shell-state.json")" \
+		'(.output_views | length) == 2 and
+		 all(.output_views[]; .model_ready and .model_revision > 0 and
+		   .session_id == $session and .pane_count > 0 and
+		   .pane_generation > 0)' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "shell did not retain an authoritative model for every output view"
 	jq -e '
 		.mux.panes | length == 2 and
 		([.[].pane_id] | unique | length) == 2 and
@@ -1760,6 +1768,64 @@ PY
 			"$fixture/engineos/shell-state.json" >/dev/null ||
 			die "GLES2 terminal renderer did not retain sparse cell damage"
 	fi
+	local focused_session nonfocused_output nonfocused_client
+	local output_session_id output_session_pane
+	focused_session="$(jq -er '.mux.session_id' \
+		"$fixture/engineos/shell-state.json")"
+	nonfocused_output="$(jq -er \
+		'.output_views[] | select(.focused == false) | .output' \
+		"$fixture/engineos/shell-state.json")"
+	nonfocused_client="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" list-clients -F '#{client_name}|#{client_tty}' | \
+		awk -F '|' -v output="$nonfocused_output" '$2 == output { print $1; exit }')"
+	[[ "$nonfocused_client" == engineos-view-* ]] ||
+		die "shell output did not retain an addressable synthetic tmux client"
+	output_session_id="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" new-session -d -s shell-output-model -P -F '#{session_id}')"
+	output_session_pane="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" display-message -p -t shell-output-model: '#{pane_id}')"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		switch-client -c "$nonfocused_client" -t "$output_session_id"
+	for _ in {1..150}; do
+		jq -e --arg output "$nonfocused_output" \
+			--arg session "$output_session_id" --arg pane "$output_session_pane" \
+			--arg focused_session "$focused_session" \
+			'.mux.session_id == $focused_session and
+			 (.output_views | map(.session_id) | unique | length) == 2 and
+			 any(.output_views[]; .output == $output and .model_ready and
+			   .session_id == $session and .pane_id == $pane and .pane_count == 1) and
+			 any(.output_views[]; .focused and .session_id == $focused_session)' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg output "$nonfocused_output" \
+		--arg session "$output_session_id" --arg pane "$output_session_pane" \
+		--arg focused_session "$focused_session" \
+		'.mux.session_id == $focused_session and
+		 (.output_views | map(.session_id) | unique | length) == 2 and
+		 any(.output_views[]; .output == $output and .model_ready and
+		   .session_id == $session and .pane_id == $pane and .pane_count == 1) and
+		 any(.output_views[]; .focused and .session_id == $focused_session)' \
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '{mux:{session_id:.mux.session_id,client_view_id:.mux.client_view_id},output_views}' \
+			"$fixture/engineos/shell-state.json" >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
+		die "shell did not retain independent authoritative output models"
+	}
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		switch-client -c "$nonfocused_client" -t "$focused_session"
+	for _ in {1..150}; do
+		jq -e --arg session "$focused_session" \
+			'all(.output_views[]; .session_id == $session)' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg session "$focused_session" \
+		'all(.output_views[]; .session_id == $session)' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "shell output model did not follow its synthetic client reattachment"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		kill-session -t "$output_session_id"
 	wait "$shell_pid" || die "engineos-shell native damage run failed"
 	shell_pid=""
 	if XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \

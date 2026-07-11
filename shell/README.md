@@ -77,7 +77,12 @@ output. Multiple native panes retain independent previews, including pane
 radeonsi contract proves decoded images remain on their owning output while
 the legacy preview contract remains green. Independent per-output session
 models now have a server-side view-addressed snapshot boundary and explicit
-focused-output shell refresh; nonfocused per-output caches/renderers remain.
+focused-output shell refresh. Every registered output also retains its own
+validated session, selected-pane, generation, pane-count, and revision model
+in `shell-state.json`; the contract proves a nonfocused output can move to
+another session without overwriting the focused model and that its cache
+follows reattachment. Independent nonfocused grid/UI renderers and input
+promotion remain.
 Terminal image transport, direct-KMS clipping, ordinary simultaneous
 text-client acceptance, and final live hardware acceptance remain before
 native mode becomes the default.

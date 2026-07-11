@@ -100,9 +100,15 @@ view, and output name and contains only that synthetic tmux client's attached
 session and active window. Invalid view IDs fail explicitly. The contract
 registers two views on different sessions and proves both snapshots remain
 independent while one view is nonfocused; shell refreshes now explicitly name
-their focused output view. Per-output shell model caches and render trees,
-terminal image transport, direct-KMS clipping, final hardware acceptance, and
-legacy cutover remain open. Native `game` is now an
+their focused output view. The shell retains a validated authoritative model
+for each registered output, including session, selected pane and generation,
+pane count, and revision. Its pixman source contract and exact installed
+AMD/radeonsi contract move the nonfocused synthetic tmux client to another
+session, observe both output models concurrently, and prove reattachment
+updates only that output model. Independent per-output
+grid/UI renderers and input promotion, terminal image transport, direct-KMS
+clipping, final hardware acceptance, and legacy cutover remain open. Native
+`game` is now an
 authoritative launch/split presentation that survives respawn.
 `eos-app pane launch|split|view|signal|respawn|list` routes directly to
 `engine-mux` in native mode without launch-token or bridge fallback, and

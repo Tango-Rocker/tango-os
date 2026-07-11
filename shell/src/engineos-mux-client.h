@@ -70,6 +70,19 @@ struct engineos_mux_presentation_target {
 	char view_mode[16];
 };
 
+struct engineos_mux_view_snapshot {
+	uint64_t revision;
+	uint32_t client_id;
+	uint32_t view_id;
+	uint32_t pane_id;
+	uint32_t pane_generation;
+	char *output;
+	char *session_id;
+	struct engineos_mux_pane_model *panes;
+	size_t pane_count;
+	bool ready;
+};
+
 struct engineos_mux_client {
 	int fd;
 	uint64_t revision;
@@ -124,8 +137,12 @@ struct engineos_mux_client {
 bool engineos_mux_client_connect(struct engineos_mux_client *client,
 	const char *socket_path, char *error, size_t error_size);
 bool engineos_mux_client_handle_event(struct engineos_mux_client *client,
-	bool *grid_changed, char *error, size_t error_size);
+	bool *grid_changed, bool *state_changed, char *error, size_t error_size);
 bool engineos_mux_client_refresh_presentation(struct engineos_mux_client *client,
+	char *error, size_t error_size);
+bool engineos_mux_client_request_view_snapshot(
+	struct engineos_mux_client *client, uint32_t view_id,
+	struct engineos_mux_view_snapshot *snapshot, bool *grid_changed,
 	char *error, size_t error_size);
 bool engineos_mux_client_send_input(struct engineos_mux_client *client,
 	const void *bytes, size_t length, bool *grid_changed,
@@ -160,6 +177,8 @@ bool engineos_mux_client_unmap_presentation(struct engineos_mux_client *client,
 void engineos_mux_client_clear_render_damage(struct engineos_mux_client *client);
 void engineos_mux_pane_model_clear_render_damage(
 	struct engineos_mux_pane_model *pane);
+void engineos_mux_view_snapshot_destroy(
+	struct engineos_mux_view_snapshot *snapshot);
 void engineos_mux_client_destroy(struct engineos_mux_client *client);
 
 #endif
