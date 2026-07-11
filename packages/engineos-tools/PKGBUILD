@@ -1,6 +1,6 @@
 pkgname=engineos-tools
 pkgver=0.1.0
-pkgrel=36
+pkgrel=39
 pkgdesc="EngineOS command, proof, agent, and observability tools"
 arch=('any')
 url="https://example.invalid/engineos"
@@ -40,6 +40,8 @@ package() {
   install -d -m0755 "$pkgdir/usr/lib/engineos/scripts" "$pkgdir/usr/lib/engineos/eos"
   cp -a "$_engineos_root/tools/scripts"/. "$pkgdir/usr/lib/engineos/scripts/"
   cp -a "$_engineos_root/tools/eos"/. "$pkgdir/usr/lib/engineos/eos/"
+  install -Dm755 "$_engineos_root/tests/tmux-text-client.py" \
+    "$pkgdir/usr/lib/engineos/eos/test/tmux-text-client.py"
   rm -f "$pkgdir/usr/lib/engineos/scripts"/generate_dgen_wad.py
   rm -rf "$pkgdir/usr/lib/engineos/scripts/__pycache__"
   chmod -R a+rX "$pkgdir/usr/lib/engineos/scripts" "$pkgdir/usr/lib/engineos/eos"

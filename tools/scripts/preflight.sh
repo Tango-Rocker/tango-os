@@ -241,6 +241,7 @@ check_package_inputs() {
       require_file "tools/eos/proof/validate_boot.sh"
       require_file "tools/eos/test/test_runner.sh"
       require_file "tools/eos/test/smoke_test.sh"
+      require_file "tests/tmux-text-client.py"
       require_file "packages/engineos-tools/PKGBUILD"
       require_file "AGENTS.md"
       require_file "agentd.md"
@@ -265,6 +266,7 @@ check_package_inputs() {
       require_file ".agents/skills/wlroots-compositor/SKILL.md"
 		check_abs_python_syntax "$ROOT/tools/scripts/agent_router.py"
 		check_abs_python_syntax "$ROOT/tools/scripts/agent_hygiene.py"
+		check_abs_python_syntax "$ROOT/tests/tmux-text-client.py"
       ;;
     engineos-oh-my-zsh)
       require_file "packages/engineos-oh-my-zsh/PKGBUILD"
@@ -372,6 +374,8 @@ check_installed_scripts() {
   require_abs_file "$INSTALLED_EOS_DIR/proof/validate_boot.sh"
   require_abs_file "$INSTALLED_EOS_DIR/test/test_runner.sh"
   require_abs_file "$INSTALLED_EOS_DIR/test/smoke_test.sh"
+  require_abs_file "$INSTALLED_EOS_DIR/test/tmux-text-client.py"
+  check_abs_python_syntax "$INSTALLED_EOS_DIR/test/tmux-text-client.py"
 
   check_abs_bash_syntax "$INSTALLED_BIN_DIR/eos"
   check_abs_bash_syntax "$INSTALLED_BIN_DIR/eos-doctor"

@@ -135,16 +135,19 @@ pane-image mutation through `preview.sock` is rejected. The deterministic
 contract transports a multi-chunk image, retains two pane images, proves
 nonfocused output isolation, and proves an image appears with its console but
 never above its graphical presentation. Exact installed AMD/radeonsi packages
-pass the same contract. An ordinary local `xterm-256color` tmux client now
-attaches to the same live window through a real 50x20 PTY while two graphical
-output clients remain present. It renders backing-console output and
-presentation metadata, executes a tmux command prompt, drives `prefix+v`, and
-does not resize the graphical canonical window. Engine mux excludes ordinary
-clients from size calculation only when a registered graphical view owns that
-window, preserving normal upstream sizing everywhere else. The pixman source
-contract and exact installed `engineos-mux 3.6b-34` plus AMD/radeonsi shell
-contract pass. SSH attachment, direct-KMS clipping, final hardware acceptance,
-and legacy cutover remain open. Native
+pass the same contract. Ordinary local and SSH `xterm-256color` tmux clients
+now attach to the same live window through real 50x20 PTYs while two graphical
+output clients remain present. Both render backing-console output and
+presentation metadata, execute a tmux command prompt, drive `prefix+v`, and do
+not resize the graphical canonical window. The SSH proof uses a private
+loopback OpenSSH server, generated keys, verified public-key authentication,
+a forced remote PTY, and a remote `engine-mux attach-session` command. Engine
+mux excludes ordinary clients from size calculation only when a registered
+graphical view owns that window, preserving normal upstream sizing everywhere
+else. The proof driver is installed by `engineos-tools 0.1.0-39`; its pixman
+source contract and exact installed `engineos-mux 3.6b-34` plus AMD/radeonsi
+shell contract pass. Direct-KMS clipping, final hardware acceptance, and
+legacy cutover remain open. Native
 `game` is now an
 authoritative launch/split presentation that survives respawn.
 `eos-app pane launch|split|view|signal|respawn|list` routes directly to

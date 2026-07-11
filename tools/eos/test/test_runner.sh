@@ -168,7 +168,7 @@ run_mux() {
 	local restore_proof="" shell_pane_id=""
 	local view_proof_session="" view_proof_session_id="" view_proof_pane=""
 	local shell_pid="" overlay_pid="" prompt_pid="" shell_client_name=""
-	local text_client_pid=""
+	local text_client_pid="" sshd_pid="" ssh_port=""
 	local initial_native_revision updated_native_revision stable_revision=""
 	local stable_count=0
 	local pane_scope="" pane_app_pid="" pane_state="" split_pane_id=""
@@ -176,6 +176,7 @@ run_mux() {
 	local wayland_display="" unscoped_pid="" scoped_client_pid=""
 	local game_wrapper_command=""
 	local preview_png="" preview_large_png=""
+	local text_client_driver=""
 	local primary_surface_id="" secondary_surface_id=""
 	local multi_grid_pid="" first_split_pane="" second_split_pane=""
 	local user_runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
@@ -254,7 +255,14 @@ PY
 	local PATH="$fixture/bin:$PATH"
 	export PATH DBUS_SESSION_BUS_ADDRESS="$user_bus"
 	export ENGINEOS_USER_RUNTIME_DIR="$user_runtime"
+	text_client_driver="$ROOT/tests/tmux-text-client.py"
+	if [[ ! -f "$text_client_driver" ]]; then
+		text_client_driver="$MODULE_DIR/tmux-text-client.py"
+	fi
+	[[ -f "$text_client_driver" ]] ||
+		die "tmux text-client integration driver is not installed"
 	cleanup_mux_test() {
+		[[ -z "${sshd_pid:-}" ]] || kill "$sshd_pid" >/dev/null 2>&1 || true
 		[[ -z "${text_client_pid:-}" ]] || kill "$text_client_pid" >/dev/null 2>&1 || true
 		[[ -z "${multi_grid_pid:-}" ]] || kill "$multi_grid_pid" >/dev/null 2>&1 || true
 		[[ -z "${unscoped_pid:-}" ]] || kill "$unscoped_pid" >/dev/null 2>&1 || true
@@ -1463,7 +1471,7 @@ PY
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		set-option -g 'status-format[0]' \
 		'TXT #{pane_presentation}:#{pane_view_mode}:#{pane_surface_count}'
-	python "$ROOT/tests/tmux-text-client.py" \
+	python "$text_client_driver" \
 		--mux "$mux_bin" --runtime "$fixture" --target "=$text_client_session" \
 		--output "$fixture/text-client.raw" \
 		--ready "$fixture/text-client.ready" \
@@ -1546,6 +1554,142 @@ PY
 		display-message -p -t "$shell_pane_id" \
 		'#{window_width}x#{window_height}')" == "$canonical_size" ]] ||
 		die "ordinary tty client detach changed graphical canonical geometry"
+	command -v ssh >/dev/null && command -v sshd >/dev/null &&
+		command -v ssh-keygen >/dev/null ||
+		die "SSH tmux acceptance requires ssh, sshd, and ssh-keygen"
+	mkdir -p "$fixture/ssh"
+	ssh-keygen -q -t ed25519 -N '' -f "$fixture/ssh/host-key"
+	ssh-keygen -q -t ed25519 -N '' -f "$fixture/ssh/client-key"
+	cp "$fixture/ssh/client-key.pub" "$fixture/ssh/authorized-keys"
+	chmod 0600 "$fixture/ssh/authorized-keys"
+	ssh_port="$(python - <<'PY'
+import socket
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+    listener.bind(("127.0.0.1", 0))
+    print(listener.getsockname()[1])
+PY
+)"
+	{
+		printf 'Port %s\n' "$ssh_port"
+		printf 'AddressFamily inet\n'
+		printf 'ListenAddress 127.0.0.1\n'
+		printf 'HostKey %s\n' "$fixture/ssh/host-key"
+		printf 'PidFile %s\n' "$fixture/ssh/sshd.pid"
+		printf 'AuthorizedKeysFile %s\n' "$fixture/ssh/authorized-keys"
+		printf 'UsePAM no\nPasswordAuthentication no\n'
+		printf 'KbdInteractiveAuthentication no\nPubkeyAuthentication yes\n'
+		printf 'PermitRootLogin no\nStrictModes no\nLogLevel VERBOSE\n'
+		printf 'AllowUsers %s\n' "$(id -un)"
+	} >"$fixture/ssh/sshd-config"
+	"$(command -v sshd)" -D -f "$fixture/ssh/sshd-config" \
+		-E "$fixture/ssh/sshd.log" &
+	sshd_pid=$!
+	for _ in {1..150}; do
+		ss -ltn | grep -F ":$ssh_port " >/dev/null && break
+		kill -0 "$sshd_pid" >/dev/null 2>&1 || break
+		sleep 0.02
+	done
+	ss -ltn | grep -F ":$ssh_port " >/dev/null || {
+		cat "$fixture/ssh/sshd.log" >&2 || true
+		die "isolated SSH acceptance server did not listen on loopback"
+	}
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		set-option -gu @engineos-ssh-text-client 2>/dev/null || true
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		set-option -g 'status-format[0]' \
+		'TXT #{pane_presentation}:#{pane_view_mode}:#{pane_surface_count}'
+	python "$text_client_driver" \
+		--mux "$mux_bin" --runtime "$fixture" --target "=$text_client_session" \
+		--output "$fixture/ssh/text-client.raw" \
+		--ready "$fixture/ssh/text-client.ready" \
+		--release "$fixture/ssh/text-client.release" \
+		--initial-marker 'TXT wayland:presentation:2' \
+		--toggled-marker 'TXT wayland:console:2' \
+		--proof-option @engineos-ssh-text-client \
+		--ssh "$(command -v ssh)" --ssh-port "$ssh_port" \
+		--ssh-key "$fixture/ssh/client-key" --ssh-user "$(id -un)" \
+		--timeout 15 >"$fixture/ssh/text-client.log" 2>&1 &
+	text_client_pid=$!
+	for _ in {1..800}; do
+		[[ -f "$fixture/ssh/text-client.ready" ]] && break
+		kill -0 "$text_client_pid" >/dev/null 2>&1 || break
+		sleep 0.02
+	done
+	[[ -f "$fixture/ssh/text-client.ready" ]] || {
+		if kill -0 "$text_client_pid" >/dev/null 2>&1; then
+			kill "$text_client_pid" >/dev/null 2>&1 || true
+		fi
+		wait "$text_client_pid" 2>/dev/null || true
+		text_client_pid=""
+		cat "$fixture/ssh/text-client.log" >&2 || true
+		cat "$fixture/ssh/sshd.log" >&2 || true
+		strings "$fixture/ssh/text-client.raw" >&2 || true
+		die "SSH tmux tty client did not attach and drive prefix+v"
+	}
+	jq -e '.schema == "engineos/tmux-text-client-proof-v1" and
+		.transport == "ssh" and .columns == 50 and .rows == 20 and
+		.proof_option == "@engineos-ssh-text-client"' \
+		"$fixture/ssh/text-client.ready" >/dev/null ||
+		die "SSH tmux client did not publish its transport and PTY evidence"
+	grep -aF 'TXT wayland:presentation:2' "$fixture/ssh/text-client.raw" >/dev/null &&
+		grep -aF 'TXT wayland:console:2' "$fixture/ssh/text-client.raw" >/dev/null &&
+		grep -aF 'Running as unit:' "$fixture/ssh/text-client.raw" >/dev/null ||
+		die "SSH tmux client did not render console and presentation metadata"
+	grep -F "Accepted publickey for $(id -un) from 127.0.0.1" \
+		"$fixture/ssh/sshd.log" >/dev/null &&
+		grep -E "Starting session: command( on pts/[0-9]+)? for $(id -un) from 127\\.0\\.0\\.1" \
+			"$fixture/ssh/sshd.log" >/dev/null ||
+		{
+			cat "$fixture/ssh/sshd.log" >&2 || true
+			die "SSH server did not authenticate and start the remote tmux command"
+		}
+	[[ "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		show-option -gv @engineos-ssh-text-client 2>/dev/null || true)" == accepted ]] ||
+		die "SSH tmux command prompt did not execute"
+	for _ in {1..150}; do
+		jq -e '.mux.presentation.view_mode == "console" and
+			.mux.presentation.terminal_visible == true and
+			.input.mode == "terminal"' "$fixture/engineos/shell-state.json" \
+			>/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '.mux.presentation.view_mode == "console" and
+		.mux.presentation.terminal_visible == true and
+		.input.mode == "terminal" and (.output_views | length) == 2' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "SSH-client prefix+v did not update the graphical shell"
+	[[ "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		display-message -p -t "$shell_pane_id" \
+		'#{window_width}x#{window_height}')" == "$canonical_size" ]] ||
+		die "SSH tmux client changed graphical canonical geometry"
+	attached_size="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" list-clients -F \
+		'#{client_name}|#{client_width}x#{client_height}|#{client_termname}' | \
+		awk -F'|' '$1 !~ /^engineos-view-/ {print $2 "|" $3; exit}')"
+	[[ "$attached_size" == '50x20|xterm-256color' ]] ||
+		die "SSH tty did not retain its independent padded size: $attached_size"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		pane-presentation -t "$shell_pane_id" app
+	for _ in {1..150}; do
+		jq -e '.mux.presentation.view_mode == "presentation" and
+			.input.mode == "graphical"' "$fixture/engineos/shell-state.json" \
+			>/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '.mux.presentation.view_mode == "presentation" and
+		.input.mode == "graphical"' "$fixture/engineos/shell-state.json" \
+		>/dev/null || die "presentation did not recover after SSH-client toggle"
+	touch "$fixture/ssh/text-client.release"
+	wait "$text_client_pid" || {
+		cat "$fixture/ssh/text-client.log" >&2 || true
+		die "SSH tmux client did not detach cleanly"
+	}
+	text_client_pid=""
+	kill "$sshd_pid" >/dev/null 2>&1 || true
+	wait "$sshd_pid" 2>/dev/null || true
+	sshd_pid=""
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		set-option -g 'status-format[0]' 'ENGINE-STATUS #{session_name}'
 	python - "$fixture/engineos/preview.sock" "$preview_png" \
 		"$shell_pane_id" <<'PY'
 import json
@@ -2368,6 +2512,8 @@ run_installed_preflight() {
   cp "$ROOT/tools/scripts/"*.sh "$script_dir/"
   cp "$ROOT/tools/scripts/agent_router.py" "$ROOT/tools/scripts/agent_hygiene.py" "$script_dir/"
   cp -R "$ROOT/tools/eos"/. "$eos_dir/"
+	install -Dm755 "$ROOT/tests/tmux-text-client.py" \
+		"$eos_dir/test/tmux-text-client.py"
 	chmod +x "$bin_dir/"* "$script_dir/"*.sh "$script_dir/"*.py "$eos_dir"/*/*.sh
 
   ENGINEOS_INSTALLED_IMAGE=true \

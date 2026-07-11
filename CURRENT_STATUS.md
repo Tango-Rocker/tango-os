@@ -84,7 +84,7 @@ These are historical proof artifacts only; they are not the active work path:
   also replaces tmux's client-terminating bare `new-session` action with
   detached creation followed by an explicit switch of the invoking client.
   The EngineOS command-surface hardening is deployed through
-  `engineos-tools 0.1.0-36`: `eos-source-test` clears installed-session
+  `engineos-tools 0.1.0-39`: `eos-source-test` clears installed-session
   contamination, `eos-proof` fails closed on required evidence, repeatable
   package selection is normalized through `eos-ci local`, and
   `eos-runtime shell restart-live` only reports success when a new
@@ -331,21 +331,24 @@ These are historical proof artifacts only; they are not the active work path:
   deterministic two-session contract maps a Wayland client and image only on
   the nonfocused output while proving focused input identity remains
   unchanged.
-  Simultaneous ordinary local tmux-client acceptance now passes against the
-  same native pane tree. A real `xterm-256color` client attaches through a
-  50x20 PTY while two graphical output clients remain registered, renders the
-  graphical pane's live backing console plus
-  `wayland:presentation:2` metadata, executes the tmux command prompt, and
-  drives the native `prefix+v` binding. The graphical shell observes the
-  console transition and returns to the presentation, while the ordinary
-  client's smaller dimensions do not change the graphical canonical window
-  size before, during, or after attachment. The fork now excludes ordinary
+  Simultaneous ordinary local and SSH tmux-client acceptance now passes
+  against the same native pane tree. Local and remote `xterm-256color` clients
+  each attach through a real 50x20 PTY while two graphical output clients
+  remain registered, render the graphical pane's live backing console plus
+  `wayland:presentation:2` metadata, execute the tmux command prompt, and drive
+  the native `prefix+v` binding. The SSH contract starts an isolated
+  loopback-only OpenSSH server with generated host/client keys, proves
+  public-key authentication and a remote command session in the server log,
+  forces a remote PTY, and runs `engine-mux attach-session` through that
+  transport. The graphical shell observes each console transition and returns
+  to the presentation, while either client's smaller dimensions leave the
+  graphical canonical window size unchanged. The fork excludes ordinary
   clients from sizing only for windows owned by registered graphical views;
   ordinary tmux sizing remains unchanged for all other windows. Package
-  `engineos-mux 3.6b-34`, the installed pixman contract, and the exact
-  installed AMD/radeonsi GLES2 contract pass. Direct-KMS clipping and a real
-  SSH-attached client are the next compatibility boundary before native
-  `/usr/bin/tmux` cutover.
+  `engineos-mux 3.6b-34`, packaged proof driver in `engineos-tools 0.1.0-39`,
+  the installed pixman contract, and the exact installed AMD/radeonsi GLES2
+  contract pass. Direct-KMS clipping is the next hardware boundary before
+  native `/usr/bin/tmux` cutover.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 

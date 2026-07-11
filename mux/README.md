@@ -61,8 +61,9 @@ meson compile -C build/mux
 ./tools/engineos/eos-test mux
 ```
 
-The native contract also attaches an ordinary PTY-backed tmux client beside
-the graphical views, verifies backing-console and presentation metadata,
-drives `prefix+v`, and proves the smaller tty cannot replace graphical
-canonical sizing. The next migration proofs are direct-KMS clipping and a real
-SSH-attached tmux client.
+The native contract also attaches ordinary local and SSH PTY-backed tmux
+clients beside the graphical views, verifies backing-console and presentation
+metadata, drives `prefix+v`, and proves the smaller ttys cannot replace
+graphical canonical sizing. The SSH leg authenticates generated keys to an
+isolated loopback OpenSSH server and forces the remote `engine-mux` command to
+own a PTY. The next migration proof is direct-KMS clipping.

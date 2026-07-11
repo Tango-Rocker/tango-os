@@ -12,6 +12,7 @@ import pathlib
 import pty
 import select
 import signal
+import shlex
 import struct
 import subprocess
 import sys
@@ -32,6 +33,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--columns", type=int, default=50)
     parser.add_argument("--rows", type=int, default=20)
     parser.add_argument("--timeout", type=float, default=20.0)
+    parser.add_argument("--proof-option", default="@engineos-text-client")
+    parser.add_argument("--proof-value", default="accepted")
+    parser.add_argument("--ssh")
+    parser.add_argument("--ssh-host", default="127.0.0.1")
+    parser.add_argument("--ssh-port", type=int)
+    parser.add_argument("--ssh-key")
+    parser.add_argument("--ssh-user")
     return parser.parse_args()
 
 
@@ -59,11 +67,44 @@ def main() -> int:
                 "TMUX_TMPDIR": args.runtime,
             }
         )
-        os.execve(
-            args.mux,
-            [args.mux, "attach-session", "-t", args.target],
-            environment,
+        mux_argv = [args.mux, "attach-session", "-t", args.target]
+        if args.ssh is None:
+            os.execve(args.mux, mux_argv, environment)
+        if args.ssh_port is None or args.ssh_key is None or args.ssh_user is None:
+            raise SystemExit("--ssh requires --ssh-port, --ssh-key, and --ssh-user")
+        remote_command = " ".join(
+            shlex.quote(value)
+            for value in [
+                "env",
+                f"XDG_RUNTIME_DIR={args.runtime}",
+                f"TMUX_TMPDIR={args.runtime}",
+                "TERM=xterm-256color",
+                *mux_argv,
+            ]
         )
+        ssh_argv = [
+            args.ssh,
+            "-tt",
+            "-p",
+            str(args.ssh_port),
+            "-i",
+            args.ssh_key,
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "GlobalKnownHostsFile=/dev/null",
+            "-o",
+            "LogLevel=ERROR",
+            f"{args.ssh_user}@{args.ssh_host}",
+            remote_command,
+        ]
+        os.execve(args.ssh, ssh_argv, environment)
 
     fcntl.ioctl(
         master,
@@ -103,21 +144,22 @@ def main() -> int:
                 raise TimeoutError("tmux command prompt did not render through the tty")
             if not drain():
                 raise RuntimeError("tmux client exited before its command prompt rendered")
-        os.write(master, b"set-option -g @engineos-text-client accepted\r")
+        command = f"set-option -g {args.proof_option} {args.proof_value}\r"
+        os.write(master, command.encode())
         command_environment = os.environ.copy()
         command_environment.update(
             {"XDG_RUNTIME_DIR": args.runtime, "TMUX_TMPDIR": args.runtime}
         )
         while True:
             result = subprocess.run(
-                [args.mux, "show-option", "-gv", "@engineos-text-client"],
+                [args.mux, "show-option", "-gv", args.proof_option],
                 env=command_environment,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 check=False,
                 text=True,
             )
-            if result.returncode == 0 and result.stdout.strip() == "accepted":
+            if result.returncode == 0 and result.stdout.strip() == args.proof_value:
                 break
             if time.monotonic() >= deadline:
                 raise TimeoutError("tmux command prompt did not execute through the tty")
@@ -141,6 +183,8 @@ def main() -> int:
             "rows": args.rows,
             "initial_marker": args.initial_marker,
             "toggled_marker": args.toggled_marker,
+            "transport": "ssh" if args.ssh is not None else "local",
+            "proof_option": args.proof_option,
         }
         temporary_ready = ready_path.with_suffix(ready_path.suffix + ".tmp")
         temporary_ready.write_text(json.dumps(ready_payload) + "\n", encoding="utf-8")
