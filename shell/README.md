@@ -56,9 +56,10 @@ cells and sent to tmux for authoritative hit-testing; wheel input uses tmux's
 copy-mode bindings. Drag selection, border/status/menu click proofs,
 status/menu command activation, AMD radeonsi atlas rendering, sparse cell
 damage, nonblank GPU readback, multi-pane scene bounds, independent nonselected
-damage, and scoped compound presentations have contract coverage. Direct-KMS
-clipping during resize/zoom, output leases, and final live hardware acceptance
-remain before native mode becomes the default.
+damage, dynamic active-pane adoption, resize, zoom/unzoom, one hundred focus
+transitions, and scoped compound presentations have contract coverage.
+Direct-KMS clipping, remaining topology moves, output leases, and final live
+hardware acceptance remain before native mode becomes the default.
 
 ## Surface Model
 

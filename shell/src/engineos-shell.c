@@ -2524,6 +2524,7 @@ static bool create_mux_pane_scene(struct engineos_shell_server *server,
 	int cell_height = scene->stats.height / (int)render_client.grid_rows;
 	wlr_scene_node_set_position(&scene->tree->node,
 		(int)pane->left * cell_width, (int)pane->top * cell_height);
+	wlr_scene_node_set_enabled(&scene->tree->node, pane->visible);
 	wl_list_insert(server->mux_pane_scenes.prev, &scene->link);
 	if (pane->pane_id == server->mux_client.pane_id &&
 			pane->generation == server->mux_client.pane_generation) {
@@ -2646,6 +2647,7 @@ static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
 		int cell_height = scene->stats.height / (int)render_client.grid_rows;
 		wlr_scene_node_set_position(&scene->tree->node,
 			(int)pane->left * cell_width, (int)pane->top * cell_height);
+		wlr_scene_node_set_enabled(&scene->tree->node, pane->visible);
 		bool presentation_visible = pane->presentation_mapped &&
 			strcmp(pane->view_mode, "presentation") == 0;
 		wlr_scene_node_set_enabled(&scene->terminal_scene->node,
@@ -2711,7 +2713,8 @@ static void sync_native_presentation_visibility(
 			root->view_id == pane->active_surface_id;
 		bool presentation_visible = pane->presentation_mapped &&
 			strcmp(pane->view_mode, "presentation") == 0;
-		bool enabled = presentation_visible && view->mux_presentation_visible;
+		bool enabled = pane->visible && presentation_visible &&
+			view->mux_presentation_visible;
 		wlr_scene_node_set_enabled(&view->scene_tree->node, enabled);
 		if (enabled && pane->pane_id == server->mux_client.pane_id &&
 				pane->generation == server->mux_client.pane_generation)
@@ -2721,7 +2724,7 @@ static void sync_native_presentation_visibility(
 	wl_list_for_each(pane_scene, &server->mux_pane_scenes, link) {
 		struct engineos_mux_pane_model *pane = find_shell_pane_model(server,
 			pane_scene->pane_id, pane_scene->generation);
-		bool presentation_visible = pane != NULL &&
+		bool presentation_visible = pane != NULL && pane->visible &&
 			pane->presentation_mapped &&
 			strcmp(pane->view_mode, "presentation") == 0;
 		wlr_scene_node_set_enabled(&pane_scene->terminal_scene->node,
@@ -3743,9 +3746,10 @@ static void write_shell_state(struct engineos_shell_server *server,
 			fprintf(file, ",");
 		}
 		fprintf(file,
-			"{\"pane_id\": \"%%%u\", \"generation\": %u, \"left\": %u, \"top\": %u, \"columns\": %u, \"rows\": %u, \"active\": %s, \"window_active\": %s, \"presentation\": ",
+			"{\"pane_id\": \"%%%u\", \"generation\": %u, \"left\": %u, \"top\": %u, \"columns\": %u, \"rows\": %u, \"active\": %s, \"visible\": %s, \"window_active\": %s, \"presentation\": ",
 			pane->pane_id, pane->generation, pane->left, pane->top,
 			pane->columns, pane->rows, pane->active ? "true" : "false",
+			pane->visible ? "true" : "false",
 			pane->window_active ? "true" : "false");
 		json_write_string(file, pane->presentation);
 		fprintf(file, ", \"view_mode\": ");
@@ -3760,7 +3764,8 @@ static void write_shell_state(struct engineos_shell_server *server,
 			pane->grid.columns, pane->grid.rows,
 			pane->grid.nonblank_cells,
 			pane_scene != NULL ? "true" : "false",
-			pane_scene != NULL && pane_scene->terminal_scene->node.enabled ?
+			pane_scene != NULL && pane->visible &&
+				pane_scene->terminal_scene->node.enabled ?
 				"true" : "false",
 			(int)pane->left * cell_width, (int)pane->top * cell_height,
 			pane_scene != NULL ? pane_scene->stats.width : 0,

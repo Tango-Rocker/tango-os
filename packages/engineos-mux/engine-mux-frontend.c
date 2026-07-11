@@ -353,6 +353,7 @@ engine_mux_view_register(struct engine_mux_client *client,
 	tmux_client->term_name = xstrdup("engineos-graphical");
 	if (session->cwd != NULL)
 		tmux_client->cwd = xstrdup(session->cwd);
+	tmux_client->tty.client = tmux_client;
 	tmux_client->tty.sx = columns;
 	tmux_client->tty.sy = rows;
 	tmux_client->tty.xpixel = pixel_width / columns;
@@ -884,7 +885,7 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 	char *layout, *command;
 	char *prefix_name, *prefix2_name;
 	char *result;
-	int first = 1, pane_active, window_active, copy_mode;
+	int first = 1, pane_active, pane_visible, window_active, copy_mode;
 	uint64_t hash = UINT64_C(1469598103934665603);
 
 	buffer = evbuffer_new();
@@ -905,6 +906,7 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 			layout = layout_dump(window->layout_root);
 			TAILQ_FOREACH(pane, &window->panes, entry) {
 				pane_active = window->active == pane;
+				pane_visible = window_pane_visible(pane);
 				copy_mode = pane->screen != &pane->base;
 				command = engine_mux_current_command(pane);
 				if (!first)
@@ -929,11 +931,12 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 				    (long long)pane->pid);
 				engine_mux_json_string(buffer, pane->tty);
 				evbuffer_add_printf(buffer,
-				    ",\"left\":%u,\"top\":%u,\"columns\":%u,\"rows\":%u,\"history_rows\":%u,\"history_scrolled\":%u,\"copy_mode\":%s,\"active\":%s,\"command\":",
+				    ",\"left\":%u,\"top\":%u,\"columns\":%u,\"rows\":%u,\"history_rows\":%u,\"history_scrolled\":%u,\"copy_mode\":%s,\"active\":%s,\"visible\":%s,\"command\":",
 				    pane->xoff, pane->yoff, pane->sx, pane->sy,
 				    pane->base.grid->hsize, pane->base.grid->hscrolled,
 				    copy_mode ? "true" : "false",
-				    pane_active ? "true" : "false");
+				    pane_active ? "true" : "false",
+				    pane_visible ? "true" : "false");
 				engine_mux_json_string(buffer, command);
 				evbuffer_add(buffer, ",\"title\":", 9);
 				engine_mux_json_string(buffer, pane->base.title);
@@ -989,6 +992,8 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 				    sizeof copy_mode);
 				engine_mux_hash_bytes(&hash, &pane_active,
 				    sizeof pane_active);
+				engine_mux_hash_bytes(&hash, &pane_visible,
+				    sizeof pane_visible);
 				engine_mux_hash_string(&hash, command);
 				engine_mux_hash_string(&hash, pane->base.title);
 				engine_mux_hash_bytes(&hash, &pane->engine_presentation,

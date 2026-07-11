@@ -65,7 +65,13 @@ resize, and nonselected pane damage advances that pane's retained grid and
 render frame. `shell-state.json` reports every pane's grid subscription,
 revision, scene bounds, renderer, and frame. Both pixman smoke and AMD/radeonsi
 GLES2 contracts prove two nonoverlapping panes and independent nonselected
-damage. Leases, games/images, direct-KMS clipping/resize/zoom, final hardware
+damage. The shell now follows tmux's active pane dynamically, resynchronizes
+canonical grid changes, and uses authoritative pane visibility to retain but
+hide nonactive zoom scenes. The contract exercises resize, zoom/unzoom, and
+one hundred focus transitions under both renderers. Synthetic graphical tmux
+clients satisfy upstream tty ownership invariants, so ordinary `select-pane`
+redraw logic remains safe while physical tty output stays disabled. Leases,
+games/images, direct-KMS clipping, remaining topology moves, final hardware
 acceptance, and legacy cutover remain open. The server now exports every
 pane's authoritative cell origin and size,
 and the shell validates and retains the complete pane set instead of discarding

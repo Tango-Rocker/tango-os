@@ -901,6 +901,104 @@ run_mux() {
 		tail -100 "$fixture/shell-native.log" >&2 || true
 		die "nonselected mux pane damage did not update its own native scene"
 	}
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		select-pane -t "$other_shell_pane"
+	for _ in {1..150}; do
+		jq -e --arg pane "$other_shell_pane" \
+			'.mux.pane_id == $pane and
+			 (.mux.panes[] | select(.pane_id == $pane) |
+			  .active == true and .visible == true and
+			  .grid.columns == .columns and .grid.rows == .rows)' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg pane "$other_shell_pane" \
+		'.mux.pane_id == $pane and
+		 (.mux.panes[] | select(.pane_id == $pane) |
+		  .active == true and .grid.columns == .columns and
+		  .grid.rows == .rows)' "$fixture/engineos/shell-state.json" \
+		>/dev/null || {
+		jq '{mux,last_reason}' "$fixture/engineos/shell-state.json" >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
+		die "native shell did not adopt the authoritative active pane"
+	}
+	local initial_resize_rows updated_resize_rows
+	initial_resize_rows="$(jq -er --arg pane "$other_shell_pane" \
+		'.mux.panes[] | select(.pane_id == $pane) | .rows' \
+		"$fixture/engineos/shell-state.json")"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		resize-pane -t "$other_shell_pane" -D 2
+	updated_resize_rows="$initial_resize_rows"
+	for _ in {1..150}; do
+		updated_resize_rows="$(jq -er --arg pane "$other_shell_pane" \
+			'.mux.panes[] | select(.pane_id == $pane) | .rows' \
+			"$fixture/engineos/shell-state.json")"
+		jq -e '.mux.panes | map(select(.visible)) |
+			length == 2 and (.[0] as $a | .[1] as $b |
+			 ($a.scene.pixel_x + $a.scene.pixel_width <= $b.scene.pixel_x) or
+			 ($b.scene.pixel_x + $b.scene.pixel_width <= $a.scene.pixel_x) or
+			 ($a.scene.pixel_y + $a.scene.pixel_height <= $b.scene.pixel_y) or
+			 ($b.scene.pixel_y + $b.scene.pixel_height <= $a.scene.pixel_y))' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 &&
+			[[ "$updated_resize_rows" -ne "$initial_resize_rows" ]] && break
+		sleep 0.02
+	done
+	[[ "$updated_resize_rows" -ne "$initial_resize_rows" ]] ||
+		die "native pane scene geometry did not follow authoritative resize"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		resize-pane -Z -t "$other_shell_pane"
+	for _ in {1..150}; do
+		jq -e --arg pane "$other_shell_pane" \
+			'([.mux.panes[] | select(.visible)] | length) == 1 and
+			 any(.mux.panes[]; .pane_id == $pane and .visible and
+			  .scene.terminal_visible) and
+			 all(.mux.panes[]; .visible or
+			  (.scene.terminal_visible == false))' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg pane "$other_shell_pane" \
+		'([.mux.panes[] | select(.visible)] | length) == 1 and
+		 any(.mux.panes[]; .pane_id == $pane and .visible)' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "native mux zoom did not hide nonvisible pane scenes"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		resize-pane -Z -t "$other_shell_pane"
+	for _ in {1..150}; do
+		jq -e '[.mux.panes[] | select(.visible)] | length == 2' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '[.mux.panes[] | select(.visible)] | length == 2' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "native mux unzoom did not restore pane scenes"
+	local focus_target
+	for index in {1..100}; do
+		if (( index % 2 == 0 )); then
+			focus_target="$other_shell_pane"
+		else
+			focus_target="$shell_pane_id"
+		fi
+		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			select-pane -t "$focus_target"
+	done
+	for _ in {1..250}; do
+		jq -e --arg pane "$other_shell_pane" \
+			'.mux.pane_id == $pane and
+			 ([.mux.panes[] | select(.active and .window_active)] | length) == 1 and
+			 ([.mux.panes[] | select(.visible)] | length) == 2 and
+			 all(.mux.panes[]; .grid.columns == .columns and
+			  .grid.rows == .rows and .scene.rendered)' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg pane "$other_shell_pane" \
+		'.mux.pane_id == $pane and
+		 ([.mux.panes[] | select(.active and .window_active)] | length) == 1 and
+		 all(.mux.panes[]; .grid.columns == .columns and
+		  .grid.rows == .rows and .scene.rendered)' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "one hundred native pane focus transitions left stale scene state"
 	if [[ "$shell_renderer" == gles2 ]]; then
 		if [[ "${ENGINEOS_MUX_REQUIRE_RADEONSI:-false}" == true ]]; then
 			grep -F 'EGL driver name: radeonsi' "$fixture/shell-native.log" \
@@ -1201,7 +1299,7 @@ run_mux() {
 	initial_native_revision="$(jq -er '.mux.grid.revision' \
 		"$fixture/engineos/shell-state.json")"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
-		send-keys -t contract:0.1 "printf EVENT-DRIVEN-DAMAGE" Enter
+		send-keys -t "$shell_pane_id" "printf EVENT-DRIVEN-DAMAGE" Enter
 	updated_native_revision="$initial_native_revision"
 	for _ in {1..100}; do
 		updated_native_revision="$(jq -er '.mux.grid.revision' \

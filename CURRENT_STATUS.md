@@ -99,8 +99,8 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
-  `engineos-mux 3.6b-23` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-35`, but native mode is not yet the live desktop
+  `engineos-mux 3.6b-24` with the decoder/renderer/control boundary in
+  `engineos-shell 0.1.0-36`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
@@ -162,7 +162,7 @@ These are historical proof artifacts only; they are not the active work path:
   resizing, ranged status-window selection, status-menu opening, and menu-item
   command activation. The shell routes pointer motion, buttons, and vertical
   scroll through that same boundary. The contract passes against the exact
-  `engineos-mux 3.6b-23` and `engineos-shell 0.1.0-35` package binaries. The
+  `engineos-mux 3.6b-24` and `engineos-shell 0.1.0-36` package binaries. The
   native renderer now keeps FreeType-rasterized, colour-keyed glyphs in a GPU
   texture atlas and draws them into double-buffered per-pane GPU targets.
   Sparse tmux cell damage is retained through the mux client, expanded only
@@ -187,6 +187,16 @@ These are historical proof artifacts only; they are not the active work path:
   exposed until systemd confirms it belongs to the registered transient scope,
   closing the split-pane signal race without falling back to process-group
   identity.
+  Native focus now follows tmux's active pane rather than the pane selected at
+  compositor startup. Canonical grid resizes force a complete pane-grid
+  resynchronization, and tmux's authoritative pane visibility keeps zoomed-out
+  scenes retained but disabled. The headless and AMD/radeonsi contracts cover
+  resize, zoom/unzoom, and one hundred focus transitions without stale scene
+  geometry. A core captured while introducing this proof exposed an incomplete
+  synthetic tty invariant in graphical clients; initializing the tty owner
+  fixes ordinary `select-pane` redraw handling without enabling tty output.
+  Pane ID `%0` is accepted for graphical presentation mapping, and asynchronous
+  invalidations are consumed safely while switching selected grids.
   The mux server now also owns compound pane presentation and view state,
   stable pane generations, globally unique transient user scopes, mapped
   surface roles, and pane-local toplevel counts. The installed native commands
@@ -236,9 +246,10 @@ These are historical proof artifacts only; they are not the active work path:
   nonoverlapping panes. Graphical signals, close, and the unmapped-launch
   timeout now signal the authoritative transient systemd scope through the user
   manager, eliminating the fast-map race and avoiding stale process-group
-  guesses. Per-pane scene construction is now complete in headless contracts;
-  topology operations, direct-KMS clipping, and graphical presentation leases
-  are the next acceptance boundary.
+  guesses. Per-pane scenes, resize, zoom, and the required one hundred focus
+  transitions now pass in headless contracts; join/break/swap/session moves,
+  direct-KMS clipping, and graphical presentation leases are the next
+  acceptance boundary.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 

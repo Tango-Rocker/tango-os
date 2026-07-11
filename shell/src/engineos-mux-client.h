@@ -51,6 +51,7 @@ struct engineos_mux_pane_model {
 	uint32_t columns;
 	uint32_t rows;
 	bool active;
+	bool visible;
 	bool window_active;
 	char presentation[16];
 	char view_mode[16];
