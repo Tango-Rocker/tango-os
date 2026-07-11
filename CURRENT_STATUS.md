@@ -100,7 +100,7 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
-  `engineos-mux 3.6b-36` with the decoder/renderer/control boundary in
+  `engineos-mux 3.6b-37` with the decoder/renderer/control boundary in
   `engineos-shell 0.1.0-53`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
@@ -109,10 +109,19 @@ These are historical proof artifacts only; they are not the active work path:
   revisioned snapshots directly from tmux's session, window, and pane trees;
   the standalone `engine-muxd` and its `list-panes` subprocess path are removed.
   Its v1 handshake and atomic layout snapshots are exercised against real split
-  panes and focus changes. The unchanged upstream regression scripts match an
-  identically configured pristine build at 23 pass and 9 host failures on the
-  current run; `copy-mode-test-vi` and `cursor-test4` remain timing-sensitive in
-  repeated runs, while `new-session-environment` passes consistently. The
+  panes and focus changes. `eos-test mux-upstream` now rebuilds the pinned
+  pristine baseline and current fork with identical flags, verifies the source
+  archive checksum, runs every upstream regression script byte-for-byte,
+  retains per-test logs plus `summary.json`, and fails unless all scripts pass
+  in both builds. Disabling tmux's generic systemd pane cgroups—EngineOS app
+  identity continues to use its explicit transient scopes—raised the paired
+  Arch matrix from 21/32 to 27/32. The current matrix has zero fork-only or
+  pristine-only differences and five shared failures: `combine-test`,
+  `if-shell-TERM`, `input-keys`, `tty-keys`, and `utf8-test`. Official upstream
+  history after the pinned release rewrites the racy input test and changes the
+  platform-dependent Unicode results, but the acceptance command remains red;
+  shared failures are not converted into success. Evidence is retained in
+  `/var/log/engineos/tmux-upstream-nocgroups-20260711T114136Z/`. The
   retired daemon binary
   and user unit are absent from the live package. `engineos-shell
   --mux native` requires that handshake and snapshot before compositor startup,
@@ -380,7 +389,7 @@ These are historical proof artifacts only; they are not the active work path:
   shell mode. Evidence is retained in
   `/var/log/engineos/proof-native-quake-20260711T110032Z/`. Recovery/startup
   acceptance now also passes. `engineos-config 0.1.0-5` installs tty2 as a
-  recovery getty, `engineos-tools 0.1.0-47` installs
+  recovery getty, `engineos-tools 0.1.0-48` installs
   `engineos-recovery-help`, and the real tty2 `agetty` is active. The installed
   `eos-proof shell-launch --bare-metal` run verifies the active EngineDev
   startup decision, tty1 shell service, tty2 recovery service, recovery
@@ -420,7 +429,7 @@ Bare-metal/source-checkout loop:
 ./tools/engineos/eos-ci local --test agent --install --clean-generated --no-validate-repo
 eos-app manifest validate
 eos-proof mc-preview
-./tools/engineos/eos-test mux
+./tools/engineos/eos-test mux-upstream
 eos-proof shell-launch --bare-metal
 ```
 

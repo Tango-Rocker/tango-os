@@ -33,6 +33,7 @@ Usage: test_runner.sh [smoke|all]
        test_runner.sh compositor --headless
        test_runner.sh shell-actions
 	   test_runner.sh mux
+	   test_runner.sh mux-upstream [upstream-regress options]
 	   test_runner.sh game-workflow
        test_runner.sh image-preview
        test_runner.sh app
@@ -2404,6 +2405,10 @@ PY
 	cleanup_mux_test
 	trap - EXIT RETURN
 	printf 'engine-mux protocol contract test passed\n'
+}
+
+run_mux_upstream() {
+	"$SCRIPT_DIR/tmux_upstream_regress.sh" "$@"
 }
 
 run_dev_workflow() {
@@ -6924,6 +6929,9 @@ case "$SCOPE" in
     ;;
 	mux)
 		run_mux
+		;;
+	mux-upstream)
+		run_mux_upstream "$@"
 		;;
 	game-workflow)
 		run_game_workflow

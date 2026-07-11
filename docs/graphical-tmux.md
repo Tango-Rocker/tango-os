@@ -68,6 +68,7 @@ files, shell-owned foot bootstrap, and rollback path removed.
 
 ```bash
 ./tools/engineos/eos-test mux
+./tools/engineos/eos-test mux-upstream
 ./tools/engineos/eos-test app
 ./tools/engineos/eos-test game-workflow
 ./tools/engineos/eos-preflight repo --package engineos-mux --package engineos-shell
@@ -94,15 +95,24 @@ Its GitHub commit archive is pinned in `packages/engineos-mux/PKGBUILD` with a
 SHA-256 checksum. The commit archive is used because the release archive omits
 the upstream `regress/` directory.
 
-The unchanged upstream regression scripts are run against both a pristine
-build and the patched fork on the Arch EngineDev host. The original matrix was
-21 pass and 11 host failures. The 2026-07-10 rerun matched at 23 pass and 9
-failures for both builds. `copy-mode-test-vi` and `cursor-test4` vary across
-repeated runs in both trees, so the acceptance signal is no fork-only stable
-failure rather than one lucky invocation. This is baseline parity, not a claim
-that the host passes tests which also fail in pristine tmux. In particular,
-`new-session-environment` passes in both builds and guards normal custom-socket
-behavior when `XDG_RUNTIME_DIR` is absent.
+`eos-test mux-upstream` extracts the checksum-pinned archive, builds pristine
+and patched trees with identical flags, and runs every upstream regression
+script unchanged in isolated runtime directories. It retains binary hashes,
+build logs, per-test output, a TSV matrix, and `summary.json`. Selected tests
+are diagnostic and always fail acceptance; a full run succeeds only when all
+scripts pass in both builds.
+
+The 2026-07-11 Arch EngineDev run improved from 21 to 27 passes after both
+builds disabled tmux's generic systemd pane-cgroup creation. EngineOS does not
+use that generic cgroup as application identity: graphical launches still use
+their dedicated transient user scopes. The paired result has zero differential
+failures and five shared failures: `combine-test`, `if-shell-TERM`,
+`input-keys`, `tty-keys`, and `utf8-test`. Official tmux history after this
+release commit rewrites the racy input test and updates platform-dependent
+Unicode expectations. Those findings explain the baseline but are not treated
+as a pass; the fail-closed matrix remains the acceptance boundary. Evidence is
+retained in
+`/var/log/engineos/tmux-upstream-nocgroups-20260711T114136Z/`.
 
 For an upstream rebase:
 

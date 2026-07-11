@@ -144,9 +144,9 @@ loopback OpenSSH server, generated keys, verified public-key authentication,
 a forced remote PTY, and a remote `engine-mux attach-session` command. Engine
 mux excludes ordinary clients from size calculation only when a registered
 graphical view owns that window, preserving normal upstream sizing everywhere
-else. The proof driver is installed by `engineos-tools 0.1.0-47`; its pixman
+else. The proof driver is installed by `engineos-tools 0.1.0-48`; its pixman
 source contract and AMD/radeonsi shell contract pass. The current live package
-set is `engineos-mux 3.6b-36` plus `engineos-shell 0.1.0-53`. Direct-KMS
+set is `engineos-mux 3.6b-37` plus `engineos-shell 0.1.0-53`. Direct-KMS
 clipping now passes through installed
 `eos-proof native-kms` and `engineos-shell 0.1.0-53`. The workflow temporarily
 attaches tty1 to an isolated two-pane native mux and requires the DRM/libinput
@@ -175,7 +175,7 @@ prompt restoration. Evidence is retained in
 `/var/log/engineos/proof-native-quake-20260711T110032Z/`. Bare-metal startup
 and recovery acceptance now passes through the installed
 `eos-proof shell-launch --bare-metal`. `engineos-config 0.1.0-5` makes tty2 a
-vendor-enabled recovery getty, `engineos-tools 0.1.0-47` provides the recovery
+vendor-enabled recovery getty, `engineos-tools 0.1.0-48` provides the recovery
 operator command, and the proof requires the live EngineDev startup decision,
 active tty1 shell, active tty2 getty, DRM/libinput backend, and RX 5600
 XT/radeonsi renderer. Renderer acceptance is tied to the active compositor,
@@ -224,9 +224,10 @@ Falkon, and real Quake lifecycle are proven. The ordered completion gates are:
    are installed and active, the EngineDev startup decision is recorded, and
    `eos-proof shell-launch --bare-metal` distinguishes the active radeonsi
    shell from unrelated llvmpipe devices.
-3. **Next:** close the unchanged upstream tmux suite. Reproduce and resolve every
-   remaining failure relative to a pristine tmux 3.6b build; timing-sensitive
-   or host-caused failures need repeatable evidence, not exclusions.
+3. **Next:** close the unchanged upstream tmux suite. The fail-closed paired
+   harness now passes 27 of 32 scripts in both pristine and fork builds with no
+   differential failures. Resolve the five shared baseline failures without
+   exclusions; the command must remain red until both complete matrices pass.
 4. Enable native mux as the EngineDev default and run an acceptance soak across
    restart, detach/reattach, local and SSH clients, two outputs, session/window
    moves, previews, Falkon, Quake, and at least one recovery cycle.

@@ -1,6 +1,6 @@
 pkgname=engineos-mux
 pkgver=3.6b
-pkgrel=36
+pkgrel=37
 _commit=0623d1e968423ad0c192e0d8debf1258671063d5
 pkgdesc="EngineOS tmux 3.6b graphical frontend protocol foundation"
 arch=('x86_64')
@@ -53,7 +53,7 @@ build() {
   _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
 
 	cd "$_source_dir"
-	./configure --prefix=/usr --enable-utempter --enable-systemd
+	./configure --prefix=/usr --enable-utempter --enable-systemd --disable-cgroups
 	make
 	${CC:-cc} ${CFLAGS} ${CPPFLAGS} \
 	  -o "$srcdir/engine-pane-host" "$srcdir/engine-pane-host.c" \
