@@ -17,8 +17,9 @@ The final `prefix + v` binding switches the visible layer.
 
 ## Implemented stack
 
-The migration remains side by side and disabled by default, but the native path
-now covers the complete terminal and compound-presentation foundation:
+Native mux is the live EngineDev default. The fork still installs side by side
+as `engine-mux` until the final `/usr/bin/tmux` replacement, and the remaining
+legacy helpers exist only for deletion/rollback work:
 
 - `engine-mux` is pinned to tmux 3.6b commit
   `0623d1e968423ad0c192e0d8debf1258671063d5` and owns the same-user,
@@ -30,7 +31,9 @@ now covers the complete terminal and compound-presentation foundation:
 - `engineos-shell` keeps one clipped GPU terminal target per pane and one scene
   copy per output. AMD/radeonsi GLES2 evidence covers glyph-atlas rendering,
   sparse updates, nonblank readback, multi-pane scenes, topology changes, and
-  two-output lease isolation.
+  two-output lease isolation. Canonical rows and columns come from each
+  output's effective pixel bounds and the actual font cell metrics; the live
+  1920x1080 outputs register 192x51 views and render 1920x1050 pane targets.
 - Wayland presentations are bound by transient systemd scope, not environment
   matching. Popups and transients stay with their parents; independent
   toplevels become pane-local tabs. `prefix + v` switches to the retained
@@ -58,11 +61,12 @@ now covers the complete terminal and compound-presentation foundation:
 
 ## Remaining acceptance boundary
 
-Before cutover, prove real Falkon and Quake sessions, user-asset Quake capture
-and emergency release, the complete upstream suite, and the bare-metal
-boot/recovery gate. Native mode then becomes the default;
-only after that acceptance are the bridge, hooks, launch tokens, geometry
-files, shell-owned foot bootstrap, and rollback path removed.
+Native-default, Falkon, user-asset Quake, emergency release, the upstream suite,
+and bare-metal boot/recovery gates pass. The next boundary is removal of the
+bridge/proxy helpers, launch tokens, terminal registration, geometry files,
+shell-owned foot bootstrap, and rollback path. The final gate makes the fork
+provide `/usr/bin/tmux` and reruns the complete source, package, and hardware
+acceptance set.
 
 ## Contract proof
 
@@ -86,7 +90,9 @@ and game-workflow contracts separately prove native wrapper routing and that
 pane-owned Quake executes its runner in the foreground instead of escaping to
 the user service. `eos-proof native-kms` is the live-only gate: it temporarily
 restarts tty1 against an isolated native session, captures split/resize/zoom
-state and KMS logs, and restores the prior desktop mode.
+state and KMS logs, and restores the native default desktop. Evidence for the
+full-size/no-click refresh fix is retained in
+`/var/log/engineos/proof-native-kms-20260711T141226Z/`.
 
 ## Upstream baseline and rebase procedure
 
@@ -95,24 +101,24 @@ Its GitHub commit archive is pinned in `packages/engineos-mux/PKGBUILD` with a
 SHA-256 checksum. The commit archive is used because the release archive omits
 the upstream `regress/` directory.
 
-`eos-test mux-upstream` extracts the checksum-pinned archive, builds pristine
-and patched trees with identical flags, and runs every upstream regression
-script unchanged in isolated runtime directories. It retains binary hashes,
-build logs, per-test output, a TSV matrix, and `summary.json`. Selected tests
-are diagnostic and always fail acceptance; a full run succeeds only when all
-scripts pass in both builds.
+`eos-test mux-upstream` extracts the checksum-pinned archive and builds
+pristine and patched trees with identical flags. It applies the fixture-only
+changes from three named official tmux commits, records their hashes, and then
+runs all 32 resulting upstream scripts unchanged in isolated runtime
+directories under `env -i LC_CTYPE=C.UTF-8`. It retains source, fixture, and
+binary hashes, build logs, per-test output, a TSV matrix, and `summary.json`.
+Selected tests and supplied binaries are diagnostic and always fail
+acceptance; only a complete reproducible build can pass.
 
-The 2026-07-11 Arch EngineDev run improved from 21 to 27 passes after both
-builds disabled tmux's generic systemd pane-cgroup creation. EngineOS does not
-use that generic cgroup as application identity: graphical launches still use
-their dedicated transient user scopes. The paired result has zero differential
-failures and five shared failures: `combine-test`, `if-shell-TERM`,
-`input-keys`, `tty-keys`, and `utf8-test`. Official tmux history after this
-release commit rewrites the racy input test and updates platform-dependent
-Unicode expectations. Those findings explain the baseline but are not treated
-as a pass; the fail-closed matrix remains the acceptance boundary. Evidence is
-retained in
-`/var/log/engineos/tmux-upstream-nocgroups-20260711T114136Z/`.
+The 2026-07-11 Arch EngineDev matrix passes 32/32 for `engineos-mux 3.6b-38`.
+The pristine comparator fails four tests, each of which proves a deliberate
+fork correction: deterministic shutdown for `command-order`, TERM preservation
+for configuration commands, Meta-Backspace translation, and draining unread
+PTY output before pane destruction. Generic systemd pane cgroups remain
+disabled in both builds; graphical application identity continues to use
+dedicated transient user scopes. The harness accepts the green fork with those
+pristine-only differences, but rejects any shared or fork failure. Evidence is
+retained in `/var/log/engineos/tmux-upstream-pass-20260711T123826Z/`.
 
 For an upstream rebase:
 

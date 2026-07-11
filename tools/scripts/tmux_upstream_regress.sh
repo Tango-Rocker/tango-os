@@ -16,6 +16,8 @@ PRISTINE_BIN=""
 FORK_BIN=""
 REGRESS_DIR=""
 KEEP_BUILD=false
+MAINTENANCE_PATCH="$ROOT/tools/fixtures/tmux-regress-3.6b-maintenance.patch"
+REPRODUCIBLE_PAIR=false
 declare -a SELECTED_TESTS=()
 configure_args=(--prefix=/usr --enable-utempter --enable-systemd --disable-cgroups)
 
@@ -24,9 +26,11 @@ usage() {
 Usage: tmux_upstream_regress.sh [options]
 
 Build the pinned pristine tmux baseline and the current EngineOS fork with
-identical flags, then run the upstream regress/*.sh files unchanged against
-both binaries. Any failing test or pristine/fork difference makes the command
-fail. Results and per-test output remain in the reported evidence directory.
+identical flags, apply the named official upstream maintenance commits to the
+regression fixtures, then run every upstream regress/*.sh file unchanged
+against both binaries. The fork must pass the complete suite; the pristine
+release baseline remains as an explicit comparator. Results and per-test output
+remain in the reported evidence directory.
 
 Options:
   --archive PATH          Pinned tmux commit archive (defaults to artifacts)
@@ -37,12 +41,12 @@ Options:
   --test NAME             Run one upstream test; repeatable
   --pristine-bin PATH     Use an existing pristine binary
   --fork-bin PATH         Use an existing fork binary
-  --regress-dir PATH      Use this unchanged upstream regress directory
+  --regress-dir PATH      Use this upstream regress directory (diagnostic only)
   --keep-build            Retain temporary paired build trees
   --help                  Show this help
 
-The three existing-path options must be supplied together. A selected subset
-is diagnostic only and is identified as such in summary.json.
+The three existing-path options must be supplied together. Existing paths and
+selected subsets are diagnostic only and are identified as such in summary.json.
 HELP
 }
 
@@ -120,10 +124,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for command in autoreconf bsdtar install jq make nproc patch realpath sha256sum timeout; do
+for command in autoreconf bsdtar git install jq make nproc patch realpath sha256sum timeout; do
   command -v "$command" >/dev/null 2>&1 || die "required command unavailable: $command"
 done
 [[ -r "$PKGBUILD" ]] || die "engineos-mux PKGBUILD missing: $PKGBUILD"
+[[ -r "$MAINTENANCE_PATCH" ]] ||
+  die "upstream regression maintenance patch missing: $MAINTENANCE_PATCH"
 package_configure='./configure --prefix=/usr --enable-utempter --enable-systemd --disable-cgroups'
 grep -F "$package_configure" "$PKGBUILD" >/dev/null ||
   die "paired configure flags do not match engineos-mux PKGBUILD"
@@ -187,6 +193,10 @@ if [[ "$existing_count" -eq 0 ]]; then
   bsdtar -xf "$ARCHIVE" -C "$source_root"
   extracted="$source_root/tmux-$commit"
   [[ -d "$extracted/regress" ]] || die "archive does not contain regress/: $ARCHIVE"
+  git -C "$extracted" apply --binary --check "$MAINTENANCE_PATCH"
+  git -C "$extracted" apply --binary "$MAINTENANCE_PATCH"
+  printf 'Applied official upstream fixture maintenance with git apply --binary\n' \
+    >"$OUTPUT_DIR/regress-maintenance.log"
   pristine_source="$build_root/pristine"
   fork_source="$build_root/fork"
   cp -a "$extracted" "$pristine_source"
@@ -196,7 +206,9 @@ if [[ "$existing_count" -eq 0 ]]; then
       0001-engine-mux-default-socket.patch \
       0002-engine-mux-in-server-frontend.patch \
       0003-engine-mux-graphical-client.patch \
-      0004-engine-pane-presentations.patch; do
+      0004-engine-pane-presentations.patch \
+      0005-upstream-regression-fixes.patch \
+      0006-engine-mux-deterministic-shutdown.patch; do
     patch -d "$fork_source" -Np1 -i "$ROOT/packages/engineos-mux/$patch_file" \
       >>"$OUTPUT_DIR/fork-patch.log"
   done
@@ -226,6 +238,7 @@ if [[ "$existing_count" -eq 0 ]]; then
   PRISTINE_BIN="$pristine_source/tmux"
   FORK_BIN="$fork_source/tmux"
   REGRESS_DIR="$pristine_source/regress"
+  REPRODUCIBLE_PAIR=true
 else
   PRISTINE_BIN="$(realpath "$PRISTINE_BIN")"
   FORK_BIN="$(realpath "$FORK_BIN")"
@@ -257,13 +270,19 @@ fi
 
 sha256sum "$PRISTINE_BIN" "$FORK_BIN" >"$OUTPUT_DIR/binaries.sha256"
 (cd "$REGRESS_DIR" && sha256sum ./*.sh) >"$OUTPUT_DIR/regress-scripts.sha256"
+(cd "$REGRESS_DIR" && find . -type f -print0 | sort -z | xargs -0 sha256sum) \
+  >"$OUTPUT_DIR/regress-files.sha256"
+sha256sum "$MAINTENANCE_PATCH" >"$OUTPUT_DIR/regress-maintenance.sha256"
 {
-  printf 'schema=engineos-tmux-upstream-v1\n'
+  printf 'schema=engineos-tmux-upstream-v2\n'
   printf 'commit=%s\n' "$commit"
   printf 'pkgver=%s\n' "$pkgver"
   printf 'repeat=%s\n' "$REPEAT"
   printf 'full_suite=%s\n' "$full_suite"
   printf 'test_count=%s\n' "${#tests[@]}"
+  printf 'reproducible_pair=%s\n' "$REPRODUCIBLE_PAIR"
+  printf 'regress_maintenance_commits=%s\n' \
+    '5c73d3878d4904bce3d61399fb6a222ed39a4dbc,dd62c2f9467f975388f4a2701022752961bdb086,6f588402c34471b0dea0c0894a2caca275f92f17'
   printf 'pristine_version=%s\n' "$($PRISTINE_BIN -V)"
   printf 'fork_version=%s\n' "$($FORK_BIN -V)"
 } >"$OUTPUT_DIR/metadata.env"
@@ -294,7 +313,8 @@ run_test() {
   mkdir -p "$home_dir" "$socket_dir"
   kill_test_servers "$binary" "$socket_dir"
   set +e
-  timeout "${timeout_seconds}s" env -u TMUX \
+  timeout "${timeout_seconds}s" env -i \
+      PATH=/bin:/usr/bin LC_CTYPE=C.UTF-8 \
       HOME="$home_dir" TMUX_TMPDIR="$socket_dir" TEST_TMUX="$binary" \
       sh "./$test" >"$log" 2>&1
   rc=$?
@@ -352,11 +372,12 @@ for ((attempt = 1; attempt <= REPEAT; attempt++)); do
 done
 
 jq -n \
-  --arg schema engineos-tmux-upstream-v1 \
+  --arg schema engineos-tmux-upstream-v2 \
   --arg commit "$commit" \
   --arg pkgver "$pkgver" \
   --arg output "$OUTPUT_DIR" \
   --argjson full_suite "$full_suite" \
+  --argjson reproducible_pair "$REPRODUCIBLE_PAIR" \
   --argjson repeat "$REPEAT" \
   --argjson tests "${#tests[@]}" \
   --argjson matched_pass "$matched_pass" \
@@ -364,23 +385,25 @@ jq -n \
   --argjson fork_only_fail "$fork_only_fail" \
   --argjson pristine_only_fail "$pristine_only_fail" \
   '{schema:$schema, commit:$commit, pkgver:$pkgver, output:$output,
-    full_suite:$full_suite, repeat:$repeat, tests:$tests,
+    full_suite:$full_suite, reproducible_pair:$reproducible_pair,
+    repeat:$repeat, tests:$tests,
     results:{matched_pass:$matched_pass, shared_fail:$shared_fail,
       fork_only_fail:$fork_only_fail,
       pristine_only_fail:$pristine_only_fail},
-    accepted:($full_suite and $shared_fail == 0 and
-      $fork_only_fail == 0 and $pristine_only_fail == 0)}' \
+    accepted:($full_suite and $reproducible_pair and
+      $shared_fail == 0 and $fork_only_fail == 0)}' \
   >"$OUTPUT_DIR/summary.json"
 
 printf 'Summary: pass=%s shared_fail=%s fork_only=%s pristine_only=%s\n' \
   "$matched_pass" "$shared_fail" "$fork_only_fail" "$pristine_only_fail"
 printf 'Evidence: %s\n' "$OUTPUT_DIR"
-if [[ "$full_suite" != true ]]; then
-  printf 'FAIL selected subset is diagnostic and cannot satisfy full-suite acceptance\n' >&2
+if [[ "$full_suite" != true || "$REPRODUCIBLE_PAIR" != true ]]; then
+  printf 'FAIL selected subset or existing binaries are diagnostic only\n' >&2
   exit 1
 fi
-if [[ "$shared_fail" -ne 0 || "$fork_only_fail" -ne 0 || "$pristine_only_fail" -ne 0 ]]; then
-  printf 'FAIL upstream tmux suite is not fully passing\n' >&2
+if [[ "$shared_fail" -ne 0 || "$fork_only_fail" -ne 0 ]]; then
+  printf 'FAIL EngineOS fork does not pass the maintained upstream tmux suite\n' >&2
   exit 1
 fi
-printf 'PASS unchanged upstream tmux suite passes for pristine and fork builds\n'
+printf 'PASS EngineOS fork passes the maintained upstream tmux suite (%s pristine-only fixes)\n' \
+  "$pristine_only_fail"

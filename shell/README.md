@@ -27,18 +27,22 @@ The live shell is managed by `engineos-dev-shell.service`. Use
 `eos-runtime shell refresh-user` after changing tmux/user helpers and
 `eos-runtime shell restart-live` for a verified PID-replacing restart.
 
-Native graphical mux migration is opt-in with `--mux native` or
-`ENGINEOS_MUX_MODE=native`. That mode must connect to
+Native graphical mux is the EngineDev default through
+`ENGINEOS_MUX_MODE=native`. It must connect to
 `$XDG_RUNTIME_DIR/engineos/mux.sock` (override with `ENGINEOS_MUX_SOCKET`) and
-receive a valid versioned snapshot before compositor setup. The default remains
-`legacy` until the terminal-grid renderer reaches live acceptance. See
+receive a valid versioned snapshot before compositor setup; startup fails
+closed if the mux is unavailable. The command-line `--mux native` form remains
+useful for isolated proof sessions. See
 [`docs/graphical-tmux.md`](../docs/graphical-tmux.md).
 
 Native mode validates and retains every active tmux pane's full binary terminal
 grid and records pane identity, grid revision, dimensions, cursor, and
 nonblank-cell evidence in `shell-state.json`. Each pane has its own clipped
 wlroots scene subtree, renderer, and double-buffered target; tmux UI uses a
-separate overlay. CPU-rasterized FreeType glyphs are cached in a colour-keyed
+separate overlay. Output registration derives canonical rows and columns from
+the effective output size and the same FreeType cell metrics used by the
+renderer, so the target fills the output instead of inheriting a stale 80x24
+grid. CPU-rasterized FreeType glyphs are cached in a colour-keyed
 GPU atlas. Flow-controlled server invalidations retain sparse cell coordinates
 for every subscribed pane, update only affected glyph/cursor neighbours with
 clipped GPU draws, and pass matching pixel damage to the owning pane scene; no
@@ -103,9 +107,10 @@ correct output renderer.
 Ordinary local and SSH text-client acceptance and direct-KMS clipping now pass.
 `eos-proof native-kms` records per-output frame commits and pane bounds while
 exercising split, resize, zoom, and unzoom on the live DRM/GBM/radeonsi path,
-then restores the previous desktop mode. Real Falkon and Quake sessions plus
-the remaining live recovery gates remain before native mode becomes the
-default.
+then restores the native default desktop. Real Falkon, Quake, emergency
+release, tty2 recovery, and bare-metal restart acceptance also pass. The
+remaining migration work is removal of rollback-only helpers followed by the
+final `/usr/bin/tmux` replacement.
 
 ## Surface Model
 
@@ -147,16 +152,17 @@ Cube and output-wide legacy Quake launches still support the older role-specific
 `$ENGINEOS_STATE_DIR/launch-bounds/*.env` path for pane/output/fullscreen
 launches. Native game panes do not use those files.
 
-## Tmux Bridge
+## Legacy Rollback
 
-Managed terminals register their real tty and output slot before attaching to
-tmux. `engineos-tmux-pane-bridge` is called by tmux hooks and reports exact
-socket, session, window, pane, client tty, focus, and geometry over shell IPC.
-It handles every session in the active server.
+The managed tmux configuration no longer invokes pane, focus, resize, or
+geometry bridge hooks. Native startup does not launch foot, register terminal
+slots, or use bridge geometry. Ordinary tmux commands, formats, and the
+continuum/resurrect plugin path remain available.
 
-The bridge is event-driven. It does not create proxy GUI windows, poll every
-few seconds, infer bindings from titles/commands, or store authority in tmux
-options. Shell state is authoritative.
+Legacy bridge, terminal-registration, launch-token, and launch-bounds helpers
+remain temporarily in the package only for rollback while the deletion phase
+is in progress. They are not authoritative and must not be used as fallback
+after a native command fails.
 
 The primary terminal uses `engineos-tmux-attach-primary`, which reattaches an
 existing work session before creating the fallback `engineos` session. The
@@ -166,8 +172,8 @@ Right-clicking a window name in the tmux status bar keeps the standard window
 menu and adds `Move to Session...`. With one other session, that action moves
 the clicked stable window ID immediately. With multiple destinations, tmux's
 native session chooser opens; double-click a session or select it and press
-Enter. The move uses the destination's next free index and runs a pane-bridge
-sync.
+Enter. The move uses the destination's next free index. Its external helper is
+also scheduled for removal in favor of direct native tmux behavior.
 
 Right-clicking the session name keeps tmux's session menu, but `New Session`
 uses an EngineOS-safe sequence: create an auto-named session detached, capture

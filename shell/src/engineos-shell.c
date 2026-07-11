@@ -298,6 +298,7 @@ struct engineos_shell_server {
 	enum engineos_surface_role active_slot;
 	enum engineos_surface_role pending_slot;
 	bool game_capture;
+	bool emergency_released;
 	bool cursor_hidden;
 	int smoke_ms;
 	unsigned int output_count;
@@ -3178,7 +3179,19 @@ static void sync_native_presentation_visibility(
 				!presentation_visible);
 		}
 	}
-	if (active != NULL) {
+	if (active == NULL && server->emergency_released && focused_pane != NULL &&
+			strcmp(focused_pane->view_mode, "presentation") != 0) {
+		server->emergency_released = false;
+		server->input_mode = ENGINEOS_INPUT_TERMINAL;
+		server->game_capture = false;
+		server->mux_prefix_pending = false;
+		server->mux_consumed_keycode = 0;
+		sync_pointer_constraint(server, "presentation-hidden-after-emergency");
+		sync_cursor_image(server, "presentation-hidden-after-emergency");
+		wlr_log(WLR_INFO,
+			"input emergency-release latch cleared reason=presentation-hidden");
+	}
+	if (active != NULL && !server->emergency_released) {
 		struct engineos_mux_pane_model *pane = focused_pane;
 		enum engineos_input_mode expected_mode = pane != NULL &&
 			strcmp(pane->presentation, "game") == 0 ?
@@ -3186,7 +3199,7 @@ static void sync_native_presentation_visibility(
 		if (server->focused_view != active ||
 				server->input_mode != expected_mode)
 			activate_view(active, reason);
-	} else if (server->focused_view != NULL &&
+	} else if (active == NULL && server->focused_view != NULL &&
 			server->focused_view->mux_bound) {
 		set_view_activated(server->focused_view, false);
 		server->focused_view = NULL;
@@ -4913,8 +4926,9 @@ static void write_shell_state(struct engineos_shell_server *server,
 	fprintf(file, ",\n  \"input\": {\"mode\": ");
 	json_write_string(file, input_mode_name(server->input_mode));
 	fprintf(file,
-		", \"capture\": %s, \"view_id\": %u, \"pane_id\": \"%%%u\", \"pane_generation\": %u, \"pointer_view_id\": %u},\n",
+		", \"capture\": %s, \"emergency_released\": %s, \"view_id\": %u, \"pane_id\": \"%%%u\", \"pane_generation\": %u, \"pointer_view_id\": %u},\n",
 		server->game_capture ? "true" : "false",
+		server->emergency_released ? "true" : "false",
 		ui_output != NULL ? ui_output->mux_view_id : 0,
 		focused_state_pane != NULL ? focused_state_pane->pane_id : 0,
 		focused_state_pane != NULL ? focused_state_pane->generation : 0,
@@ -5490,6 +5504,7 @@ static bool focused_view_pointer_coords(struct engineos_shell_server *server,
 
 static void set_input_mode_for_clicked_view(struct engineos_shell_view *view) {
 	struct engineos_shell_server *server = view->server;
+	server->emergency_released = false;
 
 	if (is_launchpad_role(view->role)) {
 		set_active_slot(server, view->role, "click-focus");
@@ -5895,6 +5910,7 @@ static void set_input_mode(struct engineos_shell_server *server,
 		write_shell_state(server, reason);
 		break;
 	case ENGINEOS_INPUT_GAME:
+		server->emergency_released = false;
 		if (view_is_native_mux_game(server->focused_view)) {
 				server->input_mode = ENGINEOS_INPUT_GAME;
 				server->game_capture = true;
@@ -5950,6 +5966,7 @@ static void toggle_game_capture(struct engineos_shell_server *server) {
 }
 
 static void emergency_release(struct engineos_shell_server *server) {
+	server->emergency_released = true;
 	server->game_capture = false;
 	set_input_mode(server, ENGINEOS_INPUT_SHELL, "emergency-release");
 	wlr_log(WLR_INFO, "input emergency-release complete");
@@ -6038,6 +6055,7 @@ static void activate_view(struct engineos_shell_view *view, const char *reason) 
 	}
 
 	struct engineos_shell_server *server = view->server;
+	server->emergency_released = false;
 	if (is_launchpad_role(view->role)) {
 		set_active_slot(server, view->role, reason);
 		return;
@@ -7365,16 +7383,35 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	int height = 0;
 	wlr_output_effective_resolution(output, &width, &height);
 	if (server->mux_mode == ENGINEOS_MUX_NATIVE && server->mux_client.ready) {
+		int cell_width = 0;
+		int cell_height = 0;
+		char error[256] = {0};
+		if (!engineos_terminal_cell_metrics(&cell_width, &cell_height, error,
+				sizeof(error))) {
+			wlr_log(WLR_ERROR, "native mux terminal metrics failed: %s", error);
+			server->mux_client.ready = false;
+			wl_display_terminate(server->display);
+			return;
+		}
+		uint32_t columns = (uint32_t)(width / cell_width);
+		uint32_t rows = (uint32_t)(height / cell_height);
+		if (columns == 0 || rows == 0) {
+			wlr_log(WLR_ERROR,
+				"native mux output is smaller than one terminal cell size=%dx%d cell=%dx%d",
+				width, height, cell_width, cell_height);
+			server->mux_client.ready = false;
+			wl_display_terminate(server->display);
+			return;
+		}
 		shell_output->mux_view_id = ++server->next_mux_view_id;
 		bool focused = server->mux_client.primary_view_id == 0;
 		bool grid_changed = false;
-		char error[256] = {0};
 		uint32_t scale_milli = (uint32_t)(output->scale * 1000.0 + 0.5);
 		const char *output_name = output->name[0] != '\0' ?
 			output->name : "unnamed";
 		if (!engineos_mux_client_register_view(&server->mux_client,
 				shell_output->mux_view_id, output_name,
-				(uint32_t)width, (uint32_t)height, scale_milli, focused,
+				columns, rows, (uint32_t)width, (uint32_t)height, scale_milli, focused,
 				&grid_changed, error, sizeof(error))) {
 			wlr_log(WLR_ERROR, "native mux output registration failed: %s", error);
 			server->mux_client.ready = false;

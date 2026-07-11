@@ -185,8 +185,8 @@ bool engineos_mux_client_send_input(struct engineos_mux_client *client,
 	const void *bytes, size_t length, bool *grid_changed,
 	char *error, size_t error_size);
 bool engineos_mux_client_register_view(struct engineos_mux_client *client,
-	uint32_t view_id, const char *output, uint32_t pixel_width,
-	uint32_t pixel_height, uint32_t scale_milli, bool focused,
+	uint32_t view_id, const char *output, uint32_t columns, uint32_t rows,
+	uint32_t pixel_width, uint32_t pixel_height, uint32_t scale_milli, bool focused,
 	bool *grid_changed, char *error, size_t error_size);
 bool engineos_mux_client_unregister_view(struct engineos_mux_client *client,
 	uint32_t view_id, bool *grid_changed, char *error, size_t error_size);

@@ -247,8 +247,13 @@ validate_native_kms_split_state() {
         .frame > 0 and .nonblank_pixels > 0 and
         .renderer == "gpu-glyph-atlas-gles2"
       )] | length) == 2 and
-      ((.panes | sort_by(.pixel_x)) as $p |
-        ($p[0].pixel_x + $p[0].pixel_width) <= $p[1].pixel_x)
+		(. as $view | (.panes | sort_by(.pixel_x)) as $p |
+		  $p[0].pixel_x == 0 and
+		  ($p[0].pixel_x + $p[0].pixel_width) <= $p[1].pixel_x and
+		  ($p[-1].pixel_x + $p[-1].pixel_width) >=
+		    ($view.pixel_width * 9 / 10) and
+		  ([.panes[] | .pixel_y + .pixel_height] | max) >=
+		    ($view.pixel_height * 4 / 5))
     )] | length) == (.output_views | length) and
     (.output_views | length) > 0
   ' "$state_file" >/dev/null ||
@@ -259,6 +264,7 @@ proof_native_kms() {
   [[ $# -eq 0 ]] || die "native-kms proof takes no options"
   have_cmd jq || die "native-kms proof requires jq"
   have_cmd systemctl || die "native-kms proof requires systemctl"
+  have_cmd timeout || die "native-kms proof requires timeout"
   have_cmd sudo || [[ "$(id -u)" -eq 0 ]] ||
     die "native-kms proof requires sudo or root"
 
@@ -332,9 +338,11 @@ proof_native_kms() {
 
   XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
     "$mux_bin" resize-pane -t '%0' -R 8
-  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+  timeout 10 env XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" \
+    TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
     "$mux_bin" send-keys -t '%0' 'printf "LEFT-RESIZED-KMS\\n"' Enter
-  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+  timeout 10 env XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" \
+    TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
     "$mux_bin" send-keys -t '%1' 'printf "RIGHT-RESIZED-KMS\\n"' Enter
   wait_for_native_state "$state_file" ".mux.panes[0].columns != $initial_columns and
     ([.output_views[].panes[].frame] | add) > $initial_frames" \
@@ -789,6 +797,7 @@ proof_native_quake() {
   wait_for_native_state "$state_file" '
     .mux.presentation.type == "game" and
     .input.mode == "shell" and .input.capture == false and
+    .input.emergency_released == true and
     .cursor.locked == false
   ' "real Ctrl+Alt+Backspace emergency release" 300
   cp "$state_file" "$artifact_dir/emergency-release.json"

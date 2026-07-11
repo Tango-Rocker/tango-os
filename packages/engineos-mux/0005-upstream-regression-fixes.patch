@@ -1,0 +1,73 @@
+From: EngineOS maintainers
+Subject: Backport official upstream regression fixes after tmux 3.6b
+
+This patch contains three minimal upstream tmux fixes which landed outside the
+3.6b release commit used by EngineOS:
+
+* 55d660a548cbeb8cb3b6975cc67fa1b0b031a4e8 - preserve TERM variables for
+  commands run from configuration files;
+* 52e2a7d990b8721e8ac2deba65f259b454f8d192 - recognize Meta-Backspace using
+  the configured VERASE character;
+* 9e3653a6127269204b923d5f75fbb174add45ebe - consume all pending PTY data
+  before destroying an exited pane.
+
+diff --git a/environ.c b/environ.c
+index fb1c4902..0b4b3c31 100644
+--- a/environ.c
++++ b/environ.c
+@@ -263,11 +263,6 @@ environ_for_session(struct session *s, int no_TERM)
+ 		environ_set(env, "TERM_PROGRAM", 0, "%s", "tmux");
+ 		environ_set(env, "TERM_PROGRAM_VERSION", 0, "%s", getversion());
+ 		environ_set(env, "COLORTERM", 0, "truecolor");
+-	} else {
+-		environ_unset(env, "TERM");
+-		environ_unset(env, "TERM_PROGRAM");
+-		environ_unset(env, "TERM_PROGRAM_VERSION");
+-		environ_unset(env, "COLORTERM");
+ 	}
+ 
+ #ifdef HAVE_SYSTEMD
+diff --git a/tty-keys.c b/tty-keys.c
+index 7474621c..e6a55279 100644
+--- a/tty-keys.c
++++ b/tty-keys.c
+@@ -909,9 +909,15 @@ first_key:
+ 	 * used. termios should have a better idea.
+ 	 */
+ 	bspace = tty->tio.c_cc[VERASE];
+-	if (bspace != _POSIX_VDISABLE && key == bspace) {
+-		log_debug("%s: key %#llx is backspace", c->name, key);
+-		key = KEYC_BSPACE;
++	if (bspace != _POSIX_VDISABLE) {
++		if (key == bspace) {
++			log_debug("%s: key %#llx is BSpace", c->name, key);
++			key = KEYC_BSPACE;
++		}
++		if (key == (bspace|KEYC_META)) {
++			log_debug("%s: key %#llx is M-BSpace", c->name, key);
++			key = KEYC_BSPACE|KEYC_META;
++		}
+ 	}
+ 
+ 	/*
+diff --git a/window.c b/window.c
+index a3b602fd..931720aa 100644
+--- a/window.c
++++ b/window.c
+@@ -371,12 +371,10 @@ window_pane_destroy_ready(struct window_pane *wp)
+ {
+ 	int	n;
+ 
+-	if (wp->pipe_fd != -1) {
+-		if (EVBUFFER_LENGTH(wp->pipe_event->output) != 0)
+-			return (0);
+-		if (ioctl(wp->fd, FIONREAD, &n) != -1 && n > 0)
+-			return (0);
+-	}
++	if (wp->pipe_fd != -1 && EVBUFFER_LENGTH(wp->pipe_event->output) != 0)
++		return (0);
++	if (ioctl(wp->fd, FIONREAD, &n) != -1 && n > 0)
++		return (0);
+ 
+ 	if (~wp->flags & PANE_EXITED)
+ 		return (0);

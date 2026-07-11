@@ -140,10 +140,12 @@ run_compositor() {
   local mode="${1:---headless}"
   case "$mode" in
     --headless)
-      ENGINEOS_SHELL_SMOKE=true exec "$SCRIPT_DIR/shell_runner.sh" --headless
+      ENGINEOS_MUX_MODE=legacy ENGINEOS_SHELL_SMOKE=true \
+        exec "$SCRIPT_DIR/shell_runner.sh" --headless
       ;;
     --nested)
-      ENGINEOS_SHELL_SMOKE=true exec "$SCRIPT_DIR/shell_runner.sh" --nested
+      ENGINEOS_MUX_MODE=legacy ENGINEOS_SHELL_SMOKE=true \
+        exec "$SCRIPT_DIR/shell_runner.sh" --nested
       ;;
     *)
       die "compositor test expects --headless or --nested"
@@ -171,6 +173,8 @@ run_mux() {
 	local shell_pid="" overlay_pid="" prompt_pid="" shell_client_name=""
 	local text_client_pid="" sshd_pid="" ssh_port=""
 	local initial_native_revision updated_native_revision stable_revision=""
+	local initial_native_frame updated_native_frame
+	local initial_output_commits updated_output_commits
 	local stable_count=0
 	local pane_scope="" pane_app_pid="" pane_state="" split_pane_id=""
 	local split_scope=""
@@ -433,9 +437,13 @@ PY
 		die "presentation resolver accepted an unrelated process"
 	fi
 	jq -e '.code == "request-rejected" and
-		(.message | contains("outside every pending pane launch scope"))' \
-		"$fixture/wrong-resolve.json" >/dev/null ||
+		(.message == "process is outside every pending pane launch scope" or
+		 .message == "process is not in a registered user scope")' \
+		"$fixture/wrong-resolve.json" >/dev/null || {
+		cat "$fixture/wrong-resolve.json" >&2 || true
+		cat "$fixture/wrong-resolve.err" >&2 || true
 		die "wrong-scope presentation resolution was not explicit"
+	}
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" \
 		presentation-resolve "$pane_app_pid" >"$fixture/resolved-pane.json"
 	jq -e --arg pane "$pane_id" '.schema == "engine-mux/presentation-resolve-v1" and
@@ -449,9 +457,14 @@ PY
 		die "presentation protocol accepted an unrelated process"
 	fi
 	jq -e '.code == "request-rejected" and
-		(.message | contains("outside the pane launch scope"))' \
-		"$fixture/wrong-scope.json" >/dev/null ||
+		(.message == "surface process is outside the pane launch scope" or
+		 .message == "process is outside the pane launch scope" or
+		 .message == "process is not in a registered user scope")' \
+		"$fixture/wrong-scope.json" >/dev/null || {
+		cat "$fixture/wrong-scope.json" >&2 || true
+		cat "$fixture/wrong-scope.err" >&2 || true
 		die "wrong-scope surface rejection was not explicit"
+	}
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" \
 		presentation-map "$pane_id" 1 "$pane_app_pid" 1001 toplevel >/dev/null
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" \
@@ -967,7 +980,11 @@ PY
 		     .pixel_height > 0 and .frame > 0 and .renderer != null) and
 		   .ui.ready and .ui.columns > 0 and .ui.rows > 0 and
 		   .ui.status_rows > 0 and .ui.status_text != null and
-		   .ui.rendered and .ui.renderer != null and .ui.frame > 0) and
+		   .ui.rendered and .ui.renderer != null and .ui.frame > 0 and
+		   ([.panes[] | .pixel_x + .pixel_width] | max) >=
+		     (.pixel_width * 9 / 10) and
+		   ([.panes[] | .pixel_y + .pixel_height] | max) >=
+		     (.pixel_height * 4 / 5)) and
 		 ((.output_views[] | select(.focused)) as $focused |
 		  .input.view_id == $focused.view_id and
 		  .input.pane_id == $focused.pane_id and
@@ -2156,19 +2173,33 @@ PY
 		set-option -g prefix C-b
 	initial_native_revision="$(jq -er '.mux.grid.revision' \
 		"$fixture/engineos/shell-state.json")"
+	initial_native_frame="$(jq -er '.mux.grid.frame' \
+		"$fixture/engineos/shell-state.json")"
+	initial_output_commits="$(jq -er '[.output_views[].frame_commits] | add' \
+		"$fixture/engineos/shell-state.json")"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		send-keys -t "$shell_pane_id" "printf EVENT-DRIVEN-DAMAGE" Enter
 	updated_native_revision="$initial_native_revision"
+	updated_native_frame="$initial_native_frame"
+	updated_output_commits="$initial_output_commits"
 	for _ in {1..100}; do
 		updated_native_revision="$(jq -er '.mux.grid.revision' \
 			"$fixture/engineos/shell-state.json")"
-		[[ "$updated_native_revision" -gt "$initial_native_revision" ]] && break
+		updated_native_frame="$(jq -er '.mux.grid.frame' \
+			"$fixture/engineos/shell-state.json")"
+		updated_output_commits="$(jq -er '[.output_views[].frame_commits] | add' \
+			"$fixture/engineos/shell-state.json")"
+		[[ "$updated_native_revision" -gt "$initial_native_revision" &&
+			"$updated_native_frame" -gt "$initial_native_frame" &&
+			"$updated_output_commits" -gt "$initial_output_commits" ]] && break
 		sleep 0.02
 	done
-	[[ "$updated_native_revision" -gt "$initial_native_revision" ]] || {
+	[[ "$updated_native_revision" -gt "$initial_native_revision" &&
+		"$updated_native_frame" -gt "$initial_native_frame" &&
+		"$updated_output_commits" -gt "$initial_output_commits" ]] || {
 		jq '{mux,last_reason}' "$fixture/engineos/shell-state.json" >&2 || true
 		tail -100 "$fixture/shell-native.log" >&2 || true
-		die "native shell did not consume event-driven grid damage"
+		die "native shell did not render and commit event-driven grid damage without pointer input"
 	}
 	if [[ "$shell_renderer" == gles2 ]]; then
 		jq -e '.mux.grid.damaged_cells > 0 and
@@ -3541,6 +3572,8 @@ run_app() {
 	  local out="$tmp_dir/out.txt"
 	  local err="$tmp_dir/err.txt"
 	  local launched="$tmp_dir/launched.txt"
+	  local ENGINEOS_MUX_MODE=legacy
+	  export ENGINEOS_MUX_MODE
 
   cleanup_app() {
     rm -rf "$tmp_dir"
@@ -4075,6 +4108,7 @@ state["mux"] = {"mode": "native", "connected": True}
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(state, handle)
 PY
+	ENGINEOS_MUX_MODE=native
 	: >"$tmp_dir/native-mux-calls.txt"
 	PATH="$fake_bin:$PATH" ENGINEOS_LOG_DIR="$log_dir" \
 		ENGINEOS_STATE_DIR="$tmp_dir/run" \
@@ -5979,12 +6013,10 @@ run_post_first_deploy() {
     die "post-first-deploy tmux config does not set the EngineOS color status style"
   grep -F '#{pane_current_path}' "$payload_dir/assets/tmux.conf" >/dev/null ||
     die "post-first-deploy tmux config status line does not show pane path"
-  grep -F 'engineos-tmux-pane-bridge sync' "$payload_dir/assets/tmux.conf" >/dev/null ||
-    die "post-first-deploy tmux config does not wire EngineOS pane bridge sync"
-  grep -F 'engineos-tmux-pane-bridge focus --pane #{pane_id}' "$payload_dir/assets/tmux.conf" >/dev/null ||
-    die "post-first-deploy tmux config does not wire pane focus hooks"
-  grep -F 'engineos-tmux-pane-bridge geometry --all-visible' "$payload_dir/assets/tmux.conf" >/dev/null ||
-    die "post-first-deploy tmux config does not wire pane geometry hooks"
+  if grep -F 'engineos-tmux-pane-bridge' "$payload_dir/assets/tmux.conf" >/dev/null ||
+      grep -F 'after-select-pane' "$payload_dir/assets/tmux.conf" >/dev/null; then
+    die "post-first-deploy tmux config still wires legacy pane hooks"
+  fi
   grep -F '"Move to Session..."' "$payload_dir/assets/tmux.conf" >/dev/null ||
     die "post-first-deploy tmux window menu does not offer session moves"
   grep -F 'engineos-tmux-window-move choose' "$payload_dir/assets/tmux.conf" >/dev/null ||
@@ -5999,8 +6031,6 @@ run_post_first_deploy() {
       grep -F 'engineos-tmux-window-focus' "$payload_dir/assets/tmux.conf" >/dev/null; then
     die "post-first-deploy tmux config still wires legacy GUI proxy helpers"
   fi
-  grep -F 'after-select-pane' "$payload_dir/assets/tmux.conf" >/dev/null ||
-    die "post-first-deploy tmux config does not sync after pane selection"
   grep -F "set -g @continuum-restore 'on'" "$payload_dir/assets/tmux.conf" >/dev/null ||
     die "post-first-deploy tmux config does not auto-restore saved layouts"
   grep -F "set -g @resurrect-capture-pane-contents 'off'" "$payload_dir/assets/tmux.conf" >/dev/null ||
@@ -6117,8 +6147,12 @@ EOF
     die "post-first-deploy payload missing dev shell service"
   grep -F 'ENGINEOS_TERMINAL_REQUIRE_WAYLAND=true' "$payload_dir/assets/systemd/engineos-dev-shell.service" >/dev/null ||
     die "post-first-deploy dev shell service does not require Wayland terminal ownership"
-  grep -F 'ENGINEOS_TERMINAL_SESSION_CMD=engineos-tmux-attach-primary' "$payload_dir/assets/systemd/engineos-dev-shell.service" >/dev/null ||
-    die "post-first-deploy dev shell service does not launch tmux"
+  grep -F 'EnvironmentFile=-/etc/engineos/runtime.conf' "$payload_dir/assets/systemd/engineos-dev-shell.service" >/dev/null ||
+    die "post-first-deploy dev shell service does not load the runtime mode setting"
+  grep -F 'prepare_native_mux' "$payload_dir/scripts/engineos-dev-shell-start" >/dev/null ||
+    die "post-first-deploy dev shell start does not prepare native mux"
+  grep -F 'new-session -d -s engineos' "$payload_dir/scripts/engineos-dev-shell-start" >/dev/null ||
+    die "post-first-deploy dev shell start does not create the native session"
   grep -F 'engineos-shell' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
     die "post-first-deploy setup does not request engineos-shell"
   grep -F 'engineos-tools' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
@@ -6329,6 +6363,7 @@ run_boot() {
     ln -s "$(command -v "$tool")" "$tool_bin/$tool"
   done
   {
+    printf 'ENGINEOS_MUX_MODE=native\n'
     printf 'ENGINEOS_SHELL_BOOTSTRAP=launchpad\n'
     printf 'ENGINEOS_CUBE_CMD="eos-app launch cube"\n'
     printf 'ENGINEOS_ENGINE_CMD="eos-app launch quake"\n'
@@ -6505,8 +6540,10 @@ FAKE
     die "runtime boot validation did not check quakespasm command"
   grep -F 'command available: engineos-cube' "$out" >/dev/null ||
     die "runtime boot validation did not check engineos-cube command"
-  grep -F 'runtime shell bootstrap starts launchpad' "$out" >/dev/null ||
-    die "runtime boot validation did not check launchpad bootstrap"
+  grep -F 'runtime shell uses native mux by default' "$out" >/dev/null ||
+    die "runtime boot validation did not check native mux default"
+  grep -F 'runtime legacy rollback bootstrap starts launchpad' "$out" >/dev/null ||
+    die "runtime boot validation did not check legacy rollback bootstrap"
   grep -F 'runtime autostart log records startup decision' "$out" >/dev/null ||
     die "runtime boot validation did not check autostart startup log"
   grep -F 'runtime autostart log records outcome' "$out" >/dev/null ||

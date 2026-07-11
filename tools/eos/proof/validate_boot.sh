@@ -159,6 +159,7 @@ runtime_config_check() {
   local bootstrap=""
   local cube_cmd=""
   local engine_cmd=""
+  local mux_mode=""
   local recovery_tty=""
   local terminal_session=""
 
@@ -169,6 +170,7 @@ runtime_config_check() {
     bootstrap="${ENGINEOS_SHELL_BOOTSTRAP:-}"
     cube_cmd="${ENGINEOS_CUBE_CMD:-}"
     engine_cmd="${ENGINEOS_ENGINE_CMD:-}"
+    mux_mode="${ENGINEOS_MUX_MODE:-}"
     recovery_tty="${ENGINEOS_RUNTIME_RECOVERY_TTY:-}"
     terminal_session="${ENGINEOS_TERMINAL_SESSION_CMD:-}"
     if [[ -n "$recovery_tty" ]]; then
@@ -196,10 +198,16 @@ runtime_config_check() {
     fail "runtime terminal session must use engineos-tmux-attach-primary"
   fi
 
-  if [[ "$bootstrap" == "launchpad" ]]; then
-    ok "runtime shell bootstrap starts launchpad"
+  if [[ "$mux_mode" == "native" ]]; then
+    ok "runtime shell uses native mux by default"
   else
-    fail "runtime shell bootstrap must be launchpad"
+    fail "runtime mux mode must be native"
+  fi
+
+  if [[ "$bootstrap" == "launchpad" ]]; then
+    ok "runtime legacy rollback bootstrap starts launchpad"
+  else
+    fail "runtime legacy rollback bootstrap must be launchpad"
   fi
 
   if [[ "$cube_cmd" == *"eos-app launch cube"* ]]; then

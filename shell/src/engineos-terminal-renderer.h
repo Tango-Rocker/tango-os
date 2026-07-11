@@ -23,6 +23,9 @@ struct engineos_terminal_render_stats {
 	uint64_t frame;
 };
 
+bool engineos_terminal_cell_metrics(int *cell_width, int *cell_height,
+	char *error, size_t error_size);
+
 struct wlr_buffer *engineos_terminal_render(
 	const struct engineos_mux_client *client, int *width, int *height,
 	uint32_t *glyph_cells, char *error, size_t error_size);

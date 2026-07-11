@@ -139,7 +139,14 @@ def main() -> int:
         prompt_offset = len(capture)
         os.write(master, b"\x02:")
         prompt_marker = f"\x1b[{args.rows};1H:".encode()
-        while prompt_marker not in capture[prompt_offset:]:
+        prompt_line = b":" + b" " * (args.columns - 1)
+        prompt_cursor = f"\x1b[{args.rows};2H".encode()
+        while True:
+            prompt_capture = capture[prompt_offset:]
+            if prompt_marker in prompt_capture or (
+                prompt_line in prompt_capture and prompt_cursor in prompt_capture
+            ):
+                break
             if time.monotonic() >= deadline:
                 raise TimeoutError("tmux command prompt did not render through the tty")
             if not drain():

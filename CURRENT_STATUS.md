@@ -59,37 +59,23 @@ These are historical proof artifacts only; they are not the active work path:
   contract and fails closed. Codex is updated
   to the verified current release, `codex-cli 0.144.1`; npm updates are handled
   by the managed root-owned install path.
-- Bare-metal EngineDev has the v1 tmux pane bridge deployed through the local
-  package reinstall/restart loop. `eos-app pane launch -- COMMAND` registers a
-  tmux pane launch token with `engineos-shell`, shell state owns
-  `pane_bindings`, generic GUI clients are laid out as `tmux-pane-gui`, and
-  `engineos-tmux-pane-bridge` reports focus and geometry from tmux hooks
-  without proxy tabs or a polling daemon. Cube/engine pane launches still use
-  the existing `launch-bounds/*.env` path. The 2026-07-09/10 deploy refreshed
-  `engineos-shell 0.1.0-17`, `engineos-tools 0.1.0-36`, and
-  `engineos-config 0.1.0-3`; force-installed the managed tmux config and
-  `/usr/local/bin/engineos-tmux-pane-bridge`; and left
-  `/run/user/1000/engineos/shell-state.json` JSON-readable with
-  `pane_bindings`. The same deploy added `engineos-tmux-attach-primary` for
-  shell-owned terminal startup, so restarts attach the existing primary tmux
-  session before creating the fallback `engineos` session. Repeated shell
-  restarts preserved one tmux server and its two attached clients: primary
-  `/dev/pts/0` remains on session `2`, and secondary `/dev/pts/1` remains on
-  `engineos-side`; no detached `engineos` session or proxy windows were
-  created. `eos-app manifest validate` passes after restart. This bridge is now
-  rollback-only: the live native Falkon pane contract passes through the
-  isolated native-mux proof described below. The managed right-click status-window
-  menu now includes `Move to Session...`; with one destination it moves the
-  clicked stable window ID immediately, avoiding tmux's unreliable nested
-  mouse menus, and resynchronizes pane geometry. The managed session-name menu
-  also replaces tmux's client-terminating bare `new-session` action with
-  detached creation followed by an explicit switch of the invoking client.
-  The EngineOS command-surface hardening is deployed through
-  `engineos-tools 0.1.0-41`: `eos-source-test` clears installed-session
-  contamination, `eos-proof` fails closed on required evidence, repeatable
-  package selection is normalized through `eos-ci local`, and
-  `eos-runtime shell restart-live` only reports success when a new
-  `engineos-shell` PID is verified.
+- Bare-metal EngineDev now boots the native graphical mux path from the single
+  `ENGINEOS_MUX_MODE=native` setting in `/etc/engineos/runtime.conf`.
+  `engineos-dev-shell-start` creates or reuses the authoritative `engineos`
+  session, requires its frontend socket, disables launchpad bootstrap for that
+  run, and fails closed if native mux preparation fails. The active package set
+  is `engineos-mux 3.6b-38`, `engineos-shell 0.1.0-56`,
+  `engineos-tools 0.1.0-51`, and `engineos-config 0.1.0-6`. The live tty1 shell
+  has two registered graphical output clients, uses the DRM/libinput backend
+  and radeonsi GPU glyph atlas, and starts no shell-owned foot client. The
+  managed tmux configuration retains ordinary tmux commands and plugins but no
+  longer launches pane/focus/geometry bridge hooks; removing those hooks also
+  fixed command clients hanging behind hook subprocesses. Graphical view
+  registration now derives its canonical grid from the output and actual font
+  metrics: each live 1920x1080 output owns a 192x51 view with a 1920x1050 pane
+  target instead of the stale 80x24, 800x504 target. A no-pointer-input proof
+  requires grid damage to advance the renderer and DRM commits. Legacy helpers and
+  rollback code still exist in the packages and are the next deletion phase.
 - MC Quick View now routes through an exact tmux client identity instead of a
   stale terminal-role environment variable. The live `eos-proof mc-preview`
   run from pane `%3` passed its installed image contract, IPC ping, and real
@@ -100,8 +86,8 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
-  `engineos-mux 3.6b-37` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-53`, but native mode is not yet the live desktop
+  `engineos-mux 3.6b-38` with the decoder/renderer/control boundary in
+  `engineos-shell 0.1.0-56`, and native mode is the live EngineDev desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
@@ -111,17 +97,16 @@ These are historical proof artifacts only; they are not the active work path:
   Its v1 handshake and atomic layout snapshots are exercised against real split
   panes and focus changes. `eos-test mux-upstream` now rebuilds the pinned
   pristine baseline and current fork with identical flags, verifies the source
-  archive checksum, runs every upstream regression script byte-for-byte,
-  retains per-test logs plus `summary.json`, and fails unless all scripts pass
-  in both builds. Disabling tmux's generic systemd pane cgroups—EngineOS app
-  identity continues to use its explicit transient scopes—raised the paired
-  Arch matrix from 21/32 to 27/32. The current matrix has zero fork-only or
-  pristine-only differences and five shared failures: `combine-test`,
-  `if-shell-TERM`, `input-keys`, `tty-keys`, and `utf8-test`. Official upstream
-  history after the pinned release rewrites the racy input test and changes the
-  platform-dependent Unicode results, but the acceptance command remains red;
-  shared failures are not converted into success. Evidence is retained in
-  `/var/log/engineos/tmux-upstream-nocgroups-20260711T114136Z/`. The
+  archive checksum, applies only named official upstream maintenance commits
+  to stale/racy regression fixtures, runs every resulting upstream script
+  unchanged in a clean `C.UTF-8` environment, and retains per-test logs,
+  fixture hashes, and `summary.json`. The fork passes all 32 tests. Four
+  failures remain confined to the pristine 3.6b comparator and directly prove
+  the fork's fixes: deterministic server shutdown for `command-order`, TERM
+  preservation, Meta-Backspace, and complete PTY draining after process exit.
+  The harness rejects subsets and supplied binaries as acceptance evidence and
+  does not retry or hide failures. Evidence is retained in
+  `/var/log/engineos/tmux-upstream-pass-20260711T123826Z/`. The
   retired daemon binary
   and user unit are absent from the live package. `engineos-shell
   --mux native` requires that handshake and snapshot before compositor startup,
@@ -354,7 +339,7 @@ These are historical proof artifacts only; they are not the active work path:
   graphical canonical window size unchanged. The fork excludes ordinary
   clients from sizing only for windows owned by registered graphical views;
   ordinary tmux sizing remains unchanged for all other windows. Package
-  `engineos-mux 3.6b-34`, packaged proof driver in `engineos-tools 0.1.0-41`,
+  `engineos-mux 3.6b-38`, packaged proof driver in `engineos-tools 0.1.0-51`,
   the installed pixman contract, and the exact installed AMD/radeonsi GLES2
   contract pass. Direct-KMS clipping now has a repeatable live acceptance
   command: `eos-proof native-kms`. It starts an isolated native mux session,
@@ -364,18 +349,19 @@ These are historical proof artifacts only; they are not the active work path:
   two 1920x1080 outputs and two nonblank pane buffers per output; every buffer
   stayed inside its output and did not overlap its sibling through split,
   resize, zoom, and unzoom. Both outputs reported positive frame commits and
-  zero commit failures. The proof restored the prior legacy desktop and
+  zero commit failures. The proof restored the native default desktop and
   removed its isolated mux server. Evidence is retained in
-  `/var/log/engineos/proof-native-kms-20260711T100643Z/`.
+  `/var/log/engineos/proof-native-kms-20260711T141226Z/`.
   `eos-proof native-falkon` now passes the corresponding real application
   boundary on tty1. Falkon launches through `eos-app` with an enforced
   `--no-remote` dedicated instance, maps as `org.kde.falkon` only after its PID
   resolves to the pane's transient user scope, owns the pane PTY foreground
   process group, and keeps its live console output. The proof switches between
   presentation and console, signals the app, verifies the shell regains the
-  foreground PTY and accepts a post-exit marker, then restores legacy mode.
+  foreground PTY and accepts a post-exit marker, then restores the native
+  default session.
   Evidence is retained in
-  `/var/log/engineos/proof-native-falkon-20260711T104436Z/`. The same checkpoint
+  `/var/log/engineos/proof-native-falkon-20260711T130532Z/`. The same checkpoint
   raises mux frontend/client socket buffers so a valid 240x67 grid cannot fail
   as `grid-too-large`, and `engine-pane-host` explicitly retires empty split
   application scopes before starting the replacement login shell.
@@ -385,19 +371,21 @@ These are historical proof artifacts only; they are not the active work path:
   an uncorked PipeWire/Pulse stream on the ALSA hardware sink, capture and
   cursor lock, `prefix + v` console/application toggles, a real
   Ctrl+Alt+Backspace event through uinput, emergency capture release and
-  recovery, clean process exit, prompt restoration, and rollback to the prior
-  shell mode. Evidence is retained in
-  `/var/log/engineos/proof-native-quake-20260711T110032Z/`. Recovery/startup
-  acceptance now also passes. `engineos-config 0.1.0-5` installs tty2 as a
-  recovery getty, `engineos-tools 0.1.0-48` installs
+  recovery, a latched emergency-release state that cannot be undone by grid
+  damage, clean process exit, prompt restoration, and restoration of the
+  native default session. Evidence is retained in
+  `/var/log/engineos/proof-native-quake-20260711T131417Z/`. Recovery/startup
+  acceptance now also passes. `engineos-config 0.1.0-6` installs tty2 as a
+  recovery getty, `engineos-tools 0.1.0-51` installs
   `engineos-recovery-help`, and the real tty2 `agetty` is active. The installed
   `eos-proof shell-launch --bare-metal` run verifies the active EngineDev
   startup decision, tty1 shell service, tty2 recovery service, recovery
   command, DRM/libinput backend, and RX 5600 XT/radeonsi renderer. Generic EGL
   enumeration still exposes a separate llvmpipe device, but it no longer
   overrides direct evidence from the active shell. Evidence is retained in
-  `/var/log/engineos/proof-shell-launch-bare-metal-20260711T111350Z.log`.
-  Upstream-suite closure and cutover remain open.
+  `/var/log/engineos/proof-shell-launch-bare-metal-20260711T131443Z.log`.
+  Upstream-suite closure and the native-default cutover are complete. Removing
+  rollback-only architecture and replacing `/usr/bin/tmux` remain open.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 

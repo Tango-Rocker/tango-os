@@ -154,6 +154,63 @@ static void render_ui_rows(uint8_t *pixels, int image_width, int image_height,
 	}
 }
 
+bool engineos_terminal_cell_metrics(int *cell_width, int *cell_height,
+		char *error, size_t error_size) {
+	if (cell_width == NULL || cell_height == NULL) {
+		snprintf(error, error_size, "terminal cell metric output is missing");
+		return false;
+	}
+	FcPattern *pattern = FcNameParse((const FcChar8 *)"monospace");
+	if (pattern == NULL) {
+		snprintf(error, error_size, "failed to create terminal font pattern");
+		return false;
+	}
+	FcConfigSubstitute(NULL, pattern, FcMatchPattern);
+	FcDefaultSubstitute(pattern);
+	FcResult match_result;
+	FcPattern *match = FcFontMatch(NULL, pattern, &match_result);
+	FcChar8 *font_path = NULL;
+	if (match == NULL ||
+			FcPatternGetString(match, FC_FILE, 0, &font_path) != FcResultMatch) {
+		snprintf(error, error_size, "no monospace font found");
+		if (match != NULL) FcPatternDestroy(match);
+		FcPatternDestroy(pattern);
+		return false;
+	}
+	FT_Library library;
+	FT_Face face;
+	if (FT_Init_FreeType(&library) != 0) {
+		snprintf(error, error_size, "failed to initialize terminal font");
+		FcPatternDestroy(match);
+		FcPatternDestroy(pattern);
+		return false;
+	}
+	if (FT_New_Face(library, (const char *)font_path, 0, &face) != 0) {
+		snprintf(error, error_size, "failed to initialize terminal font face");
+		FT_Done_FreeType(library);
+		FcPatternDestroy(match);
+		FcPatternDestroy(pattern);
+		return false;
+	}
+	if (FT_Set_Pixel_Sizes(face, 0, 16) != 0) {
+		snprintf(error, error_size, "failed to size terminal font");
+		FT_Done_Face(face);
+		FT_Done_FreeType(library);
+		FcPatternDestroy(match);
+		FcPatternDestroy(pattern);
+		return false;
+	}
+	*cell_width = (int)(face->size->metrics.max_advance >> 6);
+	*cell_height = (int)(face->size->metrics.height >> 6) + 2;
+	if (*cell_width < 1) *cell_width = 9;
+	if (*cell_height < 1) *cell_height = 18;
+	FT_Done_Face(face);
+	FT_Done_FreeType(library);
+	FcPatternDestroy(match);
+	FcPatternDestroy(pattern);
+	return true;
+}
+
 struct wlr_buffer *engineos_terminal_render(
 		const struct engineos_mux_client *client, int *width, int *height,
 		uint32_t *glyph_cells, char *error, size_t error_size) {

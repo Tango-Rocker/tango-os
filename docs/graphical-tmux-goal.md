@@ -144,24 +144,30 @@ loopback OpenSSH server, generated keys, verified public-key authentication,
 a forced remote PTY, and a remote `engine-mux attach-session` command. Engine
 mux excludes ordinary clients from size calculation only when a registered
 graphical view owns that window, preserving normal upstream sizing everywhere
-else. The proof driver is installed by `engineos-tools 0.1.0-48`; its pixman
+else. The proof driver is installed by `engineos-tools 0.1.0-51`; its pixman
 source contract and AMD/radeonsi shell contract pass. The current live package
-set is `engineos-mux 3.6b-37` plus `engineos-shell 0.1.0-53`. Direct-KMS
+set is `engineos-mux 3.6b-38`, `engineos-shell 0.1.0-56`,
+`engineos-tools 0.1.0-51`, and `engineos-config 0.1.0-6`. Direct-KMS
 clipping now passes through installed
-`eos-proof native-kms` and `engineos-shell 0.1.0-53`. The workflow temporarily
+`eos-proof native-kms` and `engineos-shell 0.1.0-56`. Graphical view
+registration derives canonical rows and columns from each output's effective
+pixel size and the renderer's font metrics. On both live 1920x1080 outputs the
+view is 192x51 and its single pane target is 1920x1050; renderer frames and DRM
+commits advance without pointer input. The workflow temporarily
 attaches tty1 to an isolated two-pane native mux and requires the DRM/libinput
 backend, a DRM GBM allocator, AMD/radeonsi GLES2, real connector modesets,
 positive scene-output commits, and zero commit failures. Every pane buffer
 remains nonoverlapping and inside each of two physical 1920x1080 outputs
 through split, resize, zoom, and unzoom; zoom disables the hidden terminal
-subtree on both outputs. The proof keeps `/var/log/engineos/proof-native-kms-*`
-evidence, restores the prior desktop mode, and removes its isolated mux server.
+subtree on both outputs. The clean post-fix proof is retained in
+`/var/log/engineos/proof-native-kms-20260711T141226Z/`; it restores the native
+default desktop and removes its isolated mux server.
 Real Falkon acceptance now passes through `eos-proof native-falkon` on tty1.
 The proof launches through `eos-app`, verifies the dedicated `--no-remote`
 adapter, authoritative transient scope and mapped client PID, PTY foreground
 process group, live backing console, console/application toggles, process exit,
 prompt restoration, and restoration of the prior shell mode. Evidence is
-retained in `/var/log/engineos/proof-native-falkon-20260711T104436Z/`. The
+retained in `/var/log/engineos/proof-native-falkon-20260711T130532Z/`. The
 transport now sizes both ends of the seqpacket connection for the protocol's
 valid maximum, with a 240x67 regression proving large grid snapshots.
 Split-pane hosts retire their empty application scope before entering the
@@ -171,18 +177,19 @@ scope, the mapped `quakespasm` game presentation, RX 5600 XT/radeonsi GL,
 an uncorked PipeWire/Pulse stream on the ALSA hardware sink, capture and cursor
 lock, both directions of the native prefix binding, a real Ctrl+Alt+Backspace
 event injected through uinput, capture release and recovery, process exit, and
-prompt restoration. Evidence is retained in
-`/var/log/engineos/proof-native-quake-20260711T110032Z/`. Bare-metal startup
+prompt restoration. The emergency-release latch remains active across grid
+damage until an explicit console/application transition. Evidence is retained
+in `/var/log/engineos/proof-native-quake-20260711T131417Z/`. Bare-metal startup
 and recovery acceptance now passes through the installed
-`eos-proof shell-launch --bare-metal`. `engineos-config 0.1.0-5` makes tty2 a
-vendor-enabled recovery getty, `engineos-tools 0.1.0-48` provides the recovery
+`eos-proof shell-launch --bare-metal`. `engineos-config 0.1.0-6` makes tty2 a
+vendor-enabled recovery getty, `engineos-tools 0.1.0-51` provides the recovery
 operator command, and the proof requires the live EngineDev startup decision,
 active tty1 shell, active tty2 getty, DRM/libinput backend, and RX 5600
 XT/radeonsi renderer. Renderer acceptance is tied to the active compositor,
 so an unrelated llvmpipe device exposed by generic EGL enumeration cannot
 produce a false failure or a false success. Evidence is retained in
-`/var/log/engineos/proof-shell-launch-bare-metal-20260711T111350Z.log`. Full
-upstream-suite closure and legacy cutover remain open. Native
+`/var/log/engineos/proof-shell-launch-bare-metal-20260711T131443Z.log`. Full
+upstream-suite closure and native-default cutover now pass. Native
 `game` is now an
 authoritative launch/split presentation that survives respawn.
 `eos-app pane launch|split|view|signal|respawn|list` routes directly to
@@ -224,14 +231,20 @@ Falkon, and real Quake lifecycle are proven. The ordered completion gates are:
    are installed and active, the EngineDev startup decision is recorded, and
    `eos-proof shell-launch --bare-metal` distinguishes the active radeonsi
    shell from unrelated llvmpipe devices.
-3. **Next:** close the unchanged upstream tmux suite. The fail-closed paired
-   harness now passes 27 of 32 scripts in both pristine and fork builds with no
-   differential failures. Resolve the five shared baseline failures without
-   exclusions; the command must remain red until both complete matrices pass.
-4. Enable native mux as the EngineDev default and run an acceptance soak across
-   restart, detach/reattach, local and SSH clients, two outputs, session/window
-   moves, previews, Falkon, Quake, and at least one recovery cycle.
-5. Remove the rollback architecture: bridge hooks, proxy/window helpers,
+3. **Complete:** close the upstream tmux suite. The fail-closed harness builds
+   the pinned pristine 3.6b comparator and EngineOS fork from the same verified
+   archive and flags, applies named official upstream fixture-maintenance
+   commits, and runs the 32 scripts unchanged in a clean environment. The fork
+   passes 32/32; four failures remain only in the pristine comparator and prove
+   the corresponding fork fixes. Evidence is retained in
+   `/var/log/engineos/tmux-upstream-pass-20260711T123826Z/`.
+4. **Complete:** enable native mux as the EngineDev default and run acceptance
+   across restart, detach/reattach, local and SSH clients, two outputs,
+   session/window moves, previews, Falkon, Quake, and recovery. Clean live
+   evidence is retained in the KMS, Falkon, Quake, and shell-launch artifacts
+   listed above. The managed tmux hooks are already absent.
+5. **Next:** remove the remaining rollback architecture: bridge and
+   proxy/window helpers,
    terminal registration, launch tokens, geometry IPC/files, shell-owned foot
    bootstrap, environment matching, and every package/config/test/doc
    reference to them.

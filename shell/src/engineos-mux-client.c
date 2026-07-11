@@ -2200,10 +2200,11 @@ static bool exchange_json_request(struct engineos_mux_client *client,
 }
 
 bool engineos_mux_client_register_view(struct engineos_mux_client *client,
-		uint32_t view_id, const char *output, uint32_t pixel_width,
-		uint32_t pixel_height, uint32_t scale_milli, bool focused,
+		uint32_t view_id, const char *output, uint32_t columns, uint32_t rows,
+		uint32_t pixel_width, uint32_t pixel_height, uint32_t scale_milli, bool focused,
 		bool *grid_changed, char *error, size_t error_size) {
-	if (client->session_id == NULL || output == NULL || view_id == 0) {
+	if (client->session_id == NULL || output == NULL || view_id == 0 ||
+			columns == 0 || rows == 0) {
 		snprintf(error, error_size, "invalid graphical view registration");
 		return false;
 	}
@@ -2221,8 +2222,8 @@ bool engineos_mux_client_register_view(struct engineos_mux_client *client,
 	json_object_object_add(root, "pixel_width", json_object_new_int64(pixel_width));
 	json_object_object_add(root, "pixel_height", json_object_new_int64(pixel_height));
 	json_object_object_add(root, "scale_milli", json_object_new_int64(scale_milli));
-	json_object_object_add(root, "columns", json_object_new_int64(client->grid_columns));
-	json_object_object_add(root, "rows", json_object_new_int64(client->grid_rows));
+	json_object_object_add(root, "columns", json_object_new_int64(columns));
+	json_object_object_add(root, "rows", json_object_new_int64(rows));
 	json_object_object_add(root, "focused", json_object_new_boolean(focused));
 	const char *payload = json_object_to_json_string_ext(root,
 		JSON_C_TO_STRING_PLAIN);
