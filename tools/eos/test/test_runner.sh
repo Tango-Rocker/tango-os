@@ -615,6 +615,43 @@ PY
 		"$fixture/forwarded-keys.json" >/dev/null ||
 		die "graphical tmux client rejected keys forwarded to the pane PTY"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -t "$pane_id" "printf 'GRAPHICAL-ARROW-HISTORY\\n'" Enter
+	local arrow_history_before=0 arrow_history_recalled=0 arrow_history_after=0
+	for _ in {1..100}; do
+		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			capture-pane -p -t "$pane_id" -S -40 >"$fixture/arrow-history.txt"
+		arrow_history_before="$(grep -Fc 'GRAPHICAL-ARROW-HISTORY' \
+			"$fixture/arrow-history.txt" || true)"
+		[[ "$arrow_history_before" -ge 2 ]] && break
+		sleep 0.02
+	done
+	[[ "$arrow_history_before" -ge 2 ]] ||
+		die "graphical arrow history fixture did not reach the pane PTY"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" keys "$pane_id" \
+		Up >"$fixture/arrow-up.json"
+	for _ in {1..100}; do
+		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			capture-pane -p -t "$pane_id" -S -40 >"$fixture/arrow-history.txt"
+		arrow_history_recalled="$(grep -Fc 'GRAPHICAL-ARROW-HISTORY' \
+			"$fixture/arrow-history.txt" || true)"
+		[[ "$arrow_history_recalled" -gt "$arrow_history_before" ]] && break
+		sleep 0.02
+	done
+	[[ "$arrow_history_recalled" -gt "$arrow_history_before" ]] ||
+		die "graphical Up key did not recall pane shell history"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" keys "$pane_id" \
+		Enter >"$fixture/arrow-enter.json"
+	for _ in {1..100}; do
+		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			capture-pane -p -t "$pane_id" -S -40 >"$fixture/arrow-history.txt"
+		arrow_history_after="$(grep -Fc 'GRAPHICAL-ARROW-HISTORY' \
+			"$fixture/arrow-history.txt" || true)"
+		[[ "$arrow_history_after" -gt "$arrow_history_recalled" ]] && break
+		sleep 0.02
+	done
+	[[ "$arrow_history_after" -gt "$arrow_history_recalled" ]] ||
+		die "graphical Enter did not execute recalled pane shell history"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		set-option -g mouse on
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		bind-key -n MouseDown1Pane set-option -g @engineos-mouse-proof accepted
@@ -2234,11 +2271,21 @@ PY
 		tail -100 "$fixture/shell-native.log" >&2 || true
 		die "native shell did not commit the updated pane grid without pointer input"
 	}
+	for _ in {1..100}; do
+		jq -e 'all(.output_views[];
+			.committed_grid_revision == .grid_revision and
+			.committed_renderer_frame == .selected_renderer_frame)' \
+			"$fixture/engineos/shell-state.json" >/dev/null && break
+		sleep 0.02
+	done
 	jq -e 'all(.output_views[];
 		.committed_grid_revision == .grid_revision and
 		.committed_renderer_frame == .selected_renderer_frame)' \
-		"$fixture/engineos/shell-state.json" >/dev/null ||
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '{output_views,last_reason}' \
+			"$fixture/engineos/shell-state.json" >&2 || true
 		die "native output commit did not contain the current rendered pane grid"
+	}
 	if [[ "$shell_renderer" == gles2 ]]; then
 		jq -e '.mux.grid.damaged_cells > 0 and
 			.mux.grid.damaged_cells < (.mux.grid.columns * .mux.grid.rows) and

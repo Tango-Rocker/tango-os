@@ -64,7 +64,7 @@ These are historical proof artifacts only; they are not the active work path:
   `engineos-dev-shell-start` creates or reuses the authoritative `engineos`
   session, requires its frontend socket, disables launchpad bootstrap for that
   run, and fails closed if native mux preparation fails. The active package set
-  is `engineos-mux 3.6b-39`, `engineos-shell 0.1.0-64`,
+  is `engineos-mux 3.6b-40`, `engineos-shell 0.1.0-64`,
   `engineos-tools 0.1.0-51`, and `engineos-config 0.1.0-6`. The live tty1 shell
   has two registered graphical output clients, uses the DRM/libinput backend
   and radeonsi GPU glyph atlas, and starts no shell-owned foot client. The
@@ -90,10 +90,14 @@ These are historical proof artifacts only; they are not the active work path:
   instead of embedded control bytes, rejected keys no longer terminate the
   compositor, and input-device teardown no longer detaches a pointer already
   being destroyed by wlroots. The installed mux server also acknowledges keys
-  forwarded to the pane PTY, but the live long-running server still maps the
-  replaced `3.6b-38` binary and needs a session restart before that server-side
-  fix is active. Legacy helpers and rollback code still exist in the packages
-  and are the next deletion phase.
+  forwarded to the pane PTY and strips its server-only sent-key marker before
+  terminal encoding, so arrows and other special keys retain their complete VT
+  escape sequences without weakening prefix-table handling for fast key
+  sequences. The behavioral contract recalls and executes bash history with
+  graphical `Up`. The live long-running server still maps the replaced
+  `3.6b-38` binary and needs a session restart before these server-side fixes
+  are active. Legacy helpers and rollback code still exist in the packages and
+  are the next deletion phase.
 - MC Quick View now routes through an exact tmux client identity instead of a
   stale terminal-role environment variable. The live `eos-proof mc-preview`
   run from pane `%3` passed its installed image contract, IPC ping, and real
@@ -104,7 +108,7 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
-  `engineos-mux 3.6b-39` with the decoder/renderer/control boundary in
+  `engineos-mux 3.6b-40` with the decoder/renderer/control boundary in
   `engineos-shell 0.1.0-64`, and native mode is the live EngineDev desktop
   default.
   The package builds the pinned

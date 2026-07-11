@@ -1,0 +1,11 @@
+diff --git a/window.c b/window.c
+index 4933119..5f58a7a 100644
+--- a/window.c
++++ b/window.c
+@@ -1258,0 +1259,6 @@
++	/*
++	 * KEYC_SENT is internal to server-side key dispatch. It must not reach
++	 * input_key(), where it prevents special keys matching the VT key table.
++	 */
++	key &= ~KEYC_SENT;
++
