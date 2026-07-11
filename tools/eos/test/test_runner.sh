@@ -31,6 +31,7 @@ Usage: test_runner.sh [smoke|all]
 	   test_runner.sh agent-route
 	   test_runner.sh dev-workflow
        test_runner.sh compositor --headless
+       test_runner.sh screencopy
        test_runner.sh shell-actions
 	   test_runner.sh mux
 	   test_runner.sh mux-upstream [upstream-regress options]
@@ -90,6 +91,7 @@ run_all() {
 	run_all_step agent-route
 	run_all_step dev-workflow
   run_all_step compositor --headless
+  run_all_step screencopy
   run_all_step shell-actions
 	run_all_step mux
 	run_all_step game-workflow
@@ -151,6 +153,66 @@ run_compositor() {
       die "compositor test expects --headless or --nested"
       ;;
   esac
+}
+
+run_screencopy() {
+	local build_dir="$ROOT/build/shell"
+	local fixture="${TMPDIR:-/tmp}/engineos-screencopy-test-$$"
+	local renderer="${ENGINEOS_SCREENCOPY_TEST_RENDERER:-pixman}"
+	local shell_pid=""
+	command -v grim >/dev/null || die "screencopy test requires grim"
+	command -v file >/dev/null || die "screencopy test requires file"
+	cleanup_screencopy() {
+		[[ -z "${shell_pid:-}" ]] || kill "$shell_pid" >/dev/null 2>&1 || true
+		[[ -z "${shell_pid:-}" ]] || wait "$shell_pid" 2>/dev/null || true
+		[[ -z "${fixture:-}" ]] || rm -rf "$fixture"
+	}
+	trap cleanup_screencopy EXIT RETURN
+	mkdir -p "$fixture/state"
+	chmod 0700 "$fixture"
+	if [[ -f "$build_dir/build.ninja" ]]; then
+		meson setup "$build_dir" "$ROOT/shell" --reconfigure >/dev/null
+	else
+		meson setup "$build_dir" "$ROOT/shell" >/dev/null
+	fi
+	meson compile -C "$build_dir" >/dev/null
+	XDG_RUNTIME_DIR="$fixture" ENGINEOS_STATE_DIR="$fixture/state" \
+		ENGINEOS_MUX_MODE=legacy WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 \
+		WLR_RENDERER="$renderer" \
+		"$build_dir/engineos-shell" --headless --smoke-ms 10000 \
+		--bootstrap none --mux legacy >"$fixture/shell.log" 2>&1 &
+	shell_pid=$!
+	for _ in {1..200}; do
+		[[ -S "$fixture/wayland-0" && -f "$fixture/state/shell-state.json" ]] &&
+			jq -e '.screencopy == true and .backend == "headless"' \
+				"$fixture/state/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	[[ -S "$fixture/wayland-0" ]] || {
+		tail -100 "$fixture/shell.log" >&2 || true
+		die "headless compositor did not publish its Wayland socket"
+	}
+	jq -e '.screencopy == true and .backend == "headless"' \
+		"$fixture/state/shell-state.json" >/dev/null || {
+		tail -100 "$fixture/shell.log" >&2 || true
+		die "shell state did not expose screencopy support"
+	}
+	XDG_RUNTIME_DIR="$fixture" WAYLAND_DISPLAY=wayland-0 \
+		grim "$fixture/capture.png"
+	[[ -s "$fixture/capture.png" ]] || die "grim produced an empty capture"
+	file "$fixture/capture.png" | grep -F 'PNG image data, 1280 x 720' >/dev/null || {
+		file "$fixture/capture.png" >&2 || true
+		die "grim capture did not match the composed headless output"
+	}
+	kill "$shell_pid"
+	wait "$shell_pid" 2>/dev/null || true
+	shell_pid=""
+	grep -F 'compositor does not support the screen capture protocol' \
+		"$fixture/shell.log" >/dev/null &&
+		die "screencopy protocol remained unavailable"
+	trap - EXIT RETURN
+	rm -rf "$fixture"
+	printf 'grim screencopy contract passed renderer=%s\n' "$renderer"
 }
 
 run_mux() {
@@ -7092,6 +7154,9 @@ case "$SCOPE" in
 		;;
   compositor)
     run_compositor "$@"
+    ;;
+  screencopy)
+    run_screencopy
     ;;
   shell-actions)
     run_shell_actions

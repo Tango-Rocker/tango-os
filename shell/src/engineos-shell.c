@@ -42,9 +42,11 @@
 #include <wlr/types/wlr_primary_selection_v1.h>
 #include <wlr/types/wlr_relative_pointer_v1.h>
 #include <wlr/types/wlr_scene.h>
+#include <wlr/types/wlr_screencopy_v1.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_xcursor_manager.h>
+#include <wlr/types/wlr_xdg_output_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
@@ -214,7 +216,9 @@ struct engineos_shell_server {
 	struct wlr_data_device_manager *data_device_mgr;
 	struct wlr_data_control_manager_v1 *data_control_mgr;
 	struct wlr_primary_selection_v1_device_manager *primary_selection_mgr;
+	struct wlr_screencopy_manager_v1 *screencopy_mgr;
 	struct wlr_output_layout *output_layout;
+	struct wlr_xdg_output_manager_v1 *xdg_output_mgr;
 	struct wlr_cursor *cursor;
 	struct wlr_xcursor_manager *cursor_mgr;
 	struct wlr_relative_pointer_manager_v1 *relative_pointer_mgr;
@@ -4687,6 +4691,8 @@ static void write_shell_state(struct engineos_shell_server *server,
 	json_write_string(file, getenv("WLR_BACKENDS"));
 	fprintf(file, ",\n  \"wayland_display\": ");
 	json_write_string(file, getenv("WAYLAND_DISPLAY"));
+	fprintf(file, ",\n  \"screencopy\": %s",
+		server->screencopy_mgr != NULL ? "true" : "false");
 	fprintf(file, ",\n  \"bootstrap\": ");
 	json_write_string(file, bootstrap_mode_name(server->bootstrap_mode));
 	fprintf(file, ",\n  \"mux\": {\"mode\": ");
@@ -8579,6 +8585,11 @@ static bool setup_server(struct engineos_shell_server *server) {
 
 	wlr_compositor_create(server->display, 5, server->renderer);
 	wlr_subcompositor_create(server->display);
+	server->screencopy_mgr = wlr_screencopy_manager_v1_create(server->display);
+	if (server->screencopy_mgr == NULL) {
+		wlr_log(WLR_ERROR, "failed to create screencopy manager");
+		return false;
+	}
 	server->data_device_mgr = wlr_data_device_manager_create(server->display);
 	if (server->data_device_mgr == NULL) {
 		wlr_log(WLR_ERROR, "failed to create data device manager");
@@ -8616,6 +8627,12 @@ static bool setup_server(struct engineos_shell_server *server) {
 	server->output_layout = wlr_output_layout_create(server->display);
 	if (server->output_layout == NULL) {
 		wlr_log(WLR_ERROR, "failed to create output layout");
+		return false;
+	}
+	server->xdg_output_mgr = wlr_xdg_output_manager_v1_create(server->display,
+		server->output_layout);
+	if (server->xdg_output_mgr == NULL) {
+		wlr_log(WLR_ERROR, "failed to create xdg-output manager");
 		return false;
 	}
 	server->cursor = wlr_cursor_create();

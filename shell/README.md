@@ -15,6 +15,7 @@ eos-app status --json
 eos-test shell-actions
 eos-test shell
 eos-test input
+eos-test screencopy
 ```
 
 On an AMD development host, exercise the native pane renderer itself with:
@@ -107,6 +108,10 @@ share compositor render targets. Grid ownership is preserved when focus moves
 between sessions, and the contract proves nonfocused damage advances the
 correct output renderer.
 Ordinary local and SSH text-client acceptance and direct-KMS clipping now pass.
+The compositor exposes `zwlr_screencopy_manager_v1` and xdg-output geometry,
+so `grim` can capture either a named output or the complete composed layout.
+`shell-state.json` reports this capability as `screencopy=true`, and
+`eos-test screencopy` requires a real, correctly sized PNG instead of metadata.
 `eos-proof native-kms` records per-output frame commits and pane bounds while
 exercising split, resize, zoom, and unzoom on the live DRM/GBM/radeonsi path,
 then restores the native default desktop. Real Falkon, Quake, emergency

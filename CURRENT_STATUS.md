@@ -64,7 +64,7 @@ These are historical proof artifacts only; they are not the active work path:
   `engineos-dev-shell-start` creates or reuses the authoritative `engineos`
   session, requires its frontend socket, disables launchpad bootstrap for that
   run, and fails closed if native mux preparation fails. The active package set
-  is `engineos-mux 3.6b-41`, `engineos-shell 0.1.0-69`,
+  is `engineos-mux 3.6b-41`, `engineos-shell 0.1.0-70`,
   `engineos-tools 0.1.0-51`, and `engineos-config 0.1.0-6`. The live tty1 shell
   has two registered graphical output clients, uses the DRM/libinput backend
   and radeonsi GPU glyph atlas, and starts no shell-owned foot client. The
@@ -111,6 +111,13 @@ These are historical proof artifacts only; they are not the active work path:
   and click paths; the live package exposes the active 24x6 menu model with
   zero output frame failures and zero service restarts. Physical confirmation
   of the corrected right-click appearance remains required.
+  The shell now exposes wlroots screencopy plus xdg-output geometry, making
+  `grim` a real supported capture client. The focused contract produced a
+  correctly sized 1280x720 PNG with both pixman and radeonsi GLES2. Installed
+  `0.1.0-70` then captured the composed two-monitor desktop as a nonblank
+  3840x1080 PNG and `HDMI-A-1` independently as 1920x1080, with zero output
+  frame failures, zero service restarts, and no coredump. The accepted desktop
+  artifact is `artifacts/captures/shell-20260711T170626Z.png`.
   Ctrl-modified keys now use tmux names such as `C-b` and `C-c`
   instead of embedded control bytes, rejected keys no longer terminate the
   compositor, and input-device teardown no longer detaches a pointer already
@@ -146,7 +153,7 @@ These are historical proof artifacts only; they are not the active work path:
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
   `engineos-mux 3.6b-41` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-69`, and native mode is the live EngineDev desktop
+  `engineos-shell 0.1.0-70`, and native mode is the live EngineDev desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
@@ -462,10 +469,9 @@ These are historical proof artifacts only; they are not the active work path:
   command path, entity-browser placement, and OS-level Wayland drag-and-drop
   are proven.
 - Screenshot-based MC Quick View acceptance capture. The real live renderer,
-  output selection, pane geometry, and show/hide IPC path are proven. The
-  2026-07-10 `eos-proof mc-preview --visual` attempt failed closed because the
-  compositor does not expose the screen-capture protocol required by `grim`;
-  metadata-only output was not accepted as visual proof.
+  output selection, pane geometry, show/hide IPC path, and compositor
+  screencopy support are proven; rerun `eos-proof mc-preview --visual` to close
+  the pane-specific screenshot acceptance.
 - Persistent Quake asset handling outside generated ISO images.
 - Real Secure Boot and installer work only if explicitly re-enabled.
 

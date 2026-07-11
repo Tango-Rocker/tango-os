@@ -73,9 +73,10 @@ eos-app pane launch -- falkon
 eos-app launch quake
 ```
 
-Remaining evidence: a live Falkon focus-switch stress pass and real screenshot
-capture. Screenshot proof is currently blocked because the compositor does not
-expose the screen-capture protocol required by `grim`.
+Remaining evidence: a live Falkon focus-switch stress pass and the MC Quick
+View screenshot acceptance run. The compositor now exposes screencopy and
+xdg-output; real `grim` captures pass on headless pixman, headless radeonsi
+GLES2, the live two-output layout, and a named physical output.
 
 The replacement path is staged in parallel: the tmux 3.6b fork now owns the
 versioned frontend, terminal grids, graphical clients, compound presentations,
