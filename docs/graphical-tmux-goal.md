@@ -144,7 +144,7 @@ loopback OpenSSH server, generated keys, verified public-key authentication,
 a forced remote PTY, and a remote `engine-mux attach-session` command. Engine
 mux excludes ordinary clients from size calculation only when a registered
 graphical view owns that window, preserving normal upstream sizing everywhere
-else. The proof driver is installed by `engineos-tools 0.1.0-44`; its pixman
+else. The proof driver is installed by `engineos-tools 0.1.0-45`; its pixman
 source contract and AMD/radeonsi shell contract pass. The current live package
 set is `engineos-mux 3.6b-36` plus `engineos-shell 0.1.0-53`. Direct-KMS
 clipping now passes through installed
@@ -165,8 +165,16 @@ retained in `/var/log/engineos/proof-native-falkon-20260711T104436Z/`. The
 transport now sizes both ends of the seqpacket connection for the protocol's
 valid maximum, with a 240x67 regression proving large grid snapshots.
 Split-pane hosts retire their empty application scope before entering the
-replacement login shell. Real Quake, the remaining bare-metal recovery/input
-gate, full upstream-suite closure, and legacy cutover remain open. Native
+replacement login shell. Real Quake now passes through `eos-proof native-quake`
+with user-provided registered assets. The live proof verifies the pane PTY and
+scope, the mapped `quakespasm` game presentation, RX 5600 XT/radeonsi GL,
+an uncorked PipeWire/Pulse stream on the ALSA hardware sink, capture and cursor
+lock, both directions of the native prefix binding, a real Ctrl+Alt+Backspace
+event injected through uinput, capture release and recovery, process exit, and
+prompt restoration. Evidence is retained in
+`/var/log/engineos/proof-native-quake-20260711T110032Z/`. The remaining
+bare-metal recovery gate, full upstream-suite closure, and legacy cutover
+remain open. Native
 `game` is now an
 authoritative launch/split presentation that survives respawn.
 `eos-app pane launch|split|view|signal|respawn|list` routes directly to
@@ -176,8 +184,8 @@ The shell gives mapped game presentations direct Wayland input, capture,
 cursor confinement, constraints, emergency-release compatibility, and
 capture-free console toggling. The deterministic installed contract proves
 game launch from the pane foreground job, map, lease isolation, console/app
-toggle, exit, respawn type preservation, and terminal restoration. Real Quake
-with user assets and bare-metal emergency-release acceptance remain open. The
+toggle, exit, respawn type preservation, and terminal restoration; the real
+bare-metal proof above covers the corresponding engine and hardware path. The
 server now
 exports every
 pane's authoritative cell origin and size,
@@ -198,15 +206,14 @@ scope through the user manager rather than trusting a sampled process group.
 ## Remaining Path To Completion
 
 The protocol, native terminal renderer, interaction model, multi-output leases,
-compound Wayland presentations, local/SSH text clients, real KMS clipping, and
-real Falkon lifecycle are proven. Completion now depends on these gates, in
-order:
+compound Wayland presentations, local/SSH text clients, real KMS clipping,
+Falkon, and real Quake lifecycle are proven. The ordered completion gates are:
 
-1. Run a real Quake pane on bare metal with user assets. Prove its foreground
-   PTY, mapped game presentation, audio, pointer capture, `prefix + v`,
-   emergency release, process exit, and console recovery.
-2. Close the bare-metal recovery gate. Enable and prove the recovery VT and
-   recovery helper, record the final startup decision, and make
+1. **Complete:** run a real Quake pane on bare metal with user assets and prove
+   its foreground PTY, mapped game presentation, audio, pointer capture,
+   `prefix + v`, emergency release, process exit, and console recovery.
+2. **Next:** close the bare-metal recovery gate. Enable and prove the recovery
+   VT and recovery helper, record the final startup decision, and make
    `eos-proof shell-launch --bare-metal` distinguish the active radeonsi shell
    from unrelated llvmpipe devices.
 3. Close the unchanged upstream tmux suite. Reproduce and resolve every

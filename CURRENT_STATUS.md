@@ -369,8 +369,17 @@ These are historical proof artifacts only; they are not the active work path:
   `/var/log/engineos/proof-native-falkon-20260711T104436Z/`. The same checkpoint
   raises mux frontend/client socket buffers so a valid 240x67 grid cannot fail
   as `grid-too-large`, and `engine-pane-host` explicitly retires empty split
-  application scopes before starting the replacement login shell. Real Quake,
-  recovery/input acceptance, upstream-suite closure, and cutover remain open.
+  application scopes before starting the replacement login shell.
+  `eos-proof native-quake` now passes the real game boundary with the user's
+  registered Quake assets. It proves the pane foreground PTY and authoritative
+  scope, mapped `quakespasm` game presentation, AMD RX 5600 XT/radeonsi GL,
+  an uncorked PipeWire/Pulse stream on the ALSA hardware sink, capture and
+  cursor lock, `prefix + v` console/application toggles, a real
+  Ctrl+Alt+Backspace event through uinput, emergency capture release and
+  recovery, clean process exit, prompt restoration, and rollback to the prior
+  shell mode. Evidence is retained in
+  `/var/log/engineos/proof-native-quake-20260711T110032Z/`. Recovery/startup
+  acceptance, upstream-suite closure, and cutover remain open.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 
@@ -410,7 +419,7 @@ Bare-metal/source-checkout loop:
 eos-app manifest validate
 eos-proof mc-preview
 eos-proof native-falkon
-eos-game quake proof
+eos-proof native-quake
 eos-proof shell-launch --bare-metal
 ```
 

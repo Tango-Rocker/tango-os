@@ -26,6 +26,7 @@ Usage: proof.sh build-lab [--dry-run] [--profile enginedev]
        proof.sh launchpad [--vm|--runtime|--bare-metal] [--dry-run]
        proof.sh native-kms
        proof.sh native-falkon
+       proof.sh native-quake
        proof.sh visual [--dry-run] [--allow-metadata]
        proof.sh mc-preview [--dry-run] [--visual]
 
@@ -53,6 +54,9 @@ The native-falkon proof temporarily runs the live tty1 shell against an isolated
 native mux pane, launches a dedicated Falkon instance through eos-app, proves
 scope ownership and console toggling, closes it, proves prompt restoration, and
 then restores the prior shell mode.
+The native-quake proof does the same with real user-provided Quake assets and
+also proves radeonsi rendering, live audio, game capture, the native prefix
+toggle, a real uinput emergency-release chord, and console recovery.
 The visual proof requires a real frame image by default; metadata-only capture
 is diagnostic unless --allow-metadata is explicitly passed.
 The mc-preview proof runs the Quick View/image-preview acceptance path and can
@@ -154,6 +158,76 @@ wait_for_native_state() {
   done
   jq "${jq_args[@]}" "$filter" "$state_file" >/dev/null 2>&1 || true
   die "native shell state did not reach $description"
+}
+
+emit_emergency_release_chord() {
+  local python_bin="$(command -v python || command -v python3 || true)"
+  local command=("$python_bin")
+  [[ -n "$python_bin" ]] || die "native game proof requires Python"
+  [[ -c /dev/uinput ]] || die "native game proof requires /dev/uinput"
+  if [[ "$(id -u)" -ne 0 ]]; then
+    command=(sudo -n "$python_bin")
+  fi
+  "${command[@]}" - <<'PY'
+import fcntl
+import os
+import struct
+import time
+
+IOC_NRBITS = 8
+IOC_TYPEBITS = 8
+IOC_SIZEBITS = 14
+IOC_NRSHIFT = 0
+IOC_TYPESHIFT = IOC_NRSHIFT + IOC_NRBITS
+IOC_SIZESHIFT = IOC_TYPESHIFT + IOC_TYPEBITS
+IOC_DIRSHIFT = IOC_SIZESHIFT + IOC_SIZEBITS
+IOC_WRITE = 1
+
+def ioc(direction: int, kind: int, number: int, size: int) -> int:
+    return ((direction << IOC_DIRSHIFT) | (kind << IOC_TYPESHIFT) |
+            (number << IOC_NRSHIFT) | (size << IOC_SIZESHIFT))
+
+kind = ord("U")
+ui_set_evbit = ioc(IOC_WRITE, kind, 100, 4)
+ui_set_keybit = ioc(IOC_WRITE, kind, 101, 4)
+ui_dev_setup = ioc(IOC_WRITE, kind, 3, 92)
+ui_dev_create = ioc(0, kind, 1, 0)
+ui_dev_destroy = ioc(0, kind, 2, 0)
+ev_syn = 0
+ev_key = 1
+syn_report = 0
+key_backspace = 14
+key_leftctrl = 29
+key_leftalt = 56
+
+fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
+try:
+    fcntl.ioctl(fd, ui_set_evbit, ev_key)
+    for key in (key_backspace, key_leftctrl, key_leftalt):
+        fcntl.ioctl(fd, ui_set_keybit, key)
+    name = b"EngineOS emergency release proof"
+    setup = struct.pack("HHHH80sI", 3, 0x1E05, 0x0001, 1,
+                        name.ljust(80, b"\0"), 0)
+    fcntl.ioctl(fd, ui_dev_setup, setup)
+    fcntl.ioctl(fd, ui_dev_create)
+    time.sleep(1.5)
+
+    def event(event_type: int, code: int, value: int) -> None:
+        os.write(fd, struct.pack("llHHi", 0, 0, event_type, code, value))
+
+    for key in (key_leftctrl, key_leftalt, key_backspace):
+        event(ev_key, key, 1)
+    event(ev_syn, syn_report, 0)
+    for key in (key_backspace, key_leftalt, key_leftctrl):
+        event(ev_key, key, 0)
+    event(ev_syn, syn_report, 0)
+    time.sleep(0.5)
+finally:
+    try:
+        fcntl.ioctl(fd, ui_dev_destroy)
+    finally:
+        os.close(fd)
+PY
 }
 
 validate_native_kms_split_state() {
@@ -508,6 +582,277 @@ proof_native_falkon() {
     "restored $initial_mode shell mode"
   cp "$state_file" "$artifact_dir/restored.json"
   printf 'Native Falkon pane proof passed.\n'
+  printf 'Proof artifacts: %s\n' "$artifact_dir"
+}
+
+proof_native_quake() {
+  [[ $# -eq 0 ]] || die "native-quake proof takes no options"
+  have_cmd jq || die "native-quake proof requires jq"
+  have_cmd pactl || die "native-quake proof requires pactl"
+  have_cmd systemctl || die "native-quake proof requires systemctl"
+  have_cmd sudo || [[ "$(id -u)" -eq 0 ]] ||
+    die "native-quake proof requires sudo or root"
+
+  local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  local state_dir="$runtime_dir/engineos"
+  local state_file="$state_dir/shell-state.json"
+  local log_dir="${ENGINEOS_LOG_DIR:-$(default_log_dir)}"
+  local shell_log="${ENGINEOS_SHELL_LOG:-$log_dir/shell.log}"
+  local stamp="$(timestamp_utc)"
+  local artifact_dir="$log_dir/proof-native-quake-$stamp"
+  local fixture="${TMPDIR:-/tmp}/engineos-native-quake-proof-$$"
+  local mux_bin="${ENGINEOS_MUX_BIN:-$(command -v engine-mux || true)}"
+  local muxctl_bin="${ENGINEOS_MUXCTL_BIN:-$(command -v engine-muxctl || true)}"
+  local app_cmd="$(eos_command eos-app)"
+  local assets_cmd="$(eos_command eos-assets)"
+  local runtime_cmd="$(eos_command eos-runtime)"
+  local initial_mode="" pane_id="" pane_shell_pid="" pane_state=""
+  local pane_scope="" pane_app_pid="" pane_launch_command="" shell_command=""
+  local foreground_pgrp="" app_pgrp="" audio_pid="" prefix="" id1=""
+  local log_start=0
+
+  [[ -x "$mux_bin" ]] || die "native-quake proof requires installed engine-mux"
+  [[ -x "$muxctl_bin" ]] ||
+    die "native-quake proof requires installed engine-muxctl"
+  app_cmd="$(command -v "$app_cmd" || true)"
+  assets_cmd="$(command -v "$assets_cmd" || true)"
+  [[ -x "$app_cmd" ]] || die "native-quake proof requires eos-app"
+  [[ -x "$assets_cmd" ]] || die "native-quake proof requires eos-assets"
+  [[ -r "$state_file" ]] || die "live shell state missing: $state_file"
+  [[ -r "$shell_log" ]] || die "live shell log missing: $shell_log"
+  [[ -c /dev/tty1 ]] || die "native-quake proof requires tty1"
+  systemctl is-active --quiet engineos-dev-shell.service ||
+    die "engineos-dev-shell.service is not active"
+  jq -e '.mode == "tty"' "$state_file" >/dev/null ||
+    die "live shell is not currently attached to tty/DRM"
+  "$assets_cmd" check quake >/dev/null
+  id1="$("$assets_cmd" path quake)"
+  [[ -d "$id1" ]] || die "resolved Quake id1 directory is missing: $id1"
+  pactl info >/dev/null || die "native-quake proof requires a live audio server"
+
+  mkdir -p "$artifact_dir" "$fixture/runtime" "$fixture/home" \
+    "$fixture/config" "$fixture/cache" "$fixture/data"
+  chmod 0700 "$fixture" "$fixture/runtime" "$fixture/home" \
+    "$fixture/config" "$fixture/cache" "$fixture/data"
+  initial_mode="$(jq -r '.mux.mode' "$state_file")"
+  log_start="$(wc -l <"$shell_log")"
+  cp "$state_file" "$artifact_dir/before.json"
+  "$assets_cmd" check quake >"$artifact_dir/assets.txt"
+  native_live_begin "$fixture" "$fixture/runtime" "$mux_bin" "$runtime_cmd"
+
+  printf 'EngineOS native Quake proof\n'
+  printf '  state:     %s\n' "$state_file"
+  printf '  assets:    %s\n' "$id1"
+  printf '  artifacts: %s\n' "$artifact_dir"
+  printf '  restore:   %s\n' "$initial_mode"
+
+  printf -v shell_command \
+    'export XDG_RUNTIME_DIR=%q WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland SDL_VIDEODRIVER=wayland SDL_AUDIODRIVER=pulseaudio HOME=%q XDG_CONFIG_HOME=%q XDG_CACHE_HOME=%q XDG_DATA_HOME=%q ENGINEOS_QUAKE_ID1=%q ENGINEOS_STATE_DIR=%q ENGINEOS_LOG_DIR=%q ENGINEOS_MUX_BIN=%q; printf "QUAKE-SHELL-BEFORE\\n"; exec /bin/sh' \
+    "$runtime_dir" "$fixture/home" "$fixture/config" "$fixture/cache" \
+    "$fixture/data" "$id1" "$state_dir" "$artifact_dir" "$mux_bin"
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+    ENGINEOS_USER_RUNTIME_DIR="$runtime_dir" \
+    "$mux_bin" new-session -d -s engineos-quake-proof -x 120 -y 36 \
+      "$shell_command"
+  pane_id="$(XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" \
+    TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" "$mux_bin" display-message -p \
+      -t '=engineos-quake-proof:' '#{pane_id}')"
+  pane_shell_pid="$(XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" \
+    TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" "$mux_bin" display-message -p \
+      -t "$pane_id" '#{pane_pid}')"
+  [[ "$pane_id" == %* && "$pane_shell_pid" =~ ^[1-9][0-9]*$ ]] ||
+    die "isolated Quake pane did not expose stable pane and shell IDs"
+  local mux_socket="$NATIVE_LIVE_RUNTIME/engineos/mux.sock"
+  [[ -S "$mux_socket" ]] || die "isolated native mux frontend socket missing"
+
+  "${NATIVE_LIVE_SYSTEMCTL[@]}" set-environment \
+    ENGINEOS_MUX_MODE=native ENGINEOS_MUX_SOCKET="$mux_socket"
+  NATIVE_LIVE_MANAGER_CHANGED=true
+  NATIVE_LIVE_SHELL_SWITCHED=true
+  native_live_restart_shell
+  wait_for_native_state "$state_file" '
+    .mode == "tty" and .backend == "drm,libinput" and
+    .wayland_display == "wayland-0" and
+    .mux.mode == "native" and .mux.connected == true and
+    .mux.pane_id == $pane and .mux.presentation.type == "terminal" and
+    .mux.presentation.terminal_visible == true and
+    (.output_views | length) > 0
+  ' "isolated Quake terminal pane on direct KMS" 200 --arg pane "$pane_id"
+  prefix="$(jq -er '.mux.prefix' "$state_file")"
+  cp "$state_file" "$artifact_dir/terminal.json"
+
+  printf -v pane_launch_command '%q launch quake --window' "$app_cmd"
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+    "$mux_bin" send-keys -t "$pane_id" -l "$pane_launch_command"
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+    "$mux_bin" send-keys -t "$pane_id" Enter
+
+  wait_for_native_state "$state_file" '
+    .mux.pane_id == $pane and
+    .mux.presentation.type == "game" and
+    .mux.presentation.view_mode == "presentation" and
+    .mux.presentation.mapped == true and
+    .mux.presentation.surface_tabs >= 1 and
+    .mux.presentation.terminal_visible == false and
+    .mux.presentation.lease_owned_by_focused_view == true and
+    .input.mode == "game" and .input.capture == true and
+    .cursor.locked == true and
+    any(.windows[]; .bound == true and .pane_id == $pane and
+      .app_id == "quakespasm" and .client_pid > 0 and
+      .presentation_visible == true and .visible == true)
+  ' "scoped Quake game presentation and capture" 500 --arg pane "$pane_id"
+  cp "$state_file" "$artifact_dir/presentation.json"
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" "$muxctl_bin" snapshot \
+    >"$artifact_dir/mux-presentation.json"
+  pane_state="$(XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" \
+    TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" "$mux_bin" display-message -p \
+      -t "$pane_id" \
+      '#{pane_presentation}|#{pane_view_mode}|#{pane_presentation_scope}|#{pane_app_pid}')"
+  printf '%s\n' "$pane_state" >"$artifact_dir/pane-state.txt"
+  IFS='|' read -r _ _ pane_scope pane_app_pid <<<"$pane_state"
+  [[ "$pane_scope" == engine-pane-*.scope ]] ||
+    die "Quake launch lacks a dedicated transient scope"
+  [[ "$pane_app_pid" =~ ^[1-9][0-9]*$ ]] ||
+    die "Quake launch lacks an authoritative application PID"
+  jq -e --arg pane "$pane_id" '
+    any(.panes[]; .pane_id == $pane and .presentation == "game" and
+      (.app_command | contains("quake play --foreground")))
+  ' "$artifact_dir/mux-presentation.json" >/dev/null ||
+    die "eos-app did not route Quake through the native game pane adapter"
+  systemctl --user show "$pane_scope" -p Id -p ActiveState -p SubState \
+    -p ControlGroup -p MainPID >"$artifact_dir/scope-active.txt"
+  grep -F "/$pane_scope" "/proc/$pane_app_pid/cgroup" >/dev/null ||
+    die "Quake pane process is outside its authoritative scope"
+  foreground_pgrp="$(ps -o tpgid= -p "$pane_shell_pid" | tr -d ' ')"
+  app_pgrp="$(ps -o pgid= -p "$pane_app_pid" | tr -d ' ')"
+  [[ -n "$foreground_pgrp" && "$foreground_pgrp" == "$app_pgrp" ]] ||
+    die "Quake is not the pane PTY foreground process group"
+
+  for _ in {1..300}; do
+    XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+      "$mux_bin" capture-pane -p -S -2000 -t "$pane_id" \
+      >"$artifact_dir/console-during.txt"
+    grep -F '========= Quake Initialized =========' \
+      "$artifact_dir/console-during.txt" >/dev/null && break
+    sleep 0.05
+  done
+  grep -F 'QUAKE-SHELL-BEFORE' "$artifact_dir/console-during.txt" >/dev/null ||
+    die "Quake backing console lost its pre-launch output"
+  grep -F 'GL_RENDERER: AMD Radeon RX 5600 XT (radeonsi' \
+    "$artifact_dir/console-during.txt" >/dev/null ||
+    die "Quake console lacks AMD/radeonsi rendering evidence"
+  grep -F 'SDL audio driver: pulseaudio' \
+    "$artifact_dir/console-during.txt" >/dev/null ||
+    die "Quake console lacks PulseAudio/PipeWire initialization evidence"
+  grep -F '========= Quake Initialized =========' \
+    "$artifact_dir/console-during.txt" >/dev/null ||
+    die "Quake did not finish real engine initialization"
+
+  for _ in {1..200}; do
+    pactl -f json list sink-inputs >"$artifact_dir/audio-active.json"
+    audio_pid="$(jq -r 'first(.[] | select(
+      .properties["application.name"] == "quakespasm" and
+      .properties["stream.is-live"] == "true" and
+      (.properties["target.object"] | startswith("alsa_output.")) and
+      .corked == false)) | .properties["application.process.id"] // empty' \
+      "$artifact_dir/audio-active.json")"
+    [[ "$audio_pid" =~ ^[1-9][0-9]*$ ]] && break
+    sleep 0.05
+  done
+  [[ "$audio_pid" =~ ^[1-9][0-9]*$ ]] ||
+    die "Quake did not expose an uncorked live hardware audio stream"
+  grep -F "/$pane_scope" "/proc/$audio_pid/cgroup" >/dev/null ||
+    die "Quake audio process is outside its authoritative pane scope"
+
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" "$muxctl_bin" keys "$pane_id" \
+    "$prefix" v >"$artifact_dir/prefix-console.json"
+  wait_for_native_state "$state_file" '
+    .mux.presentation.type == "game" and
+    .mux.presentation.view_mode == "console" and
+    .mux.presentation.terminal_visible == true and
+    .input.mode == "terminal" and .input.capture == false and
+    .cursor.locked == false and
+    all(.windows[]; .bound == false or .visible == false)
+  ' "Quake console through the native prefix binding"
+  cp "$state_file" "$artifact_dir/console.json"
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" "$muxctl_bin" keys "$pane_id" \
+    "$prefix" v >"$artifact_dir/prefix-app.json"
+  wait_for_native_state "$state_file" '
+    .mux.presentation.type == "game" and
+    .mux.presentation.view_mode == "presentation" and
+    .input.mode == "game" and .input.capture == true and
+    .cursor.locked == true and
+    any(.windows[]; .bound == true and .visible == true)
+  ' "Quake presentation restored through the native prefix binding"
+
+  emit_emergency_release_chord
+  wait_for_native_state "$state_file" '
+    .mux.presentation.type == "game" and
+    .input.mode == "shell" and .input.capture == false and
+    .cursor.locked == false
+  ' "real Ctrl+Alt+Backspace emergency release" 300
+  cp "$state_file" "$artifact_dir/emergency-release.json"
+  sed -n "$((log_start + 1)),\$p" "$shell_log" \
+    >"$artifact_dir/shell-native-quake.log"
+  grep -F 'keybinding ctrl+alt+backspace: emergency release' \
+    "$artifact_dir/shell-native-quake.log" >/dev/null ||
+    die "shell log lacks the physical emergency-release keybinding"
+  grep -F 'input emergency-release complete' \
+    "$artifact_dir/shell-native-quake.log" >/dev/null ||
+    die "shell did not complete emergency release"
+
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" "$muxctl_bin" keys "$pane_id" \
+    "$prefix" v >/dev/null
+  wait_for_native_state "$state_file" '
+    .mux.presentation.view_mode == "console" and
+    .mux.presentation.terminal_visible == true and
+    .input.mode == "terminal" and .input.capture == false
+  ' "console after emergency release"
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" "$muxctl_bin" keys "$pane_id" \
+    "$prefix" v >/dev/null
+  wait_for_native_state "$state_file" '
+    .mux.presentation.view_mode == "presentation" and
+    .input.mode == "game" and .input.capture == true and
+    .cursor.locked == true
+  ' "game capture restored after emergency release"
+
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+    "$mux_bin" signal-pane-app -t "$pane_id" TERM
+  wait_for_native_state "$state_file" '
+    .mux.presentation.type == "terminal" and
+    .mux.presentation.terminal_visible == true and
+    .input.mode == "terminal" and .input.capture == false and
+    .cursor.locked == false and all(.windows[]; .bound == false)
+  ' "console after Quake exit" 500
+  for _ in {1..200}; do
+    foreground_pgrp="$(ps -o tpgid= -p "$pane_shell_pid" | tr -d ' ')"
+    [[ "$foreground_pgrp" == "$pane_shell_pid" ]] && break
+    sleep 0.05
+  done
+  [[ "$foreground_pgrp" == "$pane_shell_pid" ]] ||
+    die "pane shell did not regain the PTY after Quake exited"
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+    "$mux_bin" send-keys -t "$pane_id" -l 'printf "QUAKE-SHELL-AFTER\n"'
+  XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+    "$mux_bin" send-keys -t "$pane_id" Enter
+  for _ in {1..100}; do
+    XDG_RUNTIME_DIR="$NATIVE_LIVE_RUNTIME" TMUX_TMPDIR="$NATIVE_LIVE_RUNTIME" \
+      "$mux_bin" capture-pane -p -S -2000 -t "$pane_id" \
+      >"$artifact_dir/console-after.txt"
+    grep -F 'QUAKE-SHELL-AFTER' "$artifact_dir/console-after.txt" \
+      >/dev/null && break
+    sleep 0.05
+  done
+  grep -F 'QUAKE-SHELL-AFTER' "$artifact_dir/console-after.txt" >/dev/null ||
+    die "pane shell did not accept input after Quake exited"
+  cp "$state_file" "$artifact_dir/exited.json"
+
+  native_live_cleanup
+  trap - EXIT INT TERM
+  wait_for_native_state "$state_file" ".mux.mode == \"$initial_mode\"" \
+    "restored $initial_mode shell mode"
+  cp "$state_file" "$artifact_dir/restored.json"
+  printf 'Native Quake pane proof passed.\n'
   printf 'Proof artifacts: %s\n' "$artifact_dir"
 }
 
@@ -1346,6 +1691,9 @@ case "$ACTION" in
     ;;
   native-falkon)
     proof_native_falkon "$@"
+    ;;
+  native-quake)
+    proof_native_quake "$@"
     ;;
   visual)
     proof_visual "$@"

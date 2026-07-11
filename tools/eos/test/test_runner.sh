@@ -5544,6 +5544,10 @@ run_proof() {
   "$PROOF_DIR/proof.sh" --help >"$tmp_dir/help.txt"
   grep -F 'proof.sh native-kms' "$tmp_dir/help.txt" >/dev/null ||
     die "proof help does not expose native KMS acceptance"
+  grep -F 'proof.sh native-falkon' "$tmp_dir/help.txt" >/dev/null ||
+    die "proof help does not expose native Falkon acceptance"
+  grep -F 'proof.sh native-quake' "$tmp_dir/help.txt" >/dev/null ||
+    die "proof help does not expose native Quake acceptance"
   shell_pid_before="$(pgrep -n -x engineos-shell 2>/dev/null || true)"
   if "$PROOF_DIR/proof.sh" native-kms --dry-run \
       >"$tmp_dir/native-kms-invalid.txt" 2>&1; then
@@ -5555,6 +5559,13 @@ run_proof() {
   shell_pid_after="$(pgrep -n -x engineos-shell 2>/dev/null || true)"
   [[ "$shell_pid_after" == "$shell_pid_before" ]] ||
     die "rejected native KMS proof mutated the live shell"
+  if "$PROOF_DIR/proof.sh" native-quake --dry-run \
+      >"$tmp_dir/native-quake-invalid.txt" 2>&1; then
+    die "native Quake proof accepted a dry-run substitute"
+  fi
+  grep -F 'native-quake proof takes no options' \
+    "$tmp_dir/native-quake-invalid.txt" >/dev/null ||
+    die "native Quake proof did not reject non-acceptance options explicitly"
   ENGINEOS_LOG_DIR="$tmp_dir/logs" "$PROOF_DIR/proof.sh" release-candidate --dry-run --out-dir "$tmp_dir/out" >"$tmp_dir/release-candidate.txt"
   grep -F 'build EngineRuntime ISO dry-run' "$tmp_dir/release-candidate.txt" >/dev/null ||
     die "release-candidate proof did not include EngineRuntime ISO dry-run"
