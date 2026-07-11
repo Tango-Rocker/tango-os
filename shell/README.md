@@ -81,12 +81,17 @@ focused-output shell refresh. Every registered output also retains its own
 validated session, selected-pane, generation, pane-count, and revision model
 in `shell-state.json`; the contract proves a nonfocused output can move to
 another session without overwriting the focused model and that its cache
-follows reattachment. Independent nonfocused grid/UI renderers and input
-promotion remain. Each output model already resolves retained, subscribed pane
+follows reattachment. Independent per-output UI renderers and input promotion
+remain. Each output model already resolves retained, subscribed pane
 grids—including panes in a different nonfocused session—and reports grid
 readiness, subscription coverage, and selected-grid revision. State
 invalidations remain sticky across request servicing so output snapshots
-cannot silently miss a concurrent session or layout transition.
+cannot silently miss a concurrent session or layout transition. Each
+output-pane scene owns its terminal renderer, render target, buffer, damage,
+and statistics; linked outputs may resolve the same canonical grid but never
+share compositor render targets. Grid ownership is preserved when focus moves
+between sessions, and the contract proves nonfocused damage advances the
+correct output renderer.
 Terminal image transport, direct-KMS clipping, ordinary simultaneous
 text-client acceptance, and final live hardware acceptance remain before
 native mode becomes the default.

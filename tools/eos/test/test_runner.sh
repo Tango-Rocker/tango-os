@@ -893,7 +893,9 @@ PY
 		 all(.output_views[]; .model_ready and .model_revision > 0 and
 		   .session_id == $session and .pane_count > 0 and
 		   .pane_generation > 0 and .grid_ready_count == .pane_count and
-		   .grid_subscribed_count == .pane_count and .grid_revision > 0)' \
+		   .grid_subscribed_count == .pane_count and .grid_revision > 0 and
+		   .rendered_pane_count == .pane_count and
+		   .selected_renderer_frame > 0 and .selected_renderer != null)' \
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "shell did not retain an authoritative model for every output view"
 	jq -e '
@@ -1119,26 +1121,48 @@ PY
 		"$mux_bin" break-pane -d -P -F '#{window_id}' -s "$topology_pane")"
 	for _ in {1..150}; do
 		jq -e --arg pane "$topology_pane" \
-			'.mux.panes | length == 2 and all(.[]; .pane_id != $pane)' \
+			'any(.output_views[]; .focused and .pane_count == 2 and
+			   .rendered_pane_count == 2) and
+			 all(.mux.panes[]; .pane_id != $pane or
+			   .scene.output_scene_count == 0)' \
 			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
 		sleep 0.02
 	done
 	jq -e --arg pane "$topology_pane" \
-		'.mux.panes | length == 2 and all(.[]; .pane_id != $pane)' \
-		"$fixture/engineos/shell-state.json" >/dev/null ||
+		'any(.output_views[]; .focused and .pane_count == 2 and
+		   .rendered_pane_count == 2) and
+		 all(.mux.panes[]; .pane_id != $pane or
+		   .scene.output_scene_count == 0)' \
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '{mux,output_views,last_reason}' \
+			"$fixture/engineos/shell-state.json" >&2 || true
+		tail -120 "$fixture/shell-native.log" >&2 || true
 		die "break-pane did not remove the pane from the active graphical scene"
+	}
 	destination_session="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
 		"$mux_bin" new-session -d -s topology-destination -P -F '#{session_id}')"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		move-window -s "$broken_window" -t topology-destination:
+	local graphical_output
+	graphical_output="$(jq -er \
+		'.output_views[] | select(.focused) | .output' \
+		"$fixture/engineos/shell-state.json")"
 	graphical_client="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
 		"$mux_bin" list-clients -F '#{client_name}|#{client_tty}' | \
-		awk -F'|' '$1 ~ /^engineos-view-/ &&
-			$2 != "engine-muxctl-presentation" { print $1; exit }')"
+		awk -F'|' -v output="$graphical_output" \
+			'$1 ~ /^engineos-view-/ && $2 == output { print $1; exit }')"
 	[[ -n "$graphical_client" ]] ||
 		die "native mux graphical tmux client was not discoverable"
-	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
-		switch-client -c "$graphical_client" -t "$topology_pane"
+	if ! XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			switch-client -c "$graphical_client" -t "$topology_pane"; then
+		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			list-clients -F '#{client_name}|#{client_tty}|#{client_session}' \
+			>&2 || true
+		jq '{mux,output_views,last_reason}' \
+			"$fixture/engineos/shell-state.json" >&2 || true
+		tail -120 "$fixture/shell-native.log" >&2 || true
+		die "focused graphical client disappeared before session transfer"
+	fi
 	for _ in {1..200}; do
 		jq -e --arg session "$destination_session" --arg pane "$topology_pane" \
 			--argjson generation "$topology_generation" \
@@ -1156,8 +1180,12 @@ PY
 		 (.mux.panes | length) == 1 and
 		 (.mux.panes[0].generation == $generation) and
 		 .mux.panes[0].scene.rendered' \
-		"$fixture/engineos/shell-state.json" >/dev/null ||
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '{mux,output_views,last_reason}' \
+			"$fixture/engineos/shell-state.json" >&2 || true
+		tail -120 "$fixture/shell-native.log" >&2 || true
 		die "moved window/session did not transfer the graphical client view with stable pane identity"
+	}
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		link-window -s contract:0 -t topology-destination:
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot \
@@ -1165,8 +1193,13 @@ PY
 	jq -e '([.panes[].pane_id] | unique | length) == (.panes | length)' \
 		"$fixture/linked-global-snapshot.json" >/dev/null ||
 		die "unscoped mux snapshot duplicated a linked canonical window"
-	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
-		switch-client -c "$graphical_client" -t "$shell_pane_id"
+	if ! XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			switch-client -c "$graphical_client" -t "$shell_pane_id"; then
+		jq '{mux,output_views,last_reason}' \
+			"$fixture/engineos/shell-state.json" >&2 || true
+		tail -120 "$fixture/shell-native.log" >&2 || true
+		die "graphical client disappeared before linked-window return"
+	fi
 	for _ in {1..200}; do
 		jq -e --arg session "$destination_session" --arg pane "$shell_pane_id" \
 			'.mux.session_id == $session and .mux.pane_id == $pane and
@@ -1771,7 +1804,8 @@ PY
 	fi
 	local focused_session nonfocused_output nonfocused_client
 	local output_session_id output_session_pane output_grid_revision
-	local updated_output_grid_revision
+	local updated_output_grid_revision output_renderer_frame
+	local updated_output_renderer_frame
 	focused_session="$(jq -er '.mux.session_id' \
 		"$fixture/engineos/shell-state.json")"
 	nonfocused_output="$(jq -er \
@@ -1797,7 +1831,8 @@ PY
 			 any(.output_views[]; .output == $output and .model_ready and
 			   .session_id == $session and .pane_id == $pane and .pane_count == 1 and
 			   .grid_ready_count == 1 and .grid_subscribed_count == 1 and
-			   .grid_revision > 0) and
+			   .grid_revision > 0 and .rendered_pane_count == 1 and
+			   .console_scene_count == 1 and .selected_renderer_frame > 0) and
 			 any(.output_views[]; .focused and .session_id == $focused_session)' \
 			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
 		sleep 0.02
@@ -1810,7 +1845,8 @@ PY
 		 any(.output_views[]; .output == $output and .model_ready and
 		   .session_id == $session and .pane_id == $pane and .pane_count == 1 and
 		   .grid_ready_count == 1 and .grid_subscribed_count == 1 and
-		   .grid_revision > 0) and
+		   .grid_revision > 0 and .rendered_pane_count == 1 and
+		   .console_scene_count == 1 and .selected_renderer_frame > 0) and
 		 any(.output_views[]; .focused and .session_id == $focused_session)' \
 		"$fixture/engineos/shell-state.json" >/dev/null || {
 		jq '{mux:{session_id:.mux.session_id,client_view_id:.mux.client_view_id},output_views}' \
@@ -1821,19 +1857,28 @@ PY
 	output_grid_revision="$(jq -er --arg output "$nonfocused_output" \
 		'.output_views[] | select(.output == $output) | .grid_revision' \
 		"$fixture/engineos/shell-state.json")"
+	output_renderer_frame="$(jq -er --arg output "$nonfocused_output" \
+		'.output_views[] | select(.output == $output) | .selected_renderer_frame' \
+		"$fixture/engineos/shell-state.json")"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		send-keys -t "$output_session_pane" \
 		"printf NONFOCUSED-OUTPUT-GRID-DAMAGE" Enter
 	updated_output_grid_revision="$output_grid_revision"
+	updated_output_renderer_frame="$output_renderer_frame"
 	for _ in {1..150}; do
 		updated_output_grid_revision="$(jq -er --arg output "$nonfocused_output" \
 			'.output_views[] | select(.output == $output) | .grid_revision' \
 			"$fixture/engineos/shell-state.json")"
-		[[ "$updated_output_grid_revision" -gt "$output_grid_revision" ]] && break
+		updated_output_renderer_frame="$(jq -er --arg output "$nonfocused_output" \
+			'.output_views[] | select(.output == $output) | .selected_renderer_frame' \
+			"$fixture/engineos/shell-state.json")"
+		[[ "$updated_output_grid_revision" -gt "$output_grid_revision" &&
+			"$updated_output_renderer_frame" -gt "$output_renderer_frame" ]] && break
 		sleep 0.02
 	done
-	[[ "$updated_output_grid_revision" -gt "$output_grid_revision" ]] ||
-		die "nonfocused output grid damage did not advance its retained model"
+	[[ "$updated_output_grid_revision" -gt "$output_grid_revision" &&
+		"$updated_output_renderer_frame" -gt "$output_renderer_frame" ]] ||
+		die "nonfocused output grid damage did not advance its retained renderer"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		switch-client -c "$nonfocused_client" -t "$focused_session"
 	for _ in {1..150}; do

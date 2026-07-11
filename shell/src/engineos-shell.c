@@ -189,6 +189,9 @@ struct engineos_mux_pane_output_scene {
 	struct engineos_shell_output *output;
 	struct wlr_scene_tree *tree;
 	struct wlr_scene_buffer *terminal_scene;
+	struct wlr_buffer *buffer;
+	struct engineos_terminal_renderer *renderer;
+	struct engineos_terminal_render_stats stats;
 };
 
 struct engineos_mux_pane_scene {
@@ -196,9 +199,6 @@ struct engineos_mux_pane_scene {
 	struct wl_list output_scenes;
 	uint32_t pane_id;
 	uint32_t generation;
-	struct wlr_buffer *buffer;
-	struct engineos_terminal_renderer *renderer;
-	struct engineos_terminal_render_stats stats;
 };
 
 struct engineos_shell_server {
@@ -419,6 +419,8 @@ static struct engineos_pane_binding *pane_binding_for_view(
 static struct engineos_mux_pane_scene *find_mux_pane_scene(
 	struct engineos_shell_server *server, uint32_t pane_id,
 	uint32_t generation);
+static struct engineos_mux_pane_output_scene *find_mux_pane_output_scene(
+	struct engineos_mux_pane_scene *pane_scene, uint32_t view_id);
 static void sync_native_preview_leases(struct engineos_shell_server *server,
 	const char *reason);
 static void apply_view_layout(struct engineos_shell_view *view);
@@ -1787,11 +1789,14 @@ static bool compute_view_geometry(struct engineos_shell_view *view,
 	if (view->mux_bound) {
 		struct engineos_mux_pane_scene *pane_scene = find_mux_pane_scene(
 			view->server, view->mux_pane_id, view->mux_pane_generation);
-		if (pane_scene == NULL || pane_scene->stats.width <= 0 ||
-				pane_scene->stats.height <= 0)
+		struct engineos_mux_pane_output_scene *output_scene = pane_scene != NULL ?
+			find_mux_pane_output_scene(pane_scene,
+				view->server->mux_client.primary_view_id) : NULL;
+		if (output_scene == NULL || output_scene->stats.width <= 0 ||
+				output_scene->stats.height <= 0)
 			return false;
-		int pane_width = pane_scene->stats.width;
-		int pane_height = pane_scene->stats.height;
+		int pane_width = output_scene->stats.width;
+		int pane_height = output_scene->stats.height;
 		geometry->width = pane_width;
 		geometry->height = pane_height;
 		if (view->mux_transient) {
@@ -2483,6 +2488,18 @@ static struct engineos_mux_pane_model *find_shell_pane_model(
 	return NULL;
 }
 
+static struct engineos_mux_pane_model *find_output_pane_model(
+		struct engineos_shell_output *output, uint32_t pane_id,
+		uint32_t generation) {
+	for (size_t index = 0; index < output->mux_snapshot.pane_count; index++) {
+		struct engineos_mux_pane_model *pane =
+			&output->mux_snapshot.panes[index];
+		if (pane->pane_id == pane_id && pane->generation == generation)
+			return pane;
+	}
+	return NULL;
+}
+
 static struct engineos_mux_pane_model *native_preview_pane_for_request(
 		struct engineos_shell_server *server, struct json_object *request) {
 	if (server->mux_mode != ENGINEOS_MUX_NATIVE || !server->mux_client.ready)
@@ -2522,23 +2539,20 @@ static struct engineos_mux_pane_model *native_preview_pane_for_request(
 }
 
 static void pane_render_client(struct engineos_shell_server *server,
-		struct engineos_mux_pane_model *pane,
+		struct engineos_mux_pane_model *grid,
 		struct engineos_mux_client *render_client) {
 	*render_client = server->mux_client;
-	if (pane->pane_id != server->mux_client.pane_id ||
-			pane->generation != server->mux_client.pane_generation) {
-		render_client->grid_revision = pane->grid.revision;
-		render_client->grid_columns = pane->grid.columns;
-		render_client->grid_rows = pane->grid.rows;
-		render_client->grid_cursor_x = pane->grid.cursor_x;
-		render_client->grid_cursor_y = pane->grid.cursor_y;
-		render_client->grid_nonblank_cells = pane->grid.nonblank_cells;
-		render_client->grid_flags = pane->grid.flags;
-		render_client->grid_cells = pane->grid.cells;
-		render_client->grid_damage_cells = pane->grid.damage_cells;
-		render_client->grid_damage_count = pane->grid.damage_count;
-		render_client->grid_full_damage = pane->grid.full_damage;
-	}
+	render_client->grid_revision = grid->grid.revision;
+	render_client->grid_columns = grid->grid.columns;
+	render_client->grid_rows = grid->grid.rows;
+	render_client->grid_cursor_x = grid->grid.cursor_x;
+	render_client->grid_cursor_y = grid->grid.cursor_y;
+	render_client->grid_nonblank_cells = grid->grid.nonblank_cells;
+	render_client->grid_flags = grid->grid.flags;
+	render_client->grid_cells = grid->grid.cells;
+	render_client->grid_damage_cells = grid->grid.damage_cells;
+	render_client->grid_damage_count = grid->grid.damage_count;
+	render_client->grid_full_damage = grid->grid.full_damage;
 	render_client->ui_columns = 0;
 	render_client->ui_rows = 0;
 	render_client->ui_status_y = -1;
@@ -2571,14 +2585,7 @@ static void ui_render_client(struct engineos_shell_server *server,
 
 static bool create_mux_pane_scene(struct engineos_shell_server *server,
 		struct engineos_mux_pane_model *pane, char *error, size_t error_size) {
-	struct engineos_mux_client render_client;
-	pane_render_client(server, pane, &render_client);
-	if (render_client.grid_cells == NULL || render_client.grid_columns == 0 ||
-			render_client.grid_rows == 0) {
-		snprintf(error, error_size, "pane %%%u has no retained terminal grid",
-			pane->pane_id);
-		return false;
-	}
+	(void)server;
 	struct engineos_mux_pane_scene *scene = calloc(1, sizeof(*scene));
 	if (scene == NULL) {
 		snprintf(error, error_size, "out of memory creating pane scene");
@@ -2587,20 +2594,7 @@ static bool create_mux_pane_scene(struct engineos_shell_server *server,
 	scene->pane_id = pane->pane_id;
 	scene->generation = pane->generation;
 	wl_list_init(&scene->output_scenes);
-	scene->renderer = engineos_terminal_renderer_create(server->renderer,
-		server->allocator, &render_client, error, error_size);
-	if (scene->renderer == NULL) {
-		free(scene);
-		return false;
-	}
-	scene->buffer = engineos_terminal_renderer_buffer(scene->renderer);
-	engineos_terminal_renderer_stats(scene->renderer, &scene->stats);
 	wl_list_insert(server->mux_pane_scenes.prev, &scene->link);
-	if (pane->pane_id == server->mux_client.pane_id &&
-			pane->generation == server->mux_client.pane_generation) {
-		server->mux_terminal_renderer = scene->renderer;
-		server->mux_terminal_buffer = scene->buffer;
-	}
 	return true;
 }
 
@@ -2612,6 +2606,15 @@ static struct engineos_mux_pane_output_scene *find_mux_pane_output_scene(
 			return output_scene;
 	}
 	return NULL;
+}
+
+static void destroy_mux_pane_output_scene(
+		struct engineos_mux_pane_output_scene *output_scene) {
+	if (output_scene->tree != NULL)
+		wlr_scene_node_destroy(&output_scene->tree->node);
+	engineos_terminal_renderer_destroy(output_scene->renderer);
+	wl_list_remove(&output_scene->link);
+	free(output_scene);
 }
 
 static bool pane_presentation_owned_by_output(
@@ -2640,19 +2643,41 @@ static bool create_mux_pane_output_scene(
 		return false;
 	}
 	output_scene->output = output;
+	struct engineos_mux_pane_model *grid =
+		engineos_mux_client_view_pane_grid(&output->server->mux_client, pane);
+	if (grid == NULL || !grid->grid.ready || grid->grid.cells == NULL) {
+		free(output_scene);
+		snprintf(error, error_size,
+			"output pane %%%u has no retained terminal grid", pane->pane_id);
+		return false;
+	}
+	struct engineos_mux_client render_client;
+	pane_render_client(output->server, grid, &render_client);
+	output_scene->renderer = engineos_terminal_renderer_create(
+		output->server->renderer, output->server->allocator, &render_client,
+		error, error_size);
+	if (output_scene->renderer == NULL) {
+		free(output_scene);
+		return false;
+	}
+	output_scene->buffer = engineos_terminal_renderer_buffer(
+		output_scene->renderer);
+	engineos_terminal_renderer_stats(output_scene->renderer,
+		&output_scene->stats);
 	output_scene->tree = wlr_scene_tree_create(output->mux_scene_tree);
 	if (output_scene->tree != NULL)
 		output_scene->terminal_scene = wlr_scene_buffer_create(
-			output_scene->tree, pane_scene->buffer);
+			output_scene->tree, output_scene->buffer);
 	if (output_scene->tree == NULL || output_scene->terminal_scene == NULL) {
 		if (output_scene->tree != NULL)
 			wlr_scene_node_destroy(&output_scene->tree->node);
+		engineos_terminal_renderer_destroy(output_scene->renderer);
 		free(output_scene);
 		snprintf(error, error_size, "failed to create output pane scene nodes");
 		return false;
 	}
-	int cell_width = pane_scene->stats.width / (int)pane->grid.columns;
-	int cell_height = pane_scene->stats.height / (int)pane->grid.rows;
+	int cell_width = output_scene->stats.width / (int)grid->grid.columns;
+	int cell_height = output_scene->stats.height / (int)grid->grid.rows;
 	wlr_scene_node_set_position(&output_scene->tree->node,
 		(int)pane->left * cell_width, (int)pane->top * cell_height);
 	wlr_scene_node_set_enabled(&output_scene->tree->node, pane->visible);
@@ -2677,12 +2702,21 @@ static bool create_mux_output_scene(struct engineos_shell_output *output,
 	if (layout_output != NULL)
 		wlr_scene_node_set_position(&output->mux_scene_tree->node,
 			layout_output->x, layout_output->y);
-	struct engineos_mux_pane_scene *pane_scene;
-	wl_list_for_each(pane_scene, &server->mux_pane_scenes, link) {
-		struct engineos_mux_pane_model *pane = find_shell_pane_model(server,
-			pane_scene->pane_id, pane_scene->generation);
-		if (pane != NULL && !create_mux_pane_output_scene(pane_scene, output,
-				pane, error, error_size))
+	for (size_t index = 0; index < output->mux_snapshot.pane_count; index++) {
+		struct engineos_mux_pane_model *pane =
+			&output->mux_snapshot.panes[index];
+		if (!pane->window_active)
+			continue;
+		struct engineos_mux_pane_scene *pane_scene = find_mux_pane_scene(server,
+			pane->pane_id, pane->generation);
+		if (pane_scene == NULL) {
+			if (!create_mux_pane_scene(server, pane, error, error_size))
+				return false;
+			pane_scene = find_mux_pane_scene(server, pane->pane_id,
+				pane->generation);
+		}
+		if (!create_mux_pane_output_scene(pane_scene, output, pane, error,
+				error_size))
 			return false;
 	}
 	output->mux_ui_scene = wlr_scene_buffer_create(output->mux_scene_tree,
@@ -2701,8 +2735,7 @@ static void destroy_mux_output_scene(struct engineos_shell_output *output) {
 		wl_list_for_each_safe(output_scene, next, &pane_scene->output_scenes, link) {
 			if (output_scene->output != output)
 				continue;
-			wl_list_remove(&output_scene->link);
-			free(output_scene);
+			destroy_mux_pane_output_scene(output_scene);
 		}
 	}
 	if (output->mux_scene_tree != NULL) {
@@ -2719,14 +2752,6 @@ static bool setup_native_terminal_scene(struct engineos_shell_server *server) {
 		wlr_log(WLR_ERROR, "failed to create native mux scene root");
 		return false;
 	}
-	for (size_t index = 0; index < server->mux_client.pane_count; index++) {
-		struct engineos_mux_pane_model *pane = &server->mux_client.panes[index];
-		if (pane->window_active &&
-				!create_mux_pane_scene(server, pane, error, sizeof(error))) {
-			wlr_log(WLR_ERROR, "native pane render failed: %s", error);
-			return false;
-		}
-	}
 	struct engineos_mux_client ui_client;
 	ui_render_client(server, &ui_client);
 	server->mux_ui_renderer = engineos_terminal_renderer_create(server->renderer,
@@ -2739,15 +2764,6 @@ static bool setup_native_terminal_scene(struct engineos_shell_server *server) {
 	engineos_terminal_renderer_stats(server->mux_ui_renderer, &ui_stats);
 	server->mux_terminal_width = ui_stats.width;
 	server->mux_terminal_height = ui_stats.height;
-	if (server->mux_terminal_renderer != NULL) {
-		struct engineos_terminal_render_stats stats;
-		engineos_terminal_renderer_stats(server->mux_terminal_renderer, &stats);
-		server->mux_terminal_glyph_cells = stats.glyph_cells;
-		server->mux_terminal_atlas_entries = stats.atlas_entries;
-		server->mux_terminal_damaged_cells = stats.damaged_cells;
-		server->mux_terminal_nonblank_pixels = stats.nonblank_pixels;
-		server->mux_terminal_frame = stats.frame;
-	}
 	engineos_mux_client_clear_render_damage(&server->mux_client);
 	for (size_t index = 0; index < server->mux_client.pane_count; index++)
 		engineos_mux_pane_model_clear_render_damage(&server->mux_client.panes[index]);
@@ -2758,7 +2774,7 @@ static bool setup_native_terminal_scene(struct engineos_shell_server *server) {
 		server->mux_terminal_height,
 		server->mux_terminal_renderer != NULL ?
 		engineos_terminal_renderer_mode(server->mux_terminal_renderer) : "none");
-	return server->mux_terminal_renderer != NULL;
+	return true;
 }
 
 static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
@@ -2766,103 +2782,152 @@ static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
 	char error[256] = {0};
 	struct engineos_mux_pane_scene *scene, *next;
 	wl_list_for_each_safe(scene, next, &server->mux_pane_scenes, link) {
-		struct engineos_mux_pane_model *pane = find_shell_pane_model(server,
-			scene->pane_id, scene->generation);
-		if (pane != NULL && pane->window_active)
-			continue;
-		if (server->mux_terminal_renderer == scene->renderer) {
-			server->mux_terminal_renderer = NULL;
-			server->mux_terminal_scene = NULL;
-			server->mux_terminal_buffer = NULL;
-		}
-		struct engineos_shell_view *view;
-		wl_list_for_each(view, &server->views, link) {
-			if (!view->mux_bound || view->mux_pane_id != scene->pane_id ||
-					view->mux_pane_generation != scene->generation)
-				continue;
-			wlr_scene_node_reparent(&view->scene_tree->node,
-				&server->scene->tree);
-			wlr_scene_node_set_enabled(&view->scene_tree->node, false);
-			view->mux_presentation_visible = false;
-		}
 		struct engineos_mux_pane_output_scene *output_scene, *next_output_scene;
 		wl_list_for_each_safe(output_scene, next_output_scene,
 				&scene->output_scenes, link) {
-			wlr_scene_node_destroy(&output_scene->tree->node);
-			wl_list_remove(&output_scene->link);
-			free(output_scene);
+			struct engineos_mux_pane_model *pane = find_output_pane_model(
+				output_scene->output, scene->pane_id, scene->generation);
+			if (pane == NULL || !pane->window_active)
+				destroy_mux_pane_output_scene(output_scene);
 		}
-		engineos_terminal_renderer_destroy(scene->renderer);
-		wl_list_remove(&scene->link);
-		free(scene);
-	}
-	for (size_t index = 0; index < server->mux_client.pane_count; index++) {
-		struct engineos_mux_pane_model *pane = &server->mux_client.panes[index];
-		if (pane->window_active && find_mux_pane_scene(server, pane->pane_id,
-				pane->generation) == NULL) {
-			if (!create_mux_pane_scene(server, pane, error, sizeof(error))) {
-				wlr_log(WLR_ERROR, "native pane scene creation failed: %s", error);
-				return false;
+		if (wl_list_empty(&scene->output_scenes)) {
+			struct engineos_shell_view *view;
+			wl_list_for_each(view, &server->views, link) {
+				if (!view->mux_bound || view->mux_pane_id != scene->pane_id ||
+						view->mux_pane_generation != scene->generation)
+					continue;
+				wlr_scene_node_reparent(&view->scene_tree->node,
+					&server->scene->tree);
+				wlr_scene_node_set_enabled(&view->scene_tree->node, false);
+				view->mux_presentation_visible = false;
 			}
-			struct engineos_mux_pane_scene *created = find_mux_pane_scene(server,
-				pane->pane_id, pane->generation);
-			struct engineos_shell_output *output;
-			wl_list_for_each(output, &server->outputs, link) {
-				if (output->mux_registered &&
-						!create_mux_pane_output_scene(created, output, pane,
-							error, sizeof(error))) {
+			wl_list_remove(&scene->link);
+			free(scene);
+		}
+	}
+	struct engineos_shell_output *output;
+	wl_list_for_each(output, &server->outputs, link) {
+		if (!output->mux_registered)
+			continue;
+		for (size_t index = 0; index < output->mux_snapshot.pane_count; index++) {
+			struct engineos_mux_pane_model *pane =
+				&output->mux_snapshot.panes[index];
+			if (!pane->window_active)
+				continue;
+			struct engineos_mux_pane_scene *pane_scene = find_mux_pane_scene(
+				server, pane->pane_id, pane->generation);
+			if (pane_scene == NULL) {
+				if (!create_mux_pane_scene(server, pane, error, sizeof(error))) {
 					wlr_log(WLR_ERROR,
-						"native output pane scene creation failed: %s", error);
+						"native pane scene creation failed: %s", error);
 					return false;
 				}
+				pane_scene = find_mux_pane_scene(server, pane->pane_id,
+					pane->generation);
+			}
+			if (!create_mux_pane_output_scene(pane_scene, output, pane, error,
+					sizeof(error))) {
+				wlr_log(WLR_ERROR,
+					"native output pane scene creation failed: %s", error);
+				return false;
 			}
 		}
 	}
 	server->mux_terminal_scene = NULL;
 	server->mux_ui_scene = NULL;
+	server->mux_terminal_renderer = NULL;
+	server->mux_terminal_buffer = NULL;
 	wl_list_for_each(scene, &server->mux_pane_scenes, link) {
-		struct engineos_mux_pane_model *pane = find_shell_pane_model(server,
-			scene->pane_id, scene->generation);
-		if (pane == NULL) continue;
-		struct engineos_mux_client render_client;
-		pane_render_client(server, pane, &render_client);
-		if (!engineos_terminal_renderer_update(scene->renderer, &render_client,
-				error, sizeof(error))) {
-			wlr_log(WLR_ERROR, "native pane damage render failed: %s", error);
-			return false;
-		}
-		scene->buffer = engineos_terminal_renderer_buffer(scene->renderer);
-		engineos_terminal_renderer_stats(scene->renderer, &scene->stats);
-		int cell_width = scene->stats.width / (int)render_client.grid_columns;
-		int cell_height = scene->stats.height / (int)render_client.grid_rows;
 		struct engineos_mux_pane_output_scene *output_scene;
 		wl_list_for_each(output_scene, &scene->output_scenes, link) {
+			struct engineos_mux_pane_model *pane = find_output_pane_model(
+				output_scene->output, scene->pane_id, scene->generation);
+			struct engineos_mux_pane_model *grid = pane != NULL ?
+				engineos_mux_client_view_pane_grid(&server->mux_client, pane) : NULL;
+			if (pane == NULL || grid == NULL || !grid->grid.ready) {
+				wlr_log(WLR_ERROR,
+					"native output pane lost retained grid pane=%%%u view=%u",
+					scene->pane_id, output_scene->output->mux_view_id);
+				return false;
+			}
+			struct engineos_mux_client render_client;
+			pane_render_client(server, grid, &render_client);
+			if (!engineos_terminal_renderer_update(output_scene->renderer,
+					&render_client, error, sizeof(error))) {
+				wlr_log(WLR_ERROR, "native output pane damage render failed: %s",
+					error);
+				return false;
+			}
+			output_scene->buffer = engineos_terminal_renderer_buffer(
+				output_scene->renderer);
+			engineos_terminal_renderer_stats(output_scene->renderer,
+				&output_scene->stats);
+			int cell_width = output_scene->stats.width /
+				(int)render_client.grid_columns;
+			int cell_height = output_scene->stats.height /
+				(int)render_client.grid_rows;
 			wlr_scene_buffer_set_buffer_with_damage(output_scene->terminal_scene,
-				scene->buffer,
-				engineos_terminal_renderer_damage(scene->renderer));
+				output_scene->buffer,
+				engineos_terminal_renderer_damage(output_scene->renderer));
 			wlr_scene_node_set_position(&output_scene->tree->node,
 				(int)pane->left * cell_width, (int)pane->top * cell_height);
 			wlr_scene_node_set_enabled(&output_scene->tree->node, pane->visible);
 			wlr_scene_node_set_enabled(&output_scene->terminal_scene->node,
 				!pane_presentation_owned_by_output(server, pane,
 					output_scene->output));
+			if (pane->pane_id == server->mux_client.pane_id &&
+					pane->generation == server->mux_client.pane_generation) {
+				bool exact_view = output_scene->output->mux_view_id ==
+					server->mux_client.primary_view_id;
+				if (exact_view || server->mux_terminal_renderer == NULL) {
+					server->mux_terminal_renderer = output_scene->renderer;
+					server->mux_terminal_buffer = output_scene->buffer;
+					server->mux_terminal_scene = output_scene->terminal_scene;
+					server->mux_terminal_glyph_cells =
+						output_scene->stats.glyph_cells;
+					server->mux_terminal_atlas_entries =
+						output_scene->stats.atlas_entries;
+					server->mux_terminal_damaged_cells =
+						output_scene->stats.damaged_cells;
+					server->mux_terminal_nonblank_pixels =
+						output_scene->stats.nonblank_pixels;
+					server->mux_terminal_frame = output_scene->stats.frame;
+				}
+			}
 		}
-		if (pane->pane_id == server->mux_client.pane_id &&
-				pane->generation == server->mux_client.pane_generation) {
-			server->mux_terminal_renderer = scene->renderer;
-			server->mux_terminal_buffer = scene->buffer;
-			struct engineos_mux_pane_output_scene *primary =
-				find_mux_pane_output_scene(scene,
-					server->mux_client.primary_view_id);
-			if (primary != NULL)
-				server->mux_terminal_scene = primary->terminal_scene;
-			server->mux_terminal_glyph_cells = scene->stats.glyph_cells;
-			server->mux_terminal_atlas_entries = scene->stats.atlas_entries;
-			server->mux_terminal_damaged_cells = scene->stats.damaged_cells;
-			server->mux_terminal_nonblank_pixels = scene->stats.nonblank_pixels;
-			server->mux_terminal_frame = scene->stats.frame;
+	}
+	if (server->mux_terminal_renderer == NULL) {
+		struct engineos_shell_output *fallback_output;
+		wl_list_for_each(fallback_output, &server->outputs, link) {
+			if (!fallback_output->mux_registered ||
+					(server->mux_client.primary_view_id != 0 &&
+					 fallback_output->mux_view_id !=
+						server->mux_client.primary_view_id))
+				continue;
+			struct engineos_mux_pane_scene *fallback_pane = find_mux_pane_scene(
+				server, fallback_output->mux_snapshot.pane_id,
+				fallback_output->mux_snapshot.pane_generation);
+			struct engineos_mux_pane_output_scene *fallback_scene =
+				fallback_pane != NULL ? find_mux_pane_output_scene(fallback_pane,
+					fallback_output->mux_view_id) : NULL;
+			if (fallback_scene == NULL)
+				continue;
+			server->mux_terminal_renderer = fallback_scene->renderer;
+			server->mux_terminal_buffer = fallback_scene->buffer;
+			server->mux_terminal_scene = fallback_scene->terminal_scene;
+			server->mux_terminal_glyph_cells = fallback_scene->stats.glyph_cells;
+			server->mux_terminal_atlas_entries = fallback_scene->stats.atlas_entries;
+			server->mux_terminal_damaged_cells = fallback_scene->stats.damaged_cells;
+			server->mux_terminal_nonblank_pixels =
+				fallback_scene->stats.nonblank_pixels;
+			server->mux_terminal_frame = fallback_scene->stats.frame;
+			break;
 		}
-		engineos_mux_pane_model_clear_render_damage(pane);
+		if (server->mux_terminal_renderer == NULL) {
+			wlr_log(WLR_ERROR,
+				"mux outputs have no authoritative selected pane renderer");
+			return false;
+		}
 	}
 	struct engineos_mux_client ui_client;
 	ui_render_client(server, &ui_client);
@@ -2871,7 +2936,6 @@ static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
 		wlr_log(WLR_ERROR, "native mux UI damage render failed: %s", error);
 		return false;
 	}
-	struct engineos_shell_output *output;
 	wl_list_for_each(output, &server->outputs, link) {
 		if (output->mux_ui_scene == NULL)
 			continue;
@@ -2886,6 +2950,16 @@ static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
 	server->mux_terminal_width = ui_stats.width;
 	server->mux_terminal_height = ui_stats.height;
 	engineos_mux_client_clear_render_damage(&server->mux_client);
+	for (size_t index = 0; index < server->mux_client.pane_count; index++)
+		engineos_mux_pane_model_clear_render_damage(
+			&server->mux_client.panes[index]);
+	wl_list_for_each(output, &server->outputs, link) {
+		for (size_t index = 0; index < output->mux_snapshot.pane_count; index++) {
+			if (output->mux_snapshot.panes[index].grid.ready)
+				engineos_mux_pane_model_clear_render_damage(
+					&output->mux_snapshot.panes[index]);
+		}
+	}
 	wlr_log(WLR_DEBUG,
 		"native mux scene refresh panes=%zu selected=%%%u grid_revision=%llu pixels=%dx%d glyph_cells=%u renderer=%s frame=%llu reason=%s",
 		server->mux_client.pane_count,
@@ -3042,6 +3116,32 @@ static int native_mux_event(int fd, uint32_t mask, void *data) {
 	state_changed = state_changed ||
 		server->mux_client.state_invalidated_pending;
 	server->mux_client.state_invalidated_pending = false;
+	struct engineos_shell_output *focused_output;
+	bool selected_output_model_found = false;
+	wl_list_for_each(focused_output, &server->outputs, link) {
+		if (focused_output->mux_registered &&
+				find_output_pane_model(focused_output,
+					server->mux_client.pane_id,
+					server->mux_client.pane_generation) != NULL)
+			selected_output_model_found = true;
+		if (!focused_output->mux_registered ||
+				focused_output->mux_view_id !=
+					server->mux_client.primary_view_id)
+			continue;
+		if (!focused_output->mux_snapshot.ready ||
+				focused_output->mux_snapshot.pane_id !=
+					server->mux_client.pane_id ||
+				focused_output->mux_snapshot.pane_generation !=
+					server->mux_client.pane_generation ||
+				focused_output->mux_snapshot.session_id == NULL ||
+				server->mux_client.session_id == NULL ||
+				strcmp(focused_output->mux_snapshot.session_id,
+					server->mux_client.session_id) != 0)
+			state_changed = true;
+		break;
+	}
+	if (!selected_output_model_found)
+		state_changed = true;
 	if (state_changed) {
 		if (!refresh_native_output_snapshots(server, &changed, error,
 				sizeof(error))) {
@@ -3157,8 +3257,8 @@ static bool show_image_preview(struct engineos_shell_server *server,
 				"preview pane lease has no output scene");
 			return false;
 		}
-		box.width = pane_scene->stats.width;
-		box.height = pane_scene->stats.height;
+		box.width = output_scene->stats.width;
+		box.height = output_scene->stats.height;
 		parent_tree = output_scene->tree;
 	} else if (!compute_preview_box(server, slot, bounds, &box)) {
 		snprintf(error, error_size, "preview bounds are outside the active output");
@@ -4193,10 +4293,10 @@ static void write_shell_state(struct engineos_shell_server *server,
 			wl_list_for_each(counted_scene, &pane_scene->output_scenes, link)
 				output_scene_count++;
 		}
-		int cell_width = pane_scene != NULL && pane->grid.columns != 0 ?
-			pane_scene->stats.width / (int)pane->grid.columns : 0;
-		int cell_height = pane_scene != NULL && pane->grid.rows != 0 ?
-			pane_scene->stats.height / (int)pane->grid.rows : 0;
+		int cell_width = primary_output_scene != NULL && pane->grid.columns != 0 ?
+			primary_output_scene->stats.width / (int)pane->grid.columns : 0;
+		int cell_height = primary_output_scene != NULL && pane->grid.rows != 0 ?
+			primary_output_scene->stats.height / (int)pane->grid.rows : 0;
 		if (index != 0) {
 			fprintf(file, ",");
 		}
@@ -4227,14 +4327,15 @@ static void write_shell_state(struct engineos_shell_server *server,
 				primary_output_scene->terminal_scene->node.enabled ?
 				"true" : "false",
 			(int)pane->left * cell_width, (int)pane->top * cell_height,
-			pane_scene != NULL ? pane_scene->stats.width : 0,
-			pane_scene != NULL ? pane_scene->stats.height : 0,
-			pane_scene != NULL ? pane_scene->stats.glyph_cells : 0,
-			pane_scene != NULL ? pane_scene->stats.damaged_cells : 0,
-			pane_scene != NULL ? pane_scene->stats.nonblank_pixels : 0,
-			(unsigned long long)(pane_scene != NULL ? pane_scene->stats.frame : 0));
-		json_write_string(file, pane_scene != NULL ?
-			engineos_terminal_renderer_mode(pane_scene->renderer) : NULL);
+			primary_output_scene != NULL ? primary_output_scene->stats.width : 0,
+			primary_output_scene != NULL ? primary_output_scene->stats.height : 0,
+			primary_output_scene != NULL ? primary_output_scene->stats.glyph_cells : 0,
+			primary_output_scene != NULL ? primary_output_scene->stats.damaged_cells : 0,
+			primary_output_scene != NULL ? primary_output_scene->stats.nonblank_pixels : 0,
+			(unsigned long long)(primary_output_scene != NULL ?
+				primary_output_scene->stats.frame : 0));
+		json_write_string(file, primary_output_scene != NULL ?
+			engineos_terminal_renderer_mode(primary_output_scene->renderer) : NULL);
 		fprintf(file, "}}");
 	}
 	fprintf(file, "]}");
@@ -4289,6 +4390,9 @@ static void write_shell_state(struct engineos_shell_server *server,
 		size_t console_scene_count = 0, presentation_surface_count = 0;
 		size_t bound_presentation_surface_count = 0;
 		size_t preview_count = 0;
+		size_t rendered_pane_count = 0;
+		uint64_t selected_renderer_frame = 0;
+		const char *selected_renderer = NULL;
 		struct engineos_mux_pane_scene *output_pane_scene;
 		wl_list_for_each(output_pane_scene, &server->mux_pane_scenes, link) {
 			struct engineos_mux_pane_output_scene *copy =
@@ -4296,6 +4400,17 @@ static void write_shell_state(struct engineos_shell_server *server,
 					shell_output->mux_view_id);
 			if (copy != NULL && copy->terminal_scene->node.enabled)
 				console_scene_count++;
+			if (copy != NULL && copy->renderer != NULL) {
+				rendered_pane_count++;
+				if (output_pane_scene->pane_id ==
+						shell_output->mux_snapshot.pane_id &&
+						output_pane_scene->generation ==
+						shell_output->mux_snapshot.pane_generation) {
+					selected_renderer_frame = copy->stats.frame;
+					selected_renderer = engineos_terminal_renderer_mode(
+						copy->renderer);
+				}
+			}
 			struct engineos_preview_surface *output_preview;
 			wl_list_for_each(output_preview, &server->previews, link) {
 				if (copy != NULL && output_preview->scene_buffer != NULL &&
@@ -4314,14 +4429,19 @@ static void write_shell_state(struct engineos_shell_server *server,
 			}
 		}
 		fprintf(file,
-			", \"pixel_width\": %d, \"pixel_height\": %d, \"scale_milli\": %u, \"scene_x\": %d, \"scene_y\": %d, \"console_scene_count\": %zu, \"bound_presentation_surface_count\": %zu, \"presentation_surface_count\": %zu, \"preview_count\": %zu, \"preview_visible\": %s, \"focused\": %s, \"owns_selected_presentation\": %s}",
+			", \"pixel_width\": %d, \"pixel_height\": %d, \"scale_milli\": %u, \"scene_x\": %d, \"scene_y\": %d, \"console_scene_count\": %zu, \"rendered_pane_count\": %zu, \"selected_renderer_frame\": %llu, \"selected_renderer\": ",
 			output_width, output_height,
 			(uint32_t)(shell_output->output->scale * 1000.0 + 0.5),
 			shell_output->mux_scene_tree != NULL ?
 				shell_output->mux_scene_tree->node.x : 0,
 			shell_output->mux_scene_tree != NULL ?
 				shell_output->mux_scene_tree->node.y : 0,
-			console_scene_count, bound_presentation_surface_count,
+			console_scene_count, rendered_pane_count,
+			(unsigned long long)selected_renderer_frame);
+		json_write_string(file, selected_renderer);
+		fprintf(file,
+			", \"bound_presentation_surface_count\": %zu, \"presentation_surface_count\": %zu, \"preview_count\": %zu, \"preview_visible\": %s, \"focused\": %s, \"owns_selected_presentation\": %s}",
+			bound_presentation_surface_count,
 			presentation_surface_count,
 			preview_count, preview_count > 0 ? "true" : "false",
 			shell_output->mux_view_id == server->mux_client.primary_view_id ?
@@ -5823,6 +5943,15 @@ static bool route_native_terminal_key(struct engineos_shell_server *server,
 		wl_display_terminate(server->display);
 		return true;
 	}
+	if (!refresh_native_output_snapshots(server, &grid_changed, error,
+			sizeof(error))) {
+		wlr_log(WLR_ERROR,
+			"native graphical prefix output refresh failed key=%s: %s",
+			key_name, error);
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+		return true;
+	}
 	if (!refresh_native_terminal_scene(server,
 			grid_changed || ui_grid_changed ?
 			"native-input-grid-and-ui-damage" : "native-input-ui-damage")) {
@@ -6992,6 +7121,17 @@ static bool native_presentation_map(struct engineos_shell_view *view) {
 			&ignored, unmap_error, sizeof(unmap_error));
 		goto reject;
 	}
+	if (!refresh_native_output_snapshots(server, &grid_changed, error,
+			sizeof(error))) {
+		wlr_log(WLR_ERROR, "native presentation map output refresh failed: %s",
+			error);
+		bool ignored = false;
+		char unmap_error[256] = {0};
+		engineos_mux_client_unmap_presentation(&server->mux_client,
+			target.pane_id, target.generation, (int32_t)pid, view->view_id,
+			&ignored, unmap_error, sizeof(unmap_error));
+		goto reject;
+	}
 
 	view->mux_bound = true;
 	view->mux_client_pid = pid;
@@ -7087,6 +7227,13 @@ static void native_presentation_unmap(struct engineos_shell_view *view) {
 				strcpy(server->mux_client.pane_view_mode, "console");
 			}
 		}
+	}
+	if (!refresh_native_output_snapshots(server, &grid_changed, error,
+			sizeof(error))) {
+		wlr_log(WLR_ERROR,
+			"native presentation unmap output refresh failed: %s", error);
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
 	}
 	uint32_t pane_id = view->mux_pane_id;
 	uint32_t pane_generation = view->mux_pane_generation;
@@ -7935,7 +8082,6 @@ static void destroy_server(struct engineos_shell_server *server) {
 	struct engineos_mux_pane_scene *pane_scene, *next_pane_scene;
 	wl_list_for_each_safe(pane_scene, next_pane_scene,
 			&server->mux_pane_scenes, link) {
-		engineos_terminal_renderer_destroy(pane_scene->renderer);
 		wl_list_remove(&pane_scene->link);
 		free(pane_scene);
 	}

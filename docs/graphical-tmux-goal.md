@@ -110,7 +110,10 @@ subscribed grids for all of its panes; the contract proves damage in a
 nonfocused session advances only that output model while the focused session
 remains intact. State invalidations stay pending when encountered during grid
 or JSON request servicing until all output snapshots settle. Independent
-per-output grid/UI renderers and input promotion, terminal image transport, direct-KMS
+terminal renderers now live in each output-pane scene with their own render
+targets, buffers, damage, and statistics. Canonical grid ownership survives
+session focus changes, and nonfocused damage advances only the corresponding
+output renderer. Per-output UI renderers and input promotion, terminal image transport, direct-KMS
 clipping, final hardware acceptance, and legacy cutover remain open. Native
 `game` is now an
 authoritative launch/split presentation that survives respawn.

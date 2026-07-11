@@ -72,6 +72,34 @@ static void free_grid_model(struct engineos_mux_grid_model *grid) {
 	memset(grid, 0, sizeof(*grid));
 }
 
+static bool clone_grid_model(const struct engineos_mux_grid_model *source,
+		struct engineos_mux_grid_model *destination) {
+	struct engineos_mux_grid_model clone = *source;
+	clone.cells = NULL;
+	clone.damage_cells = NULL;
+	size_t cell_count = (size_t)source->columns * source->rows;
+	if (cell_count != 0) {
+		clone.cells = malloc(cell_count * sizeof(*clone.cells));
+		if (clone.cells == NULL)
+			return false;
+		memcpy(clone.cells, source->cells,
+			cell_count * sizeof(*clone.cells));
+	}
+	if (source->damage_count != 0) {
+		clone.damage_cells = malloc(source->damage_count *
+			sizeof(*clone.damage_cells));
+		if (clone.damage_cells == NULL) {
+			free(clone.cells);
+			return false;
+		}
+		memcpy(clone.damage_cells, source->damage_cells,
+			source->damage_count * sizeof(*clone.damage_cells));
+	}
+	free_grid_model(destination);
+	*destination = clone;
+	return true;
+}
+
 static void free_pane_models(struct engineos_mux_pane_model *panes,
 		size_t count) {
 	for (size_t index = 0; index < count; index++)
@@ -458,6 +486,30 @@ static bool parse_pane_models(struct engineos_mux_client *client,
 				memset(&client->panes[previous].grid, 0,
 					sizeof(client->panes[previous].grid));
 				break;
+			}
+		}
+	}
+	for (size_t previous = 0; previous < client->pane_count; previous++) {
+		struct engineos_mux_pane_model *source = &client->panes[previous];
+		if (!source->grid.ready)
+			continue;
+		for (size_t view = 0; view < client->view_snapshot_count; view++) {
+			struct engineos_mux_view_snapshot *snapshot =
+				client->view_snapshots[view];
+			for (size_t index = 0; snapshot != NULL &&
+					index < snapshot->pane_count; index++) {
+				struct engineos_mux_pane_model *replacement =
+					&snapshot->panes[index];
+				if (replacement->pane_id != source->pane_id ||
+						replacement->generation != source->generation ||
+						replacement->grid.ready)
+					continue;
+				if (!clone_grid_model(&source->grid, &replacement->grid)) {
+					free_pane_models(models, count);
+					snprintf(error, error_size,
+						"out of memory preserving output pane grid");
+					return false;
+				}
 			}
 		}
 	}
