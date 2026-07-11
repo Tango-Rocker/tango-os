@@ -245,6 +245,7 @@ struct engineos_shell_server {
 	bool mux_pointer_cell_valid;
 	struct wl_event_source *pane_binding_timer;
 	struct wl_event_source *mux_event_source;
+	struct wl_event_source *mux_snapshot_retry_timer;
 	struct wl_list outputs;
 	struct wl_list views;
 	struct wl_list keyboards;
@@ -308,6 +309,7 @@ struct engineos_shell_server {
 	unsigned int view_count;
 	unsigned int next_view_id;
 	uint32_t next_mux_view_id;
+	uint64_t mux_snapshot_retry_count;
 };
 
 struct engineos_shell_launch {
@@ -443,6 +445,7 @@ static bool sync_native_preview_leases(struct engineos_shell_server *server,
 static bool refresh_native_output_snapshots(
 	struct engineos_shell_server *server, bool *grid_changed,
 	char *error, size_t error_size);
+static int native_mux_snapshot_retry(void *data);
 static void apply_view_layout(struct engineos_shell_view *view);
 static void schedule_outputs(struct engineos_shell_server *server);
 static void set_toplevel_suspended(struct wlr_xdg_toplevel *toplevel,
@@ -3313,6 +3316,15 @@ static bool refresh_native_output_snapshots(
 		if (!engineos_mux_client_refresh_presentation(&server->mux_client,
 				error, error_size))
 			return false;
+		bool revisions_match = true;
+		uint64_t snapshot_revision = server->mux_client.revision;
+		wl_list_for_each(output, &server->outputs, link) {
+			if (output->mux_registered &&
+					output->mux_snapshot.revision != snapshot_revision) {
+				revisions_match = false;
+				break;
+			}
+		}
 		bool focused_model_matches = false;
 		wl_list_for_each(output, &server->outputs, link) {
 			if (!output->mux_registered || output->mux_view_id !=
@@ -3328,12 +3340,45 @@ static bool refresh_native_output_snapshots(
 					server->mux_client.session_id) == 0;
 			break;
 		}
-		if (!server->mux_client.state_invalidated_pending &&
-				focused_model_matches)
+		if (revisions_match && focused_model_matches) {
+			/* A snapshot response at this revision covers any coalesced state
+			 * invalidation queued ahead of that response. Requiring the socket
+			 * to become completely idle cannot converge under an active pane. */
+			server->mux_client.state_invalidated_pending = false;
 			return true;
+		}
 	}
-	snprintf(error, error_size, "mux output snapshots did not settle");
-	return false;
+	server->mux_snapshot_retry_count++;
+	if (server->mux_snapshot_retry_timer != NULL)
+		wl_event_source_timer_update(server->mux_snapshot_retry_timer, 16);
+	wlr_log(WLR_DEBUG,
+		"native mux output snapshots deferred count=%llu revision=%llu",
+		(unsigned long long)server->mux_snapshot_retry_count,
+		(unsigned long long)server->mux_client.revision);
+	return true;
+}
+
+static int native_mux_snapshot_retry(void *data) {
+	struct engineos_shell_server *server = data;
+	if (!server->mux_client.ready)
+		return 0;
+	bool changed = false;
+	char error[256] = {0};
+	if (!refresh_native_output_snapshots(server, &changed, error,
+			sizeof(error))) {
+		wlr_log(WLR_ERROR,
+			"native mux deferred output snapshot refresh failed: %s", error);
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+		return 0;
+	}
+	sync_native_presentation_visibility(server, "native-snapshot-retry");
+	if (changed && !refresh_native_terminal_scene(server,
+			"native-snapshot-retry")) {
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+	}
+	return 0;
 }
 
 static int native_mux_event(int fd, uint32_t mask, void *data) {
@@ -4655,6 +4700,8 @@ static void write_shell_state(struct engineos_shell_server *server,
 	json_write_string(file, server->mux_client.prefix);
 	fprintf(file, ", \"prefix2\": ");
 	json_write_string(file, server->mux_client.prefix2);
+	fprintf(file, ", \"snapshot_retry_count\": %llu",
+		(unsigned long long)server->mux_snapshot_retry_count);
 	const struct engineos_mux_ui_model *focused_ui = ui_output != NULL ?
 		&ui_output->mux_snapshot.ui : NULL;
 	fprintf(file,
@@ -5158,7 +5205,7 @@ static void write_shell_state(struct engineos_shell_server *server,
 static void clear_pointer_focus(struct engineos_shell_server *server,
 		const char *reason) {
 	wlr_seat_pointer_notify_clear_focus(server->seat);
-	wlr_log(WLR_INFO, "pointer focus cleared mode=%s capture=%s reason=%s",
+	wlr_log(WLR_DEBUG, "pointer focus cleared mode=%s capture=%s reason=%s",
 		input_mode_name(server->input_mode),
 		server->game_capture ? "game" : "none",
 		reason != NULL ? reason : "unspecified");
@@ -6686,8 +6733,6 @@ static void set_default_cursor(struct engineos_shell_server *server,
 			reason != NULL ? reason : "unspecified");
 	}
 	server->cursor_hidden = false;
-	wlr_log(WLR_INFO, "cursor image=default reason=%s",
-		reason != NULL ? reason : "unspecified");
 }
 
 static void sync_cursor_image(struct engineos_shell_server *server,
@@ -6701,7 +6746,7 @@ static void sync_cursor_image(struct engineos_shell_server *server,
 
 static void cursor_log_event(struct engineos_shell_server *server,
 		const char *event_name, struct wlr_pointer *pointer) {
-	wlr_log(WLR_INFO, "pointer %s mode=%s capture=%s focus=%s x=%.1f y=%.1f device=%s",
+	wlr_log(WLR_DEBUG, "pointer %s mode=%s capture=%s focus=%s x=%.1f y=%.1f device=%s",
 		event_name,
 		input_mode_name(server->input_mode),
 		server->game_capture ? "game" : "none",
@@ -6757,7 +6802,7 @@ static bool cursor_update_pointer_focus(struct engineos_shell_server *server,
 
 	wlr_seat_pointer_notify_enter(server->seat, surface, sx, sy);
 	wlr_seat_pointer_notify_motion(server->seat, time_msec, sx, sy);
-	wlr_log(WLR_INFO, "pointer focus role=%s sx=%.1f sy=%.1f reason=%s",
+	wlr_log(WLR_DEBUG, "pointer focus role=%s sx=%.1f sy=%.1f reason=%s",
 		view != NULL ? surface_role_name(view->role) : "unknown",
 		sx, sy, reason != NULL ? reason : "unspecified");
 	return true;
@@ -8595,10 +8640,6 @@ static bool setup_server(struct engineos_shell_server *server) {
 		wlr_log(WLR_ERROR, "failed to create scene graph");
 		return false;
 	}
-	wl_list_init(&server->outputs);
-	wl_list_init(&server->views);
-	wl_list_init(&server->keyboards);
-	wl_list_init(&server->pointers);
 	server->xdg_shell = wlr_xdg_shell_create(server->display,
 		XDG_TOPLEVEL_STATE_SUSPENDED_SINCE_VERSION);
 	if (server->xdg_shell == NULL) {
@@ -8655,6 +8696,10 @@ static void destroy_server(struct engineos_shell_server *server) {
 	if (server->mux_event_source != NULL) {
 		wl_event_source_remove(server->mux_event_source);
 		server->mux_event_source = NULL;
+	}
+	if (server->mux_snapshot_retry_timer != NULL) {
+		wl_event_source_remove(server->mux_snapshot_retry_timer);
+		server->mux_snapshot_retry_timer = NULL;
 	}
 	if (!wl_list_empty(&server->pane_bindings)) {
 		struct engineos_pane_binding *binding;
@@ -8779,6 +8824,10 @@ int main(int argc, char **argv) {
 	wl_list_init(&server.terminal_clients);
 	wl_list_init(&server.mux_pane_scenes);
 	wl_list_init(&server.previews);
+	wl_list_init(&server.outputs);
+	wl_list_init(&server.views);
+	wl_list_init(&server.keyboards);
+	wl_list_init(&server.pointers);
 
 	static const struct option options[] = {
 		{"headless", no_argument, NULL, 'H'},
@@ -8933,6 +8982,13 @@ int main(int argc, char **argv) {
 		destroy_server(&server);
 		return 1;
 	}
+	server.mux_snapshot_retry_timer =
+		wl_event_loop_add_timer(event_loop, native_mux_snapshot_retry, &server);
+	if (server.mux_snapshot_retry_timer == NULL) {
+		wlr_log(WLR_ERROR, "failed to add native mux snapshot retry timer");
+		destroy_server(&server);
+		return 1;
+	}
 
 	if (server.smoke_ms > 0) {
 		struct wl_event_source *timer =
@@ -9023,9 +9079,11 @@ int main(int argc, char **argv) {
 	}
 
 	wl_display_run(server.display);
+	bool runtime_failed = server.mux_mode == ENGINEOS_MUX_NATIVE &&
+		!server.mux_client.ready;
 	wlr_log(WLR_INFO, "engineos-shell shutdown outputs=%u keyboards=%u pointers=%u views=%u",
 		server.output_count, server.keyboard_count, server.pointer_count, server.view_count);
 	write_shell_state(&server, "shutdown");
 	destroy_server(&server);
-	return 0;
+	return runtime_failed ? 1 : 0;
 }

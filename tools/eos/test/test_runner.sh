@@ -609,6 +609,17 @@ PY
 	done
 	[[ "$key_proof" == accepted ]] ||
 		die "graphical tmux client did not honor the configured prefix key table"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		set-option -g monitor-bell on
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		set-option -g bell-action any
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" keys "$pane_id" \
+		C-g >"$fixture/bell-key.json"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot \
+		>"$fixture/post-bell-snapshot.json"
+	jq -e '.schema == "engine-mux/snapshot-v1"' \
+		"$fixture/post-bell-snapshot.json" >/dev/null ||
+		die "graphical client bell alert killed the native mux server"
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" keys "$pane_id" \
 		Space d C-c >"$fixture/forwarded-keys.json"
 	jq -e '.schema == "engine-mux/keys-v1" and .queued == 3' \

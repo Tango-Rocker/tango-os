@@ -64,7 +64,7 @@ These are historical proof artifacts only; they are not the active work path:
   `engineos-dev-shell-start` creates or reuses the authoritative `engineos`
   session, requires its frontend socket, disables launchpad bootstrap for that
   run, and fails closed if native mux preparation fails. The active package set
-  is `engineos-mux 3.6b-40`, `engineos-shell 0.1.0-64`,
+  is `engineos-mux 3.6b-41`, `engineos-shell 0.1.0-67`,
   `engineos-tools 0.1.0-51`, and `engineos-config 0.1.0-6`. The live tty1 shell
   has two registered graphical output clients, uses the DRM/libinput backend
   and radeonsi GPU glyph atlas, and starts no shell-owned foot client. The
@@ -79,8 +79,10 @@ These are historical proof artifacts only; they are not the active work path:
   sparse-damaged scene-buffer update, including the first startup buffer. The
   output-sized UI target redraws only when tmux UI state changes instead of on
   every terminal update. Wlroots debug tracing is opt-in through
-  `ENGINEOS_WLR_DEBUG=1`; the prior always-debug path grew the live shell log to
-  2.6 GB and coincided with libinput lag warnings. Live `0.1.0-64` evidence
+  `ENGINEOS_WLR_DEBUG=1`; pointer motion, frame, focus, and unchanged-cursor
+  events are also debug-only after the prior INFO flood grew each of the two
+  live shell logs beyond 2.5 GB and coincided with libinput lag warnings. Live
+  `0.1.0-67` evidence
   shows both outputs committing the exact scheduled mux, grid, and renderer
   revisions with zero frame failures under the normal direct-scanout policy;
   the AMD/radeonsi two-output contract also passes. Pointer smoothness and pane
@@ -94,10 +96,22 @@ These are historical proof artifacts only; they are not the active work path:
   terminal encoding, so arrows and other special keys retain their complete VT
   escape sequences without weakening prefix-table handling for fast key
   sequences. The behavioral contract recalls and executes bash history with
-  graphical `Up`. The live long-running server still maps the replaced
-  `3.6b-38` binary and needs a session restart before these server-side fixes
-  are active. Legacy helpers and rollback code still exist in the packages and
-  are the next deletion phase.
+  graphical `Up`, and the user physically confirmed special-key behavior after
+  reboot. A live core then proved that tmux bell alerts attempted terminal
+  output through a headless graphical client and dereferenced its intentionally
+  absent terminal capability table. `3.6b-41` excludes graphical clients from
+  that TTY alert path, survives the exact BEL regression in the full mux
+  contract and live session, and has produced no replacement core. Native mux
+  protocol loss now makes the shell return failure so the system service
+  restarts instead of treating the graphical lockout as a clean exit. Valid
+  multi-output snapshots that land at adjacent revisions during rapid focus
+  churn are now retried from the Wayland event loop instead of being treated as
+  a fatal protocol error; the retry count is observable in `shell-state.json`.
+  Early wlroots setup failures also clean up initialized list heads and return
+  failure without a teardown segfault. The live 40-transition plus BEL stress
+  advanced revision 412 to 462, converged both outputs at 462, retained zero
+  frame failures and zero service restarts, and produced no core. Legacy helpers
+  and rollback code still exist in the packages and are the next deletion phase.
 - MC Quick View now routes through an exact tmux client identity instead of a
   stale terminal-role environment variable. The live `eos-proof mc-preview`
   run from pane `%3` passed its installed image contract, IPC ping, and real
@@ -108,8 +122,8 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
-  `engineos-mux 3.6b-40` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-64`, and native mode is the live EngineDev desktop
+  `engineos-mux 3.6b-41` with the decoder/renderer/control boundary in
+  `engineos-shell 0.1.0-67`, and native mode is the live EngineDev desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The

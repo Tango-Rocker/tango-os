@@ -1,6 +1,6 @@
 pkgname=engineos-mux
 pkgver=3.6b
-pkgrel=40
+pkgrel=41
 _commit=0623d1e968423ad0c192e0d8debf1258671063d5
 pkgdesc="EngineOS tmux 3.6b graphical frontend protocol foundation"
 arch=('x86_64')
@@ -18,6 +18,7 @@ source=(
   '0005-upstream-regression-fixes.patch'
   '0006-engine-mux-deterministic-shutdown.patch'
   '0007-strip-sent-flag-before-pane-input.patch'
+  '0008-skip-graphical-client-tty-alerts.patch'
   'engine-mux-frontend.c'
   'engine-mux-frontend.h'
   'engine-pane.c'
@@ -31,6 +32,7 @@ sha256sums=('2c212f7ee2d925b01ec20ab5bb3a906c17b6a8652fe521fcaaf498f800b4d1fa'
             '592d31c1a38987282520102f617ce699430c35b4cd2d1ecfc2f6a14c5992e767'
             'c98a0184cde19f14e32f61595f622748f064f2294a1a285adb920eb03eaba593'
             'e0120b1a3121da735ded8d83d797ae16eeb807174d50f0f91a1483a40d967fe2'
+            'aa5af5738e4498e967b1c6c0f50b3b25b157a811b51f6e2a8bc6e173fe609636'
             'a4b4e0255d132361882b74b3a3390bb51610fef4a5fab305977342f4cd237dd6'
             'cdad7a4fb6c706fb77863825c42218351cc1d4ab37131a835fc81a7d92967b1a'
             '4a94b8db1a630f41201e218bf7d8cda3b45b820a1059f52216bc9b806b264399'
@@ -48,6 +50,7 @@ prepare() {
 	patch -d "$_source_dir" -Np1 -i "$startdir/0005-upstream-regression-fixes.patch"
 	patch -d "$_source_dir" -Np1 -i "$startdir/0006-engine-mux-deterministic-shutdown.patch"
 	patch -d "$_source_dir" -Np1 -i "$startdir/0007-strip-sent-flag-before-pane-input.patch"
+	patch -d "$_source_dir" -Np1 -i "$startdir/0008-skip-graphical-client-tty-alerts.patch"
 	install -m0644 "$srcdir/engine-mux-frontend.c" "$_source_dir/engine-mux-frontend.c"
 	install -m0644 "$srcdir/engine-mux-frontend.h" "$_source_dir/engine-mux-frontend.h"
 	install -m0644 "$srcdir/engine-pane.c" "$_source_dir/engine-pane.c"

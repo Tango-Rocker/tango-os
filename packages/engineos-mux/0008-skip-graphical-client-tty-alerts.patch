@@ -1,0 +1,17 @@
+From: EngineOS maintainers
+Subject: Do not emit terminal alerts to headless graphical clients
+
+EngineOS graphical clients participate in tmux session, focus, input, status,
+and sizing state, but do not open a terminal and therefore have no tty term
+capability table.  The ordinary alert path must not call tty_putcode() or
+status_message_set() for these clients.  Graphical status and notifications
+are exported through the frontend model instead.
+
+diff --git a/alerts.c b/alerts.c
+index 25f6a445..f0f74a11 100644
+--- a/alerts.c
++++ b/alerts.c
+@@ -310 +310,2 @@ alerts_set_message(struct winlink *wl, const char *type, const char *option)
+-		if (c->session != wl->session || c->flags & CLIENT_CONTROL)
++		if (c->session != wl->session ||
++		    c->flags & (CLIENT_CONTROL|CLIENT_GRAPHICAL))
