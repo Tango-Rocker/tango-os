@@ -2984,6 +2984,8 @@ static void sync_native_presentation_visibility(
 static bool refresh_native_output_snapshots(
 		struct engineos_shell_server *server, bool *grid_changed,
 		char *error, size_t error_size) {
+	for (unsigned int attempt = 0; attempt < 8; attempt++) {
+		server->mux_client.state_invalidated_pending = false;
 	struct engineos_shell_output *output;
 	wl_list_for_each(output, &server->outputs, link) {
 		if (!output->mux_registered)
@@ -3002,7 +3004,11 @@ static bool refresh_native_output_snapshots(
 		}
 		*grid_changed = *grid_changed || changed;
 	}
-	return true;
+		if (!server->mux_client.state_invalidated_pending)
+			return true;
+	}
+	snprintf(error, error_size, "mux output snapshots did not settle");
+	return false;
 }
 
 static int native_mux_event(int fd, uint32_t mask, void *data) {
@@ -3023,6 +3029,9 @@ static int native_mux_event(int fd, uint32_t mask, void *data) {
 		wl_display_terminate(server->display);
 		return 0;
 	}
+	state_changed = state_changed ||
+		server->mux_client.state_invalidated_pending;
+	server->mux_client.state_invalidated_pending = false;
 	if (!engineos_mux_client_refresh_presentation(&server->mux_client,
 			error, sizeof(error))) {
 		wlr_log(WLR_ERROR, "native mux presentation refresh failed: %s", error);
@@ -3030,6 +3039,9 @@ static int native_mux_event(int fd, uint32_t mask, void *data) {
 		wl_display_terminate(server->display);
 		return 0;
 	}
+	state_changed = state_changed ||
+		server->mux_client.state_invalidated_pending;
+	server->mux_client.state_invalidated_pending = false;
 	if (state_changed) {
 		if (!refresh_native_output_snapshots(server, &changed, error,
 				sizeof(error))) {
@@ -4245,13 +4257,35 @@ static void write_shell_state(struct engineos_shell_server *server,
 		fprintf(file,
 			", \"session_id\": ");
 		json_write_string(file, shell_output->mux_snapshot.session_id);
+		size_t output_grid_ready_count = 0;
+		size_t output_grid_subscribed_count = 0;
+		uint64_t output_grid_revision = 0;
+		for (size_t pane_index = 0;
+				pane_index < shell_output->mux_snapshot.pane_count;
+				pane_index++) {
+			struct engineos_mux_pane_model *pane =
+				&shell_output->mux_snapshot.panes[pane_index];
+			struct engineos_mux_pane_model *grid =
+				engineos_mux_client_view_pane_grid(&server->mux_client, pane);
+			if (grid == NULL || !grid->grid.ready)
+				continue;
+			output_grid_ready_count++;
+			if (grid->grid.subscribed)
+				output_grid_subscribed_count++;
+			if (pane->pane_id == shell_output->mux_snapshot.pane_id &&
+					pane->generation ==
+						shell_output->mux_snapshot.pane_generation)
+				output_grid_revision = grid->grid.revision;
+		}
 		fprintf(file,
-			", \"model_ready\": %s, \"model_revision\": %llu, \"pane_count\": %zu, \"pane_id\": \"%%%u\", \"pane_generation\": %u",
+			", \"model_ready\": %s, \"model_revision\": %llu, \"pane_count\": %zu, \"pane_id\": \"%%%u\", \"pane_generation\": %u, \"grid_ready_count\": %zu, \"grid_subscribed_count\": %zu, \"grid_revision\": %llu",
 			shell_output->mux_snapshot.ready ? "true" : "false",
 			(unsigned long long)shell_output->mux_snapshot.revision,
 			shell_output->mux_snapshot.pane_count,
 			shell_output->mux_snapshot.pane_id,
-			shell_output->mux_snapshot.pane_generation);
+			shell_output->mux_snapshot.pane_generation,
+			output_grid_ready_count, output_grid_subscribed_count,
+			(unsigned long long)output_grid_revision);
 		size_t console_scene_count = 0, presentation_surface_count = 0;
 		size_t bound_presentation_surface_count = 0;
 		size_t preview_count = 0;
@@ -6574,7 +6608,8 @@ static void output_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&output->frame.link);
 	wl_list_remove(&output->destroy.link);
 	destroy_mux_output_scene(output);
-	engineos_mux_view_snapshot_destroy(&output->mux_snapshot);
+	engineos_mux_client_release_view_snapshot(&server->mux_client,
+		&output->mux_snapshot);
 	if (output->scene_output != NULL) {
 		wlr_scene_output_destroy(output->scene_output);
 		output->scene_output = NULL;
@@ -6587,7 +6622,8 @@ static void destroy_shell_output(struct engineos_shell_output *output) {
 	remove_listener_if_linked(&output->frame);
 	remove_listener_if_linked(&output->destroy);
 	destroy_mux_output_scene(output);
-	engineos_mux_view_snapshot_destroy(&output->mux_snapshot);
+	engineos_mux_client_release_view_snapshot(&output->server->mux_client,
+		&output->mux_snapshot);
 	if (output->scene_output != NULL) {
 		wlr_scene_output_destroy(output->scene_output);
 		output->scene_output = NULL;

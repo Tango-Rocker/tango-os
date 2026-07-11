@@ -87,7 +87,37 @@ static struct engineos_mux_pane_model *find_pane_model(
 				client->panes[index].generation == generation)
 			return &client->panes[index];
 	}
+	for (size_t view = 0; view < client->view_snapshot_count; view++) {
+		struct engineos_mux_view_snapshot *snapshot =
+			client->view_snapshots[view];
+		for (size_t index = 0; snapshot != NULL &&
+				index < snapshot->pane_count; index++) {
+			if (snapshot->panes[index].pane_id == pane_id &&
+					snapshot->panes[index].generation == generation &&
+					snapshot->panes[index].grid.ready)
+				return &snapshot->panes[index];
+		}
+	}
 	return NULL;
+}
+
+static bool track_view_snapshot(struct engineos_mux_client *client,
+		struct engineos_mux_view_snapshot *snapshot, char *error,
+		size_t error_size) {
+	for (size_t index = 0; index < client->view_snapshot_count; index++) {
+		if (client->view_snapshots[index] == snapshot)
+			return true;
+	}
+	struct engineos_mux_view_snapshot **tracked = realloc(
+		client->view_snapshots, (client->view_snapshot_count + 1) *
+		sizeof(*tracked));
+	if (tracked == NULL) {
+		snprintf(error, error_size, "out of memory tracking view snapshot");
+		return false;
+	}
+	client->view_snapshots = tracked;
+	client->view_snapshots[client->view_snapshot_count++] = snapshot;
+	return true;
 }
 
 static bool mark_grid_invalidation(struct engineos_mux_client *client,
@@ -496,9 +526,12 @@ receive_again:
 		}
 		goto receive_again;
 	}
-	if ((type == ENGINE_MUX_UI_INVALIDATED &&
-			payload_length == sizeof(struct engine_mux_ui_invalidation)) ||
-			(type == ENGINE_MUX_STATE_INVALIDATED && payload_length == 0))
+	if (type == ENGINE_MUX_STATE_INVALIDATED && payload_length == 0) {
+		client->state_invalidated_pending = true;
+		goto receive_again;
+	}
+	if (type == ENGINE_MUX_UI_INVALIDATED &&
+			payload_length == sizeof(struct engine_mux_ui_invalidation))
 		goto receive_again;
 	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
 			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
@@ -619,8 +652,10 @@ receive_again:
 	if (type == ENGINE_MUX_UI_INVALIDATED &&
 			payload_length == sizeof(struct engine_mux_ui_invalidation))
 		goto receive_again;
-	if (type == ENGINE_MUX_STATE_INVALIDATED && payload_length == 0)
+	if (type == ENGINE_MUX_STATE_INVALIDATED && payload_length == 0) {
+		client->state_invalidated_pending = true;
 		goto receive_again;
+	}
 	if (type != ENGINE_MUX_GRID_SNAPSHOT ||
 			payload_length < sizeof(struct engine_mux_grid_header)) {
 		free(packet);
@@ -726,8 +761,10 @@ receive_again:
 	if (type == ENGINE_MUX_UI_INVALIDATED &&
 			length == sizeof(struct engine_mux_ui_invalidation))
 		goto receive_again;
-	if (type == ENGINE_MUX_STATE_INVALIDATED && length == 0)
+	if (type == ENGINE_MUX_STATE_INVALIDATED && length == 0) {
+		client->state_invalidated_pending = true;
 		goto receive_again;
+	}
 	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
 			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
 			type != ENGINE_MUX_GRID_SUBSCRIBE_ACK ||
@@ -794,8 +831,10 @@ receive_again:
 	if (type == ENGINE_MUX_UI_INVALIDATED &&
 			length == sizeof(struct engine_mux_ui_invalidation))
 		goto receive_again;
-	if (type == ENGINE_MUX_STATE_INVALIDATED && length == 0)
+	if (type == ENGINE_MUX_STATE_INVALIDATED && length == 0) {
+		client->state_invalidated_pending = true;
 		goto receive_again;
+	}
 	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
 			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
 			type != ENGINE_MUX_GRID_SUBSCRIBE_ACK ||
@@ -894,6 +933,7 @@ receive_again:
 	}
 	if (type == ENGINE_MUX_STATE_INVALIDATED && length == 0) {
 		free(packet);
+		client->state_invalidated_pending = true;
 		goto receive_again;
 	}
 	if (type == ENGINE_MUX_GRID_INVALIDATED &&
@@ -1026,8 +1066,11 @@ receive_again:
 		}
 		goto receive_again;
 	}
-	if (type == ENGINE_MUX_UI_INVALIDATED ||
-			(type == ENGINE_MUX_STATE_INVALIDATED && length == 0))
+	if (type == ENGINE_MUX_STATE_INVALIDATED && length == 0) {
+		client->state_invalidated_pending = true;
+		goto receive_again;
+	}
+	if (type == ENGINE_MUX_UI_INVALIDATED)
 		goto receive_again;
 	if (type == ENGINE_MUX_ERROR) {
 		free(packet);
@@ -1098,7 +1141,12 @@ receive_again:
 static bool service_pending_grid_damage(struct engineos_mux_client *client,
 		bool *grid_changed, char *error, size_t error_size) {
 	bool any_changed = false;
-	for (size_t pass = 0; pass < client->pane_count + 2; pass++) {
+	size_t pane_capacity = client->pane_count;
+	for (size_t view = 0; view < client->view_snapshot_count; view++) {
+		if (client->view_snapshots[view] != NULL)
+			pane_capacity += client->view_snapshots[view]->pane_count;
+	}
+	for (size_t pass = 0; pass < pane_capacity + 2; pass++) {
 		bool serviced = false, changed = false;
 		if (client->selected_grid_damage_pending) {
 			client->selected_grid_damage_pending = false;
@@ -1118,6 +1166,24 @@ static bool service_pending_grid_damage(struct engineos_mux_client *client,
 				return false;
 			any_changed = any_changed || changed;
 			serviced = true;
+		}
+		for (size_t view = 0; view < client->view_snapshot_count; view++) {
+			struct engineos_mux_view_snapshot *snapshot =
+				client->view_snapshots[view];
+			for (size_t index = 0; snapshot != NULL &&
+					index < snapshot->pane_count; index++) {
+				struct engineos_mux_pane_model *pane =
+					&snapshot->panes[index];
+				if (!pane->grid.damage_pending)
+					continue;
+				pane->grid.damage_pending = false;
+				changed = false;
+				if (!receive_pane_grid_damage(client, pane, &changed,
+						error, error_size))
+					return false;
+				any_changed = any_changed || changed;
+				serviced = true;
+			}
 		}
 		if (!serviced) {
 			*grid_changed = *grid_changed || any_changed;
@@ -1476,9 +1542,43 @@ bool engineos_mux_client_request_view_snapshot(
 		.ready = true,
 	};
 	json_object_put(root);
+	for (size_t index = 0; index < replacement.pane_count; index++) {
+		for (size_t previous = 0; previous < snapshot->pane_count; previous++) {
+			if (replacement.panes[index].pane_id ==
+					snapshot->panes[previous].pane_id &&
+					replacement.panes[index].generation ==
+					snapshot->panes[previous].generation) {
+				replacement.panes[index].grid =
+					snapshot->panes[previous].grid;
+				memset(&snapshot->panes[previous].grid, 0,
+					sizeof(snapshot->panes[previous].grid));
+				break;
+			}
+		}
+	}
 	engineos_mux_view_snapshot_destroy(snapshot);
 	*snapshot = replacement;
+	if (!track_view_snapshot(client, snapshot, error, error_size))
+		return false;
+	for (size_t index = 0; index < snapshot->pane_count; index++) {
+		struct engineos_mux_pane_model *pane = &snapshot->panes[index];
+		if (pane->grid.ready || find_pane_model(client, pane->pane_id,
+				pane->generation) != NULL)
+			continue;
+		if (!request_pane_grid(client, pane, error, error_size) ||
+				!subscribe_pane_grid(client, pane, error, error_size))
+			return false;
+		pane->grid.subscribed = true;
+	}
 	return true;
+}
+
+struct engineos_mux_pane_model *engineos_mux_client_view_pane_grid(
+		struct engineos_mux_client *client,
+		const struct engineos_mux_pane_model *pane) {
+	if (client == NULL || pane == NULL)
+		return NULL;
+	return find_pane_model(client, pane->pane_id, pane->generation);
 }
 
 bool engineos_mux_client_handle_event(struct engineos_mux_client *client,
@@ -1614,6 +1714,7 @@ bool engineos_mux_client_send_input(struct engineos_mux_client *client,
 			continue;
 		}
 		if (type == ENGINE_MUX_STATE_INVALIDATED && payload_length == 0) {
+			client->state_invalidated_pending = true;
 			continue;
 		}
 		if (type == ENGINE_MUX_ERROR) {
@@ -1884,6 +1985,7 @@ static bool exchange_json_request(struct engineos_mux_client *client,
 		}
 		if (type == ENGINE_MUX_STATE_INVALIDATED && length == 0) {
 			free(packet);
+			client->state_invalidated_pending = true;
 			*grid_changed = true;
 			continue;
 		}
@@ -2276,12 +2378,55 @@ void engineos_mux_view_snapshot_destroy(
 	memset(snapshot, 0, sizeof(*snapshot));
 }
 
+void engineos_mux_client_release_view_snapshot(
+		struct engineos_mux_client *client,
+		struct engineos_mux_view_snapshot *snapshot) {
+	if (client == NULL || snapshot == NULL)
+		return;
+	for (size_t index = 0; index < client->view_snapshot_count; index++) {
+		if (client->view_snapshots[index] != snapshot)
+			continue;
+		memmove(&client->view_snapshots[index],
+			&client->view_snapshots[index + 1],
+			(client->view_snapshot_count - index - 1) *
+			sizeof(*client->view_snapshots));
+		client->view_snapshot_count--;
+		break;
+	}
+	for (size_t pane_index = 0; pane_index < snapshot->pane_count;
+			pane_index++) {
+		struct engineos_mux_pane_model *source =
+			&snapshot->panes[pane_index];
+		if (!source->grid.ready)
+			continue;
+		for (size_t view = 0; view < client->view_snapshot_count; view++) {
+			struct engineos_mux_view_snapshot *candidate =
+				client->view_snapshots[view];
+			for (size_t index = 0; candidate != NULL &&
+					index < candidate->pane_count; index++) {
+				struct engineos_mux_pane_model *replacement =
+					&candidate->panes[index];
+				if (replacement->pane_id != source->pane_id ||
+						replacement->generation != source->generation ||
+						replacement->grid.ready)
+					continue;
+				replacement->grid = source->grid;
+				memset(&source->grid, 0, sizeof(source->grid));
+				view = client->view_snapshot_count;
+				break;
+			}
+		}
+	}
+	engineos_mux_view_snapshot_destroy(snapshot);
+}
+
 void engineos_mux_client_destroy(struct engineos_mux_client *client) {
 	if (client->fd >= 0) {
 		close(client->fd);
 	}
 	client->fd = -1;
 	free(client->socket_path);
+	free(client->view_snapshots);
 	free(client->session_id);
 	free(client->grid_cells);
 	free_pane_models(client->panes, client->pane_count);
@@ -2298,6 +2443,8 @@ void engineos_mux_client_destroy(struct engineos_mux_client *client) {
 	client->ui_menu_rows = NULL;
 	client->ui_menu_row_count = 0;
 	client->socket_path = NULL;
+	client->view_snapshots = NULL;
+	client->view_snapshot_count = 0;
 	client->session_id = NULL;
 	client->frontend_client_id = 0;
 	client->primary_view_id = 0;

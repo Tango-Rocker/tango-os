@@ -82,7 +82,11 @@ validated session, selected-pane, generation, pane-count, and revision model
 in `shell-state.json`; the contract proves a nonfocused output can move to
 another session without overwriting the focused model and that its cache
 follows reattachment. Independent nonfocused grid/UI renderers and input
-promotion remain.
+promotion remain. Each output model already resolves retained, subscribed pane
+grids—including panes in a different nonfocused session—and reports grid
+readiness, subscription coverage, and selected-grid revision. State
+invalidations remain sticky across request servicing so output snapshots
+cannot silently miss a concurrent session or layout transition.
 Terminal image transport, direct-KMS clipping, ordinary simultaneous
 text-client acceptance, and final live hardware acceptance remain before
 native mode becomes the default.

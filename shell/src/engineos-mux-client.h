@@ -131,6 +131,9 @@ struct engineos_mux_client {
 	bool ui_message_active;
 	bool ui_menu_active;
 	char *socket_path;
+	struct engineos_mux_view_snapshot **view_snapshots;
+	size_t view_snapshot_count;
+	bool state_invalidated_pending;
 	bool ready;
 };
 
@@ -144,6 +147,9 @@ bool engineos_mux_client_request_view_snapshot(
 	struct engineos_mux_client *client, uint32_t view_id,
 	struct engineos_mux_view_snapshot *snapshot, bool *grid_changed,
 	char *error, size_t error_size);
+struct engineos_mux_pane_model *engineos_mux_client_view_pane_grid(
+	struct engineos_mux_client *client,
+	const struct engineos_mux_pane_model *pane);
 bool engineos_mux_client_send_input(struct engineos_mux_client *client,
 	const void *bytes, size_t length, bool *grid_changed,
 	char *error, size_t error_size);
@@ -178,6 +184,9 @@ void engineos_mux_client_clear_render_damage(struct engineos_mux_client *client)
 void engineos_mux_pane_model_clear_render_damage(
 	struct engineos_mux_pane_model *pane);
 void engineos_mux_view_snapshot_destroy(
+	struct engineos_mux_view_snapshot *snapshot);
+void engineos_mux_client_release_view_snapshot(
+	struct engineos_mux_client *client,
 	struct engineos_mux_view_snapshot *snapshot);
 void engineos_mux_client_destroy(struct engineos_mux_client *client);
 

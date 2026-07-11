@@ -892,7 +892,8 @@ PY
 		'(.output_views | length) == 2 and
 		 all(.output_views[]; .model_ready and .model_revision > 0 and
 		   .session_id == $session and .pane_count > 0 and
-		   .pane_generation > 0)' \
+		   .pane_generation > 0 and .grid_ready_count == .pane_count and
+		   .grid_subscribed_count == .pane_count and .grid_revision > 0)' \
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "shell did not retain an authoritative model for every output view"
 	jq -e '
@@ -1769,7 +1770,8 @@ PY
 			die "GLES2 terminal renderer did not retain sparse cell damage"
 	fi
 	local focused_session nonfocused_output nonfocused_client
-	local output_session_id output_session_pane
+	local output_session_id output_session_pane output_grid_revision
+	local updated_output_grid_revision
 	focused_session="$(jq -er '.mux.session_id' \
 		"$fixture/engineos/shell-state.json")"
 	nonfocused_output="$(jq -er \
@@ -1793,7 +1795,9 @@ PY
 			'.mux.session_id == $focused_session and
 			 (.output_views | map(.session_id) | unique | length) == 2 and
 			 any(.output_views[]; .output == $output and .model_ready and
-			   .session_id == $session and .pane_id == $pane and .pane_count == 1) and
+			   .session_id == $session and .pane_id == $pane and .pane_count == 1 and
+			   .grid_ready_count == 1 and .grid_subscribed_count == 1 and
+			   .grid_revision > 0) and
 			 any(.output_views[]; .focused and .session_id == $focused_session)' \
 			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
 		sleep 0.02
@@ -1804,7 +1808,9 @@ PY
 		'.mux.session_id == $focused_session and
 		 (.output_views | map(.session_id) | unique | length) == 2 and
 		 any(.output_views[]; .output == $output and .model_ready and
-		   .session_id == $session and .pane_id == $pane and .pane_count == 1) and
+		   .session_id == $session and .pane_id == $pane and .pane_count == 1 and
+		   .grid_ready_count == 1 and .grid_subscribed_count == 1 and
+		   .grid_revision > 0) and
 		 any(.output_views[]; .focused and .session_id == $focused_session)' \
 		"$fixture/engineos/shell-state.json" >/dev/null || {
 		jq '{mux:{session_id:.mux.session_id,client_view_id:.mux.client_view_id},output_views}' \
@@ -1812,6 +1818,22 @@ PY
 		tail -100 "$fixture/shell-native.log" >&2 || true
 		die "shell did not retain independent authoritative output models"
 	}
+	output_grid_revision="$(jq -er --arg output "$nonfocused_output" \
+		'.output_views[] | select(.output == $output) | .grid_revision' \
+		"$fixture/engineos/shell-state.json")"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -t "$output_session_pane" \
+		"printf NONFOCUSED-OUTPUT-GRID-DAMAGE" Enter
+	updated_output_grid_revision="$output_grid_revision"
+	for _ in {1..150}; do
+		updated_output_grid_revision="$(jq -er --arg output "$nonfocused_output" \
+			'.output_views[] | select(.output == $output) | .grid_revision' \
+			"$fixture/engineos/shell-state.json")"
+		[[ "$updated_output_grid_revision" -gt "$output_grid_revision" ]] && break
+		sleep 0.02
+	done
+	[[ "$updated_output_grid_revision" -gt "$output_grid_revision" ]] ||
+		die "nonfocused output grid damage did not advance its retained model"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		switch-client -c "$nonfocused_client" -t "$focused_session"
 	for _ in {1..150}; do

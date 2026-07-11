@@ -105,8 +105,12 @@ for each registered output, including session, selected pane and generation,
 pane count, and revision. Its pixman source contract and exact installed
 AMD/radeonsi contract move the nonfocused synthetic tmux client to another
 session, observe both output models concurrently, and prove reattachment
-updates only that output model. Independent per-output
-grid/UI renderers and input promotion, terminal image transport, direct-KMS
+updates only that output model. Every output model resolves retained,
+subscribed grids for all of its panes; the contract proves damage in a
+nonfocused session advances only that output model while the focused session
+remains intact. State invalidations stay pending when encountered during grid
+or JSON request servicing until all output snapshots settle. Independent
+per-output grid/UI renderers and input promotion, terminal image transport, direct-KMS
 clipping, final hardware acceptance, and legacy cutover remain open. Native
 `game` is now an
 authoritative launch/split presentation that survives respawn.
