@@ -65,7 +65,7 @@ These are historical proof artifacts only; they are not the active work path:
   session, requires its frontend socket, disables launchpad bootstrap for that
   run, and fails closed if native mux preparation fails. The active package set
   is `engineos-mux 3.6b-41`, `engineos-shell 0.1.0-73`,
-  `engineos-tools 0.1.0-51`, and `engineos-config 0.1.0-6`. The live tty1 shell
+  `engineos-tools 0.1.0-52`, and `engineos-config 0.1.0-6`. The live tty1 shell
   has two registered graphical output clients, uses the DRM/libinput backend
   and radeonsi GPU glyph atlas, and starts no shell-owned foot client. The
   managed tmux configuration retains ordinary tmux commands and plugins but no
@@ -474,9 +474,30 @@ These are historical proof artifacts only; they are not the active work path:
   recovery, a latched emergency-release state that cannot be undone by grid
   damage, clean process exit, prompt restoration, and restoration of the
   native default session. Evidence is retained in
-  `/var/log/engineos/proof-native-quake-20260711T131417Z/`. Recovery/startup
-  acceptance now also passes. `engineos-config 0.1.0-6` installs tty2 as a
-  recovery getty, `engineos-tools 0.1.0-51` installs
+  `/var/log/engineos/proof-native-quake-20260711T131417Z/`. Application
+  acceptance also covers the repo-owned FTEQW launcher. Native graphical game
+  launches no longer depend on inheriting `TMUX_PANE`: `eos-app` resolves the
+  single focused `engineos-view-N` client through `engine-mux`, selects that
+  session's active pane, and fails closed if focus is ambiguous. `eos-game
+  quake play` delegates to this pane-scoped path in native mode instead of
+  restarting the out-of-band Quake user service. The quake-mod public
+  `tools/run-rpg.sh` launcher now enters the same `eos-app pane launch --game`
+  boundary for graphical native runs while dedicated servers remain direct.
+  A live tty1 proof mapped `fteqw-glsdl2` in an authoritative transient pane
+  scope, retained its PTY console, reported RX 5600 XT/radeonsi OpenGL 4.6 and
+  OpenAL, toggled console/application presentation, passed a real uinput
+  emergency release, returned to the shell prompt after TERM, relaunched, and
+  also passed an external no-`TMUX` focused-pane launch. The shell stayed on
+  the same PID with zero output frame failures; all proof scopes and windows
+  were removed. Evidence is retained in
+  `/var/log/engineos/proof-native-fteqw-20260711-155606/`.
+  Headless compositor tests now force bootstrap `none`, so they cannot launch
+  Quake or export their isolated Wayland socket into the persistent user
+  manager. The repaired manager environment points at `wayland-0`, and
+  `eos-app status` prefers the live runtime state over a stale source-tree
+  state directory. Recovery/startup acceptance also passes.
+  `engineos-config 0.1.0-6` installs tty2 as a
+  recovery getty, `engineos-tools 0.1.0-52` installs
   `engineos-recovery-help`, and the real tty2 `agetty` is active. The installed
   `eos-proof shell-launch --bare-metal` run verifies the active EngineDev
   startup decision, tty1 shell service, tty2 recovery service, recovery
@@ -494,10 +515,10 @@ These are historical proof artifacts only; they are not the active work path:
 - Manual physical confirmation that native terminal output appears immediately
   without switching monitor or tmux window, and that pointer motion is smooth,
   with `engineos-shell 0.1.0-60` on both live DRM outputs.
-- Runtime launchpad with user-provided Quake assets, including a mapped live
-  Quake surface in Runtime.
-- Interactive Quake keyboard, mouse, and audible audio in a live Runtime
-  console session with user assets.
+- Manual launchpad click-through and interactive keyboard/mouse/audio
+  confirmation remain open. The underlying no-`TMUX` launchpad-equivalent
+  focused-pane route, mapped live FTEQW surface, hardware GL/OpenAL startup,
+  capture, emergency release, and clean console restoration are proven.
 - Manual TrenchBroom GUI compile/run click-through proof. Setup generation,
   open-file smoke, packaged launcher setup, the equivalent compile/launch
   command path, entity-browser placement, and OS-level Wayland drag-and-drop
