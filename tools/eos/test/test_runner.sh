@@ -172,6 +172,7 @@ run_mux() {
 	local pane_scope="" pane_app_pid="" pane_state="" split_pane_id=""
 	local pane_shell_pid="" pane_foreground_pid=""
 	local wayland_display="" unscoped_pid="" scoped_client_pid=""
+	local preview_png=""
 	local primary_surface_id="" secondary_surface_id=""
 	local multi_grid_pid="" first_split_pane="" second_split_pane=""
 	local user_runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
@@ -190,6 +191,15 @@ run_mux() {
 	rm -rf "$fixture"
 	mkdir -p "$fixture/bin"
 	chmod 0700 "$fixture"
+	preview_png="$fixture/lease-preview.png"
+	python - "$preview_png" <<'PY'
+import base64
+import pathlib
+import sys
+pathlib.Path(sys.argv[1]).write_bytes(base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADAQMAAACOOjyFAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGUExURSJmzP///8VU6LMAAAABYktHRAH/Ai3eAAAAB3RJTUUH6gcCFi0VNn7nGQAAACV0RVh0ZGF0ZTpjcmVhdGUAMjAyNi0wNy0wMlQyMjo0NToyMSswMDowMIBjV7MAAAAldEVYdGRhdGU6bW9kaWZ5ADIwMjYtMDctMDJUMjI6NDU6MjErMDA6MDDxPu8PAAAAKHRFWHRkYXRlOnRpbWVzdGFtcAAyMDI2LTA3LTAyVDIyOjQ1OjIxKzAwOjAwpivO0AAAAAtJREFUCNdjYAABAAAGAAFm9MlsAAAAAElFTkSuQmCC"
+))
+PY
 	cc -std=c11 -Wall -Wextra -Werror -O2 \
 		"$ROOT/packages/engineos-mux/engine-pane-host.c" \
 		-o "$fixture/bin/engine-pane-host"
@@ -1129,8 +1139,13 @@ run_mux() {
 		 (.mux.panes | length) == 2 and
 		 ([.mux.panes[].pane_id] | unique | length) == 2 and
 		 all(.mux.panes[]; .grid.ready and .scene.rendered)' \
-		"$fixture/engineos/shell-state.json" >/dev/null ||
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '{mux: {session_id: .mux.session_id, pane_id: .mux.pane_id,
+			panes: .mux.panes}, last_reason}' \
+			"$fixture/engineos/shell-state.json" >&2 || true
+		tail -120 "$fixture/shell-native.log" >&2 || true
 		die "linked window duplicated pane identity or escaped the attached graphical view"
+	}
 
 	if ! kill "$shell_pid" 2>/dev/null; then
 		tail -120 "$fixture/shell-native.log" >&2 || true
@@ -1303,6 +1318,55 @@ run_mux() {
 			>&2 || true
 		die "presentation lease did not return to the surviving shell output view"
 	}
+	python - "$fixture/engineos/preview.sock" "$preview_png" \
+		"$shell_pane_id" <<'PY'
+import json
+import socket
+import sys
+request = {
+    "op": "show",
+    "path": sys.argv[2],
+    "owner": "native-mux-lease-proof",
+    "pane": {"pane_id": sys.argv[3]},
+}
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+    client.settimeout(3.0)
+    client.connect(sys.argv[1])
+    client.sendall((json.dumps(request) + "\n").encode())
+    response = json.loads(client.recv(4096))
+if response.get("status") != "ok":
+    raise SystemExit(f"preview request failed: {response}")
+PY
+	for _ in {1..100}; do
+		jq -e --arg pane "$shell_pane_id" \
+			'.preview.visible and .preview.pane_id == $pane and
+			 .preview.generation == .mux.generation and
+			 .preview.lease_client_id == .mux.presentation.lease_client_id and
+			 .preview.lease_view_id == .mux.presentation.lease_view_id and
+			 ([.output_views[] | select(.preview_visible)] | length) == 1 and
+			 ([.output_views[] | select(.preview_visible and
+			   .owns_selected_presentation)] | length) == 1' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg pane "$shell_pane_id" \
+		'.preview.visible and .preview.pane_id == $pane and
+		 .preview.lease_view_id == .mux.presentation.lease_view_id and
+		 ([.output_views[] | select(.preview_visible)] | length) == 1' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "pane preview was not keyed to and isolated by its output lease"
+	python - "$fixture/engineos/preview.sock" <<'PY'
+import json
+import socket
+import sys
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+    client.settimeout(3.0)
+    client.connect(sys.argv[1])
+    client.sendall(b'{"op":"hide","owner":"native-mux-lease-proof"}\n')
+    response = json.loads(client.recv(4096))
+if response.get("status") != "ok":
+    raise SystemExit(f"preview hide failed: {response}")
+PY
 	primary_surface_id="$(jq -er '.windows[] | select(.bound == true and
 		.app_id == "engineos.presentation-proof") | .surface_id' \
 		"$fixture/engineos/shell-state.json")"

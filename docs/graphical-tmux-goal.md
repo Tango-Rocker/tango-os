@@ -86,9 +86,13 @@ XDG toplevel/transient set only beneath the owning lease's clipped pane tree;
 nonowners retain console copies, and external lease ownership detaches and
 hides the local presentation. Observability and the installed contract prove
 distinct output roots, complete pane-copy counts, one owning presentation
-subtree, and zero presentation surfaces on the nonowner. Independent
-per-output session models, lease-keyed images, games, direct-KMS clipping,
-final hardware acceptance, and legacy cutover remain open. The server now
+subtree, and zero presentation surfaces on the nonowner. Native pane previews
+are now keyed by pane ID, generation, frontend client, and output-view lease;
+their scene buffers live under the leased pane subtree, fail closed for an
+external lease, and appear on exactly one output in the installed radeonsi
+contract. Independent per-output session models, multiple simultaneous pane
+images and terminal image transport, games, direct-KMS clipping, final
+hardware acceptance, and legacy cutover remain open. The server now
 exports every
 pane's authoritative cell origin and size,
 and the shell validates and retains the complete pane set instead of discarding

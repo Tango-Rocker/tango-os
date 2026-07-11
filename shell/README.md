@@ -69,10 +69,15 @@ layout-positioned mux scene root and a console copy for every pane. The live
 XDG presentation subtree is reparented only beneath its lease owner's clipped
 pane; nonowners retain consoles, while external ownership detaches the local
 presentation from all output roots. `shell-state.json` exposes root positions,
-pane-copy counts, and bound/visible presentation counts. Independent
-per-output session models, lease-keyed images, direct-KMS clipping, ordinary
-simultaneous text-client acceptance, and final live hardware acceptance remain
-before native mode becomes the default.
+pane-copy counts, and bound/visible presentation counts. Native previews are
+keyed by pane ID, generation, frontend client, and output-view lease, parented
+under the leased pane scene, rejected for external ownership, and reported per
+output. The installed radeonsi contract proves a decoded image appears on only
+the owning output while the legacy preview contract remains green. Independent
+per-output session models, multiple simultaneous pane images and terminal
+image transport, direct-KMS clipping, ordinary simultaneous text-client
+acceptance, and final live hardware acceptance remain before native mode
+becomes the default.
 
 ## Surface Model
 

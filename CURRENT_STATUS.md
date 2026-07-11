@@ -100,7 +100,7 @@ These are historical proof artifacts only; they are not the active work path:
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
   `engineos-mux 3.6b-27` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-40`, but native mode is not yet the live desktop
+  `engineos-shell 0.1.0-41`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
@@ -162,7 +162,7 @@ These are historical proof artifacts only; they are not the active work path:
   resizing, ranged status-window selection, status-menu opening, and menu-item
   command activation. The shell routes pointer motion, buttons, and vertical
   scroll through that same boundary. The contract passes against the exact
-  `engineos-mux 3.6b-27` and `engineos-shell 0.1.0-40` package binaries. The
+  `engineos-mux 3.6b-27` and `engineos-shell 0.1.0-41` package binaries. The
   native renderer now keeps FreeType-rasterized, colour-keyed glyphs in a GPU
   texture atlas and draws them into double-buffered per-pane GPU targets.
   Sparse tmux cell damage is retained through the mux client, expanded only
@@ -260,16 +260,22 @@ These are historical proof artifacts only; they are not the active work path:
   lease, temporary graphical clients restore the previous owner on disconnect,
   destroyed or out-of-window views lose ownership, and the shell settles
   concurrent invalidations instead of retaining stale lease state. The exact
-  installed `engineos-mux 3.6b-27` and `engineos-shell 0.1.0-40` binaries pass
+  installed `engineos-mux 3.6b-27` and `engineos-shell 0.1.0-41` binaries pass
   the complete two-output contract through AMD/radeonsi GLES2. Every output
   now owns a layout-positioned mux scene root with a console buffer node for
   every pane. The live XDG toplevel/transient set is parented only beneath the
   leased output's clipped pane subtree; nonowners keep their console copies,
   and a lease outside this compositor detaches and hides the presentation
   subtree. `shell-state.json` reports root coordinates, pane-copy counts, and
-  bound versus visible presentation surfaces per output. Independent
-  per-output session models, lease-keyed images, direct-KMS clipping, and
-  simultaneous ordinary text-client acceptance remain the next boundary.
+  bound versus visible presentation surfaces per output. Native pane previews
+  are now keyed by pane ID, generation, frontend client, and output-view lease,
+  parented inside the leased pane subtree, rejected when the lease belongs to
+  another graphical client, and reported per output in `shell-state.json`.
+  The exact installed radeonsi contract decodes a real image and proves it is
+  visible on exactly the presentation-lease owner; the legacy preview contract
+  also remains green. Independent per-output session models, multiple
+  simultaneous pane images and terminal image transport, direct-KMS clipping,
+  and simultaneous ordinary text-client acceptance remain the next boundary.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 
