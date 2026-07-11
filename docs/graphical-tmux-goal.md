@@ -300,6 +300,12 @@ Exit criteria:
 
 - Separate compositor core, mux client, pane scene, terminal renderer, XDG
   binding, input routing, and observability where implementation requires it.
+- Keep tmux's exported grid, cursor, scrollback, and terminal state
+  authoritative. Do not embed a second terminal client or create another PTY
+  merely to reuse its renderer.
+- Put font discovery, fallback, shaping, rasterization, glyph caching, and GPU
+  target updates behind an explicit renderer boundary so a proven glyph
+  provider can replace the current implementation without changing mux state.
 - Create one clipped wlroots scene subtree per mux pane.
 - Implement GPU glyph-atlas rendering.
 - Allow CPU glyph rasterization, but require GPU composition.
@@ -325,6 +331,16 @@ Exit criteria:
 - Preserve normal padding behavior for ordinary text clients.
 - Route prefix commands to `engine-mux`.
 - Route normal console-mode keys to the pane PTY.
+- Normalize libinput events once, resolve each event to a typed terminal,
+  Wayland-surface, game, or shell target, then dispatch through that target's
+  protocol boundary instead of interleaving those policies in cursor callbacks.
+- Track keyboard focus, pointer focus, and pointer grabs independently. Bind
+  each pressed pointer button to its original target until release, including
+  popups, subsurfaces, and presentation-mode transitions.
+- Close graphical panes by requesting XDG toplevel close first, waiting for
+  actual unmap or process exit, then escalating to scope TERM after a bounded
+  timeout; reserve KILL for an explicit command. Do not clear authoritative
+  presentation state before lifecycle evidence arrives.
 - Implement mouse selection, pane focus, resizing, status interaction, menus,
   prompts, and copy mode.
 - Support split, resize, zoom, join, break, swap, move-window, session moves,

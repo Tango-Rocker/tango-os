@@ -64,7 +64,7 @@ These are historical proof artifacts only; they are not the active work path:
   `engineos-dev-shell-start` creates or reuses the authoritative `engineos`
   session, requires its frontend socket, disables launchpad bootstrap for that
   run, and fails closed if native mux preparation fails. The active package set
-  is `engineos-mux 3.6b-41`, `engineos-shell 0.1.0-70`,
+  is `engineos-mux 3.6b-41`, `engineos-shell 0.1.0-71`,
   `engineos-tools 0.1.0-51`, and `engineos-config 0.1.0-6`. The live tty1 shell
   has two registered graphical output clients, uses the DRM/libinput backend
   and radeonsi GPU glyph atlas, and starts no shell-owned foot client. The
@@ -111,6 +111,15 @@ These are historical proof artifacts only; they are not the active work path:
   and click paths; the live package exposes the active 24x6 menu model with
   zero output frame failures and zero service restarts. Physical confirmation
   of the corrected right-click appearance remains required.
+  Raising that full-output buffer initially made its transparent area win
+  wlroots pointer hit testing, so graphical presentations received keyboard
+  focus but no pointer buttons or scroll. Installed `0.1.0-71` keeps the UI
+  buffer above pane scenes for composition while excluding it from surface hit
+  testing; terminal UI input still follows authoritative tmux cell routing.
+  Live Falkon evidence records pointer click-focus delivery to its presentation,
+  a click on its client close control, and the resulting immediate surface
+  unmap. The full GLES2/radeonsi mux contract passes and the direct-TTY system
+  service remains active with zero restarts and no new coredump.
   The shell now exposes wlroots screencopy plus xdg-output geometry, making
   `grim` a real supported capture client. The focused contract produced a
   correctly sized 1280x720 PNG with both pixman and radeonsi GLES2. Installed
@@ -153,7 +162,7 @@ These are historical proof artifacts only; they are not the active work path:
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
   `engineos-mux 3.6b-41` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-70`, and native mode is the live EngineDev desktop
+  `engineos-shell 0.1.0-71`, and native mode is the live EngineDev desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The

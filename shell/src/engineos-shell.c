@@ -2739,6 +2739,14 @@ static void set_terminal_scene_buffer(
 		engineos_terminal_renderer_buffer(renderer), &options);
 }
 
+static bool scene_overlay_rejects_pointer_input(
+		struct wlr_scene_buffer *buffer, double *sx, double *sy) {
+	(void)buffer;
+	(void)sx;
+	(void)sy;
+	return false;
+}
+
 static bool create_mux_pane_scene(struct engineos_shell_server *server,
 		struct engineos_mux_pane_model *pane, char *error, size_t error_size) {
 	(void)server;
@@ -2902,6 +2910,13 @@ static bool create_mux_output_scene(struct engineos_shell_output *output,
 		snprintf(error, error_size, "failed to create mux output UI scene");
 		return false;
 	}
+	/* The full-output UI buffer contains transparent pixels outside tmux status,
+	 * prompt, and menu cells. It must stay above panes for rendering but never
+	 * become the pointer hit-test target: terminal-mode UI input is routed by
+	 * authoritative tmux cell coordinates, while presentation-mode input must
+	 * reach the Wayland surface below it. */
+	output->mux_ui_scene->point_accepts_input =
+		scene_overlay_rejects_pointer_input;
 	set_terminal_scene_buffer(output->mux_ui_scene, output->mux_ui_renderer);
 	wlr_scene_node_raise_to_top(&output->mux_ui_scene->node);
 	output->mux_snapshot.ui.changed = false;
