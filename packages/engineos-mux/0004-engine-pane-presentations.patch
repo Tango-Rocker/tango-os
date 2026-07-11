@@ -31,7 +31,7 @@
 +};
 +TAILQ_HEAD(engine_pane_surfaces, engine_pane_surface);
 +
-@@ -1170,0 +1197,13 @@ struct window_pane {
+@@ -1170,0 +1197,15 @@ struct window_pane {
 +	enum engine_pane_presentation engine_presentation;
 +	enum engine_pane_view_mode engine_view_mode;
 +	struct engine_pane_surfaces engine_surfaces;
@@ -43,9 +43,11 @@
 +	time_t		 engine_launch_deadline;
 +	u_int		 engine_surface_count;
 +	u_int		 engine_active_surface_id;
++	u_int		 engine_lease_client_id;
++	u_int		 engine_lease_view_id;
 +	int		 engine_mapped;
 +
-@@ -2888,0 +2928,9 @@ void	 engine_mux_frontend_free(void);
+@@ -2888,0 +2930,9 @@ void	 engine_mux_frontend_free(void);
 +/* engine-pane.c */
 +const char *engine_pane_presentation_name(const struct window_pane *);
 +const char *engine_pane_view_mode_name(const struct window_pane *);
@@ -87,7 +89,7 @@
 +	&cmd_select_pane_surface_entry,
 --- a/format.c
 +++ b/format.c
-@@ -888,0 +889,56 @@ format_cb_current_command(struct format_tree *ft)
+@@ -888,0 +889,72 @@ format_cb_current_command(struct format_tree *ft)
 +static void *
 +format_cb_pane_presentation(struct format_tree *ft)
 +{
@@ -144,16 +146,38 @@
 +	return (format_printf("%d", ft->wp->engine_mapped));
 +}
 +
-@@ -3229,0 +3286,6 @@ static const struct format_table_entry format_table[] = {
++static void *
++format_cb_pane_presentation_lease_client(struct format_tree *ft)
++{
++	if (ft->wp == NULL || ft->wp->engine_lease_client_id == 0)
++		return (NULL);
++	return (format_printf("%u", ft->wp->engine_lease_client_id));
++}
++
++static void *
++format_cb_pane_presentation_lease_view(struct format_tree *ft)
++{
++	if (ft->wp == NULL || ft->wp->engine_lease_view_id == 0)
++		return (NULL);
++	return (format_printf("%u", ft->wp->engine_lease_view_id));
++}
++
+@@ -3229,0 +3302,6 @@ static const struct format_table_entry format_table[] = {
 +	{ "pane_active_surface", FORMAT_TABLE_STRING,
 +	  format_cb_pane_active_surface
 +	},
 +	{ "pane_app_pid", FORMAT_TABLE_STRING,
 +	  format_cb_pane_app_pid
 +	},
-@@ -3313,0 +3365,9 @@ static const struct format_table_entry format_table[] = {
+@@ -3313,0 +3381,15 @@ static const struct format_table_entry format_table[] = {
 +	{ "pane_presentation", FORMAT_TABLE_STRING,
 +	  format_cb_pane_presentation
++	},
++	{ "pane_presentation_lease_client", FORMAT_TABLE_STRING,
++	  format_cb_pane_presentation_lease_client
++	},
++	{ "pane_presentation_lease_view", FORMAT_TABLE_STRING,
++	  format_cb_pane_presentation_lease_view
 +	},
 +	{ "pane_presentation_mapped", FORMAT_TABLE_STRING,
 +	  format_cb_pane_presentation_mapped
@@ -161,11 +185,11 @@
 +	{ "pane_presentation_scope", FORMAT_TABLE_STRING,
 +	  format_cb_pane_scope
 +	},
-@@ -3325,0 +3389,3 @@ static const struct format_table_entry format_table[] = {
+@@ -3325,0 +3411,3 @@ static const struct format_table_entry format_table[] = {
 +	{ "pane_surface_count", FORMAT_TABLE_STRING,
 +	  format_cb_pane_surface_count
 +	},
-@@ -3343,0 +3410,3 @@ static const struct format_table_entry format_table[] = {
+@@ -3343,0 +3432,3 @@ static const struct format_table_entry format_table[] = {
 +	{ "pane_view_mode", FORMAT_TABLE_STRING,
 +	  format_cb_pane_view_mode
 +	},

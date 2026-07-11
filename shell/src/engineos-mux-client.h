@@ -58,6 +58,8 @@ struct engineos_mux_pane_model {
 	bool presentation_mapped;
 	uint32_t surface_tabs;
 	uint32_t active_surface_id;
+	uint32_t lease_client_id;
+	uint32_t lease_view_id;
 	struct engineos_mux_grid_model grid;
 };
 
@@ -81,9 +83,12 @@ struct engineos_mux_client {
 	bool pane_presentation_mapped;
 	uint32_t pane_surface_tabs;
 	uint32_t pane_active_surface_id;
+	uint32_t pane_lease_client_id;
+	uint32_t pane_lease_view_id;
 	struct engineos_mux_pane_model *panes;
 	size_t pane_count;
 	char *session_id;
+	uint32_t frontend_client_id;
 	uint32_t primary_view_id;
 	uint32_t grid_columns;
 	uint32_t grid_rows;

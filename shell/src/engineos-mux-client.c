@@ -21,6 +21,8 @@ static bool exchange_json_request(struct engineos_mux_client *client,
 	bool *grid_changed, char *error, size_t error_size);
 static bool service_pending_grid_damage(struct engineos_mux_client *client,
 	bool *grid_changed, char *error, size_t error_size);
+static bool json_u32(struct json_object *parent, const char *name,
+	uint32_t maximum, uint32_t *value);
 
 static uint64_t host_to_be64(uint64_t value) {
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -196,6 +198,7 @@ static bool parse_pane_presentation(struct engineos_mux_client *client,
 	struct json_object *presentation = NULL, *view_mode = NULL;
 	struct json_object *mapped = NULL, *surface_tabs = NULL;
 	struct json_object *active_surface_id = NULL;
+	struct json_object *lease_client_id = NULL, *lease_view_id = NULL;
 	if (!json_object_object_get_ex(pane, "presentation", &presentation) ||
 			!json_object_is_type(presentation, json_type_string) ||
 			!json_object_object_get_ex(pane, "view_mode", &view_mode) ||
@@ -206,7 +209,12 @@ static bool parse_pane_presentation(struct engineos_mux_client *client,
 			!json_object_is_type(surface_tabs, json_type_int) ||
 			!json_object_object_get_ex(pane, "active_surface_id",
 				&active_surface_id) ||
-			!json_object_is_type(active_surface_id, json_type_int)) {
+			!json_object_is_type(active_surface_id, json_type_int) ||
+			!json_object_object_get_ex(pane, "lease_client_id",
+				&lease_client_id) ||
+			!json_object_is_type(lease_client_id, json_type_int) ||
+			!json_object_object_get_ex(pane, "lease_view_id", &lease_view_id) ||
+			!json_object_is_type(lease_view_id, json_type_int)) {
 		snprintf(error, error_size, "snapshot presentation contract is invalid");
 		return false;
 	}
@@ -214,19 +222,28 @@ static bool parse_pane_presentation(struct engineos_mux_client *client,
 	const char *view_mode_text = json_object_get_string(view_mode);
 	int64_t tabs = json_object_get_int64(surface_tabs);
 	int64_t active_id = json_object_get_int64(active_surface_id);
+	int64_t lease_client = json_object_get_int64(lease_client_id);
+	int64_t lease_view = json_object_get_int64(lease_view_id);
+	bool is_mapped = json_object_get_boolean(mapped);
 	if (strlen(presentation_text) >= sizeof(client->pane_presentation) ||
 			strlen(view_mode_text) >= sizeof(client->pane_view_mode) ||
 			tabs < 0 || tabs > UINT32_MAX ||
 			active_id < 0 || active_id > UINT32_MAX ||
-			(tabs == 0 && active_id != 0) || (tabs > 0 && active_id == 0)) {
+			lease_client < 0 || lease_client > UINT32_MAX ||
+			lease_view < 0 || lease_view > UINT32_MAX ||
+			(tabs == 0 && active_id != 0) || (tabs > 0 && active_id == 0) ||
+			(is_mapped && (lease_client == 0 || lease_view == 0)) ||
+			(!is_mapped && (lease_client != 0 || lease_view != 0))) {
 		snprintf(error, error_size, "snapshot presentation state is invalid");
 		return false;
 	}
 	strcpy(client->pane_presentation, presentation_text);
 	strcpy(client->pane_view_mode, view_mode_text);
-	client->pane_presentation_mapped = json_object_get_boolean(mapped);
+	client->pane_presentation_mapped = is_mapped;
 	client->pane_surface_tabs = (uint32_t)tabs;
 	client->pane_active_surface_id = (uint32_t)active_id;
+	client->pane_lease_client_id = (uint32_t)lease_client;
+	client->pane_lease_view_id = (uint32_t)lease_view;
 	return true;
 }
 
@@ -255,6 +272,19 @@ static bool parse_pane_prefixes(struct engineos_mux_client *client,
 static bool parse_pane_models(struct engineos_mux_client *client,
 		struct json_object *snapshot, char *error, size_t error_size) {
 	struct json_object *panes = NULL;
+	uint32_t focused_client_id = 0, focused_view_id = 0;
+	if (!json_u32(snapshot, "focused_client_id", UINT32_MAX,
+			&focused_client_id) ||
+			!json_u32(snapshot, "focused_view_id", UINT32_MAX,
+				&focused_view_id) ||
+			((focused_client_id == 0) != (focused_view_id == 0))) {
+		snprintf(error, error_size, "snapshot focused view identity is invalid");
+		return false;
+	}
+	if (client->frontend_client_id != 0) {
+		client->primary_view_id = focused_client_id ==
+			client->frontend_client_id ? focused_view_id : 0;
+	}
 	if (!json_object_object_get_ex(snapshot, "panes", &panes) ||
 			!json_object_is_type(panes, json_type_array)) {
 		snprintf(error, error_size, "snapshot pane list is invalid");
@@ -278,6 +308,7 @@ static bool parse_pane_models(struct engineos_mux_client *client,
 		struct json_object *window_active = NULL;
 		struct json_object *presentation = NULL, *view_mode = NULL;
 		struct json_object *mapped = NULL, *tabs = NULL, *active_surface = NULL;
+		struct json_object *lease_client = NULL, *lease_view = NULL;
 		if (!json_object_is_type(pane, json_type_object) ||
 				!json_object_object_get_ex(pane, "pane_id", &id) ||
 				!json_object_object_get_ex(pane, "generation", &generation) ||
@@ -292,7 +323,9 @@ static bool parse_pane_models(struct engineos_mux_client *client,
 				!json_object_object_get_ex(pane, "view_mode", &view_mode) ||
 				!json_object_object_get_ex(pane, "mapped", &mapped) ||
 				!json_object_object_get_ex(pane, "surface_tabs", &tabs) ||
-				!json_object_object_get_ex(pane, "active_surface_id", &active_surface)) {
+				!json_object_object_get_ex(pane, "active_surface_id", &active_surface) ||
+				!json_object_object_get_ex(pane, "lease_client_id", &lease_client) ||
+				!json_object_object_get_ex(pane, "lease_view_id", &lease_view)) {
 			free(models);
 			snprintf(error, error_size, "snapshot pane model is incomplete");
 			return false;
@@ -310,7 +343,9 @@ static bool parse_pane_models(struct engineos_mux_client *client,
 				!json_object_is_type(view_mode, json_type_string) ||
 				!json_object_is_type(mapped, json_type_boolean) ||
 				!json_object_is_type(tabs, json_type_int) ||
-				!json_object_is_type(active_surface, json_type_int)) {
+				!json_object_is_type(active_surface, json_type_int) ||
+				!json_object_is_type(lease_client, json_type_int) ||
+				!json_object_is_type(lease_view, json_type_int)) {
 			free(models);
 			snprintf(error, error_size, "snapshot pane model types are invalid");
 			return false;
@@ -326,6 +361,9 @@ static bool parse_pane_models(struct engineos_mux_client *client,
 		int64_t parsed_rows = json_object_get_int64(rows);
 		int64_t parsed_tabs = json_object_get_int64(tabs);
 		int64_t parsed_active_surface = json_object_get_int64(active_surface);
+		int64_t parsed_lease_client = json_object_get_int64(lease_client);
+		int64_t parsed_lease_view = json_object_get_int64(lease_view);
+		bool parsed_mapped = json_object_get_boolean(mapped);
 		const char *presentation_text = json_object_get_string(presentation);
 		const char *view_mode_text = json_object_get_string(view_mode);
 		if (id_text == NULL || *id_text == '\0' || *end != '\0' ||
@@ -337,8 +375,14 @@ static bool parse_pane_models(struct engineos_mux_client *client,
 				parsed_rows <= 0 || parsed_rows > UINT32_MAX ||
 				parsed_tabs < 0 || parsed_tabs > UINT32_MAX ||
 				parsed_active_surface < 0 || parsed_active_surface > UINT32_MAX ||
+				parsed_lease_client < 0 || parsed_lease_client > UINT32_MAX ||
+				parsed_lease_view < 0 || parsed_lease_view > UINT32_MAX ||
 				(parsed_tabs == 0 && parsed_active_surface != 0) ||
 				(parsed_tabs > 0 && parsed_active_surface == 0) ||
+				(parsed_mapped &&
+				 (parsed_lease_client == 0 || parsed_lease_view == 0)) ||
+				(!parsed_mapped &&
+				 (parsed_lease_client != 0 || parsed_lease_view != 0)) ||
 				(strcmp(presentation_text, "terminal") != 0 &&
 				 strcmp(presentation_text, "wayland") != 0 &&
 				 strcmp(presentation_text, "game") != 0 &&
@@ -370,9 +414,11 @@ static bool parse_pane_models(struct engineos_mux_client *client,
 		models[index].window_active = json_object_get_boolean(window_active);
 		strcpy(models[index].presentation, presentation_text);
 		strcpy(models[index].view_mode, view_mode_text);
-		models[index].presentation_mapped = json_object_get_boolean(mapped);
+		models[index].presentation_mapped = parsed_mapped;
 		models[index].surface_tabs = (uint32_t)parsed_tabs;
 		models[index].active_surface_id = (uint32_t)parsed_active_surface;
+		models[index].lease_client_id = (uint32_t)parsed_lease_client;
+		models[index].lease_view_id = (uint32_t)parsed_lease_view;
 	}
 	for (size_t index = 0; index < count; index++) {
 		for (size_t previous = 0; previous < client->pane_count; previous++) {
@@ -1198,6 +1244,14 @@ bool engineos_mux_client_connect(struct engineos_mux_client *client,
 
 bool engineos_mux_client_refresh_presentation(struct engineos_mux_client *client,
 		char *error, size_t error_size) {
+	unsigned int attempts = 0;
+
+refresh_again:
+	if (++attempts > 8) {
+		snprintf(error, error_size,
+			"mux presentation state did not settle");
+		return false;
+	}
 	struct json_object *snapshot = NULL;
 	bool grid_changed = false;
 	if (!exchange_json_request(client, ENGINE_MUX_SNAPSHOT_REQUEST,
@@ -1305,7 +1359,11 @@ bool engineos_mux_client_refresh_presentation(struct engineos_mux_client *client
 		parse_pane_presentation(client, matched, error, error_size) &&
 		parse_pane_prefixes(client, matched, error, error_size);
 	json_object_put(snapshot);
-	return result;
+	if (!result)
+		return false;
+	if (grid_changed)
+		goto refresh_again;
+	return true;
 }
 
 bool engineos_mux_client_handle_event(struct engineos_mux_client *client,
@@ -1708,6 +1766,7 @@ static bool exchange_json_request(struct engineos_mux_client *client,
 		}
 		if (type == ENGINE_MUX_STATE_INVALIDATED && length == 0) {
 			free(packet);
+			*grid_changed = true;
 			continue;
 		}
 		char *json_text = malloc((size_t)length + 1);
@@ -1781,11 +1840,25 @@ bool engineos_mux_client_register_view(struct engineos_mux_client *client,
 	json_object_object_add(root, "focused", json_object_new_boolean(focused));
 	const char *payload = json_object_to_json_string_ext(root,
 		JSON_C_TO_STRING_PLAIN);
+	struct json_object *response = NULL;
 	bool result = exchange_json_request(client,
 		ENGINE_MUX_VIEW_REGISTER_REQUEST, ENGINE_MUX_VIEW_REGISTER_ACK,
-		payload, "engine-mux/view-register-v1", NULL, grid_changed,
+		payload, "engine-mux/view-register-v1", &response, grid_changed,
 		error, error_size);
 	json_object_put(root);
+	uint32_t frontend_client_id = 0;
+	if (result && (!json_u32(response, "client_id", UINT32_MAX,
+			&frontend_client_id) || frontend_client_id == 0 ||
+			(client->frontend_client_id != 0 &&
+			 client->frontend_client_id != frontend_client_id))) {
+		snprintf(error, error_size,
+			"graphical view registration client identity is invalid");
+		result = false;
+	}
+	if (response != NULL)
+		json_object_put(response);
+	if (result)
+		client->frontend_client_id = frontend_client_id;
 	if (result && focused)
 		client->primary_view_id = view_id;
 	if (result) {
@@ -1999,10 +2072,10 @@ bool engineos_mux_client_resolve_presentation(struct engineos_mux_client *client
 
 static bool presentation_surface_request(struct engineos_mux_client *client,
 		bool map, uint32_t pane_id, uint32_t generation, int32_t pid,
-		uint32_t surface_id, const char *role, bool *grid_changed,
+		uint32_t surface_id, uint32_t view_id, const char *role, bool *grid_changed,
 		char *error, size_t error_size) {
 	if (generation == 0 || pid <= 0 || surface_id == 0 ||
-			(map && (role == NULL || *role == '\0'))) {
+			(map && (view_id == 0 || role == NULL || *role == '\0'))) {
 		snprintf(error, error_size, "invalid presentation surface request");
 		return false;
 	}
@@ -2020,8 +2093,11 @@ static bool presentation_surface_request(struct engineos_mux_client *client,
 	json_object_object_add(request, "generation", json_object_new_int64(generation));
 	json_object_object_add(request, "pid", json_object_new_int64(pid));
 	json_object_object_add(request, "surface_id", json_object_new_int64(surface_id));
-	if (map)
+	if (map) {
+		json_object_object_add(request, "view_id",
+			json_object_new_int64(view_id));
 		json_object_object_add(request, "role", json_object_new_string(role));
+	}
 	const char *payload = json_object_to_json_string_ext(request,
 		JSON_C_TO_STRING_PLAIN);
 	bool result = exchange_json_request(client,
@@ -2045,7 +2121,7 @@ bool engineos_mux_client_map_presentation(struct engineos_mux_client *client,
 		return false;
 	}
 	return presentation_surface_request(client, true, target->pane_id,
-		target->generation, pid, surface_id, role, grid_changed,
+		target->generation, pid, surface_id, client->primary_view_id, role, grid_changed,
 		error, error_size);
 }
 
@@ -2053,7 +2129,7 @@ bool engineos_mux_client_unmap_presentation(struct engineos_mux_client *client,
 		uint32_t pane_id, uint32_t generation, int32_t pid, uint32_t surface_id,
 		bool *grid_changed, char *error, size_t error_size) {
 	return presentation_surface_request(client, false, pane_id, generation,
-		pid, surface_id, NULL, grid_changed, error, error_size);
+		pid, surface_id, 0, NULL, grid_changed, error, error_size);
 }
 
 void engineos_mux_client_clear_render_damage(struct engineos_mux_client *client) {
@@ -2095,6 +2171,7 @@ void engineos_mux_client_destroy(struct engineos_mux_client *client) {
 	client->ui_menu_row_count = 0;
 	client->socket_path = NULL;
 	client->session_id = NULL;
+	client->frontend_client_id = 0;
 	client->primary_view_id = 0;
 	client->ready = false;
 }

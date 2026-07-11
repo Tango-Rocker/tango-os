@@ -14,8 +14,10 @@
 
 struct engine_mux_view {
 	u_int id;
+	u_int client_id;
 	int peer_fd;
 	struct client *tmux_client;
+	struct engine_mux_view *previous_focused;
 	char *output_name;
 	uint64_t ui_hash;
 	int ui_subscribed;
@@ -33,6 +35,7 @@ struct engine_mux_subscription {
 TAILQ_HEAD(engine_mux_subscription_list, engine_mux_subscription);
 
 struct engine_mux_client {
+	u_int id;
 	int fd;
 	struct event event;
 	int state_invalidation_pending;
@@ -52,6 +55,8 @@ struct engine_mux_grid_state {
 static TAILQ_HEAD(, engine_mux_client) engine_mux_clients =
 	TAILQ_HEAD_INITIALIZER(engine_mux_clients);
 static u_int engine_mux_next_graphical_client_id;
+static u_int engine_mux_next_frontend_client_id;
+static struct engine_mux_view *engine_mux_focused_view;
 static TAILQ_HEAD(, engine_mux_grid_state) engine_mux_grids =
 	TAILQ_HEAD_INITIALIZER(engine_mux_grids);
 static struct event engine_mux_accept_event;
@@ -192,13 +197,95 @@ engine_mux_view_find(struct engine_mux_client *client, u_int id)
 	return (NULL);
 }
 
+static struct engine_mux_view *
+engine_mux_lease_view_find(u_int client_id, u_int view_id)
+{
+	struct engine_mux_client *client;
+	struct engine_mux_view *view;
+
+	TAILQ_FOREACH(client, &engine_mux_clients, entry) {
+		if (client->id != client_id)
+			continue;
+		view = engine_mux_view_find(client, view_id);
+		if (view != NULL)
+			return (view);
+	}
+	return (NULL);
+}
+
 static int
-engine_mux_presentation_dispatch(struct json_object *root, int map,
-    char **cause)
+engine_mux_view_contains_pane(struct engine_mux_view *view,
+    struct window_pane *pane)
+{
+	struct client *tmux_client = view->tmux_client;
+
+	return (tmux_client != NULL && !(tmux_client->flags & CLIENT_DEAD) &&
+	    tmux_client->session != NULL && tmux_client->session->curw != NULL &&
+	    tmux_client->session->curw->window == pane->window);
+}
+
+static void
+engine_mux_transfer_view_leases(struct engine_mux_view *view)
 {
 	struct window_pane *pane;
+	struct client *tmux_client = view->tmux_client;
+
+	if (tmux_client == NULL || (tmux_client->flags & CLIENT_DEAD) ||
+	    tmux_client->session == NULL || tmux_client->session->curw == NULL)
+		return;
+	TAILQ_FOREACH(pane, &tmux_client->session->curw->window->panes, entry) {
+		if (!pane->engine_mapped)
+			continue;
+		pane->engine_lease_client_id = view->client_id;
+		pane->engine_lease_view_id = view->id;
+	}
+}
+
+static void
+engine_mux_reconcile_leases(void)
+{
+	struct engine_mux_client *client;
+	struct engine_mux_view *view, *focused = NULL;
+	struct window *window;
+	struct window_pane *pane;
+
+	RB_FOREACH(window, windows, &windows) {
+		TAILQ_FOREACH(pane, &window->panes, entry) {
+			if (!pane->engine_mapped) {
+				pane->engine_lease_client_id = 0;
+				pane->engine_lease_view_id = 0;
+				continue;
+			}
+			view = engine_mux_lease_view_find(
+			    pane->engine_lease_client_id,
+			    pane->engine_lease_view_id);
+			if (view == NULL || !engine_mux_view_contains_pane(view, pane)) {
+				pane->engine_lease_client_id = 0;
+				pane->engine_lease_view_id = 0;
+			}
+		}
+	}
+	TAILQ_FOREACH(client, &engine_mux_clients, entry) {
+		TAILQ_FOREACH(view, &client->views, entry) {
+			if (view->tmux_client != NULL &&
+			    !(view->tmux_client->flags & CLIENT_DEAD) &&
+			    (view->tmux_client->flags & CLIENT_FOCUSED) &&
+			    !(view->tmux_client->flags & CLIENT_IGNORESIZE))
+				focused = view;
+		}
+	}
+	if (focused != NULL)
+		engine_mux_transfer_view_leases(focused);
+}
+
+static int
+engine_mux_presentation_dispatch(struct engine_mux_client *client,
+    struct json_object *root, int map, char **cause)
+{
+	struct window_pane *pane;
+	struct engine_mux_view *view = NULL;
 	const char *schema, *pane_id, *role = NULL;
-	u_int generation, pid, surface_id;
+	u_int generation, pid, surface_id, view_id = 0;
 
 	schema = engine_mux_json_string_value(root, "schema", 64);
 	pane_id = engine_mux_json_string_value(root, "pane_id", 32);
@@ -217,14 +304,34 @@ engine_mux_presentation_dispatch(struct json_object *root, int map,
 		*cause = xstrdup("presentation surface role is missing");
 		return (-1);
 	}
+	if (map && (engine_mux_json_u32(root, "view_id", 1, UINT32_MAX,
+	    &view_id) != 0 || (view = engine_mux_view_find(client, view_id)) == NULL)) {
+		*cause = xstrdup("presentation lease view is not registered");
+		return (-1);
+	}
 	pane = window_pane_find_by_id_str(pane_id);
 	if (pane == NULL || pane->engine_generation != generation) {
 		*cause = xstrdup("presentation pane generation is not current");
 		return (-1);
 	}
-	if (map)
-		return (engine_pane_surface_map(pane, (pid_t)pid, surface_id,
-		    role, cause));
+	if (map) {
+		if (!engine_mux_view_contains_pane(view, pane)) {
+			*cause = xstrdup("presentation lease view is not attached to the pane window");
+			return (-1);
+		}
+		if (pane->engine_lease_client_id != 0 &&
+		    (pane->engine_lease_client_id != client->id ||
+		    pane->engine_lease_view_id != view_id)) {
+			*cause = xstrdup("presentation already has a different live output lease");
+			return (-1);
+		}
+		if (engine_pane_surface_map(pane, (pid_t)pid, surface_id,
+		    role, cause) != 0)
+			return (-1);
+		pane->engine_lease_client_id = client->id;
+		pane->engine_lease_view_id = view_id;
+		return (0);
+	}
 	return (engine_pane_surface_unmap(pane, (pid_t)pid, surface_id, cause));
 }
 
@@ -235,6 +342,10 @@ engine_mux_view_focus(struct engine_mux_view *focused)
 	struct engine_mux_view *view;
 	struct client *tmux_client;
 
+	if (focused != engine_mux_focused_view) {
+		focused->previous_focused = engine_mux_focused_view;
+		engine_mux_focused_view = focused;
+	}
 	TAILQ_FOREACH(client, &engine_mux_clients, entry) {
 		TAILQ_FOREACH(view, &client->views, entry) {
 			tmux_client = view->tmux_client;
@@ -256,6 +367,7 @@ engine_mux_view_focus(struct engine_mux_view *focused)
 		window_update_focus(tmux_client->session->curw->window);
 		notify_client("client-active", tmux_client);
 	}
+	engine_mux_transfer_view_leases(focused);
 	recalculate_sizes();
 }
 
@@ -265,11 +377,30 @@ engine_mux_view_free(struct engine_mux_client *client,
 {
 	struct engine_mux_client *other_client;
 	struct engine_mux_view *other_view;
-	int was_focused = view->tmux_client != NULL &&
-	    (view->tmux_client->flags & CLIENT_FOCUSED) &&
-	    (~view->tmux_client->flags & CLIENT_IGNORESIZE);
+	struct engine_mux_view *restore_view = view->previous_focused;
+	struct window *window;
+	struct window_pane *pane;
+	int was_focused = engine_mux_focused_view == view;
 
+	RB_FOREACH(window, windows, &windows) {
+		TAILQ_FOREACH(pane, &window->panes, entry) {
+			if (pane->engine_lease_client_id == view->client_id &&
+			    pane->engine_lease_view_id == view->id) {
+				pane->engine_lease_client_id = 0;
+				pane->engine_lease_view_id = 0;
+			}
+		}
+	}
+	TAILQ_FOREACH(other_client, &engine_mux_clients, entry) {
+		TAILQ_FOREACH(other_view, &other_client->views, entry) {
+			if (other_view != view && other_view->previous_focused == view)
+				other_view->previous_focused =
+				    restore_view == other_view ? NULL : restore_view;
+		}
+	}
 	TAILQ_REMOVE(&client->views, view, entry);
+	if (was_focused)
+		engine_mux_focused_view = NULL;
 	if (view->tmux_client != NULL &&
 	    (~view->tmux_client->flags & CLIENT_DEAD)) {
 		server_client_set_session(view->tmux_client, NULL);
@@ -281,6 +412,18 @@ engine_mux_view_free(struct engine_mux_client *client,
 	free(view);
 	if (!was_focused)
 		return;
+	TAILQ_FOREACH(other_client, &engine_mux_clients, entry) {
+		TAILQ_FOREACH(other_view, &other_client->views, entry) {
+			if (other_view != restore_view)
+				continue;
+			if (other_view->tmux_client == NULL ||
+			    other_view->tmux_client->session == NULL ||
+			    (other_view->tmux_client->flags & CLIENT_DEAD))
+				break;
+			engine_mux_view_focus(other_view);
+			return;
+		}
+	}
 	TAILQ_FOREACH(other_client, &engine_mux_clients, entry) {
 		TAILQ_FOREACH(other_view, &other_client->views, entry) {
 			if (other_view->tmux_client == NULL ||
@@ -342,6 +485,7 @@ engine_mux_view_register(struct engine_mux_client *client,
 	}
 	view = xcalloc(1, sizeof *view);
 	view->id = id;
+	view->client_id = client->id;
 	view->peer_fd = pair[1];
 	view->output_name = xstrdup(output);
 	tmux_client = server_client_create(pair[0]);
@@ -910,8 +1054,17 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 	if (buffer == NULL)
 		fatalx("engine mux snapshot allocation failed");
 	evbuffer_add_printf(buffer,
-	    "{\"schema\":\"engine-mux/snapshot-v1\",\"revision\":%llu,\"panes\":[",
-	    (unsigned long long)revision);
+	    "{\"schema\":\"engine-mux/snapshot-v1\",\"revision\":%llu,\"focused_client_id\":%u,\"focused_view_id\":%u,\"panes\":[",
+	    (unsigned long long)revision,
+	    engine_mux_focused_view != NULL ?
+	    engine_mux_focused_view->client_id : 0,
+	    engine_mux_focused_view != NULL ? engine_mux_focused_view->id : 0);
+	if (engine_mux_focused_view != NULL) {
+		engine_mux_hash_bytes(&hash, &engine_mux_focused_view->client_id,
+		    sizeof engine_mux_focused_view->client_id);
+		engine_mux_hash_bytes(&hash, &engine_mux_focused_view->id,
+		    sizeof engine_mux_focused_view->id);
+	}
 
 	RB_FOREACH(session, sessions, &sessions) {
 		if (session_filter != NULL && session != session_filter)
@@ -976,11 +1129,13 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 				evbuffer_add(buffer, ",\"app_command\":", 15);
 				engine_mux_json_string(buffer, pane->engine_command);
 				evbuffer_add_printf(buffer,
-				    ",\"app_pid\":%lld,\"mapped\":%s,\"surface_tabs\":%u,\"active_surface_id\":%u}",
+				    ",\"app_pid\":%lld,\"mapped\":%s,\"surface_tabs\":%u,\"active_surface_id\":%u,\"lease_client_id\":%u,\"lease_view_id\":%u}",
 				    (long long)pane->engine_app_pgrp,
 				    pane->engine_mapped ? "true" : "false",
 				    pane->engine_surface_count,
-				    pane->engine_active_surface_id);
+				    pane->engine_active_surface_id,
+				    pane->engine_lease_client_id,
+				    pane->engine_lease_view_id);
 
 				engine_mux_hash_bytes(&hash, &session->id,
 				    sizeof session->id);
@@ -1035,6 +1190,10 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 				    sizeof pane->engine_surface_count);
 				engine_mux_hash_bytes(&hash, &pane->engine_active_surface_id,
 				    sizeof pane->engine_active_surface_id);
+				engine_mux_hash_bytes(&hash, &pane->engine_lease_client_id,
+				    sizeof pane->engine_lease_client_id);
+				engine_mux_hash_bytes(&hash, &pane->engine_lease_view_id,
+				    sizeof pane->engine_lease_view_id);
 				free(command);
 			}
 			free(layout);
@@ -1190,6 +1349,23 @@ engine_mux_notify_grid_clients(void)
 				TAILQ_REMOVE(&client->subscriptions, subscription, entry);
 				free(subscription);
 				continue;
+			}
+			if (!TAILQ_EMPTY(&client->views)) {
+				struct engine_mux_view *view;
+				int visible = 0;
+
+				TAILQ_FOREACH(view, &client->views, entry) {
+					if (engine_mux_view_contains_pane(view, pane)) {
+						visible = 1;
+						break;
+					}
+				}
+				if (!visible) {
+					TAILQ_REMOVE(&client->subscriptions, subscription,
+					    entry);
+					free(subscription);
+					continue;
+				}
 			}
 			payload = engine_mux_build_grid(pane, &payload_size);
 			if (payload == NULL)
@@ -1375,6 +1551,7 @@ engine_mux_frontend_sync(void)
 	if (engine_mux_listener == -1)
 		return;
 	engine_pane_sync_all();
+	engine_mux_reconcile_leases();
 
 	candidate = engine_mux_build_snapshot(engine_mux_revision,
 	    &content_hash, &candidate_size, NULL, 0);
@@ -1496,13 +1673,11 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	size_t scrollback_size;
 	const char *hello =
 	    "{\"schema\":\"engine-mux/hello-v1\",\"server\":\"engine-mux\","
-	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\",\"ui-model-v1\",\"ui-invalidate-v1\",\"tmux-mouse-v1\",\"pane-presentation-v1\",\"presentation-resolve-v1\",\"pane-surface-select-v1\"]}";
+	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\",\"ui-model-v1\",\"ui-invalidate-v1\",\"tmux-mouse-v1\",\"pane-presentation-v1\",\"presentation-resolve-v1\",\"pane-surface-select-v1\",\"presentation-lease-v1\"]}";
 	const char *subscribe_ack =
 	    "{\"schema\":\"engine-mux/grid-subscribe-v1\",\"subscribed\":true}";
 	const char *input_ack =
 	    "{\"schema\":\"engine-mux/pane-input-v1\",\"accepted\":true}";
-	const char *view_ack =
-	    "{\"schema\":\"engine-mux/view-register-v1\",\"registered\":true}";
 	const char *view_unregister_ack =
 	    "{\"schema\":\"engine-mux/view-unregister-v1\",\"unregistered\":true}";
 	const char *view_focus_ack =
@@ -1522,6 +1697,7 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	if (received <= 0) {
 		free(packet);
 		engine_mux_client_free(client);
+		engine_mux_frontend_sync();
 		return;
 	}
 	if ((size_t)received < sizeof header) {
@@ -1694,7 +1870,7 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 				engine_mux_client_free(client);
 			return;
 		}
-		if (engine_mux_presentation_dispatch(root, map, &cause) != 0) {
+		if (engine_mux_presentation_dispatch(client, root, map, &cause) != 0) {
 			json_object_put(root);
 			if (engine_mux_send_error(client->fd, request_id,
 			    "request-rejected", cause == NULL ? "request failed" : cause) != 0)
@@ -1711,6 +1887,10 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 		if (engine_mux_send_frame(client->fd, ack_type, request_id,
 		    engine_mux_revision, ack, strlen(ack)) != 0)
 			engine_mux_client_free(client);
+		else if (type == ENGINE_MUX_VIEW_REGISTER_REQUEST ||
+		    type == ENGINE_MUX_VIEW_UNREGISTER_REQUEST ||
+		    type == ENGINE_MUX_VIEW_FOCUS_REQUEST)
+			engine_mux_frontend_sync();
 		return;
 	}
 	if (type == ENGINE_MUX_VIEW_REGISTER_REQUEST ||
@@ -1726,6 +1906,7 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 		u_int view_id;
 		uint16_t ack_type;
 		int result = -1;
+		char view_register_ack[160];
 
 		root = engine_mux_parse_json(packet + sizeof header, payload_size);
 		free(packet);
@@ -1775,7 +1956,10 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 		free(cause);
 		if (type == ENGINE_MUX_VIEW_REGISTER_REQUEST) {
 			ack_type = ENGINE_MUX_VIEW_REGISTER_ACK;
-			ack = view_ack;
+			xsnprintf(view_register_ack, sizeof view_register_ack,
+			    "{\"schema\":\"engine-mux/view-register-v1\",\"registered\":true,\"client_id\":%u}",
+			    client->id);
+			ack = view_register_ack;
 		} else if (type == ENGINE_MUX_KEY_REQUEST) {
 			ack_type = ENGINE_MUX_KEY_ACK;
 			ack = key_ack;
@@ -2106,6 +2290,9 @@ engine_mux_accept(__unused int fd, __unused short events, __unused void *data)
 		return;
 	}
 	client = xcalloc(1, sizeof *client);
+	client->id = ++engine_mux_next_frontend_client_id;
+	if (client->id == 0)
+		client->id = ++engine_mux_next_frontend_client_id;
 	client->fd = client_fd;
 	TAILQ_INIT(&client->views);
 	TAILQ_INIT(&client->subscriptions);

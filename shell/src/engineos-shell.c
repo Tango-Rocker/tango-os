@@ -1898,6 +1898,8 @@ static bool view_geometry_visible(struct engineos_shell_server *server,
 		return view->mux_presentation_visible &&
 			view->mux_pane_id == server->mux_client.pane_id &&
 			server->mux_client.pane_presentation_mapped &&
+			server->mux_client.pane_lease_view_id ==
+				server->mux_client.primary_view_id &&
 			strcmp(server->mux_client.pane_view_mode, "presentation") == 0;
 	}
 	if (server->active_slot == view->role || is_terminal_role(view->role)) {
@@ -2649,6 +2651,7 @@ static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
 			(int)pane->left * cell_width, (int)pane->top * cell_height);
 		wlr_scene_node_set_enabled(&scene->tree->node, pane->visible);
 		bool presentation_visible = pane->presentation_mapped &&
+			pane->lease_view_id == server->mux_client.primary_view_id &&
 			strcmp(pane->view_mode, "presentation") == 0;
 		wlr_scene_node_set_enabled(&scene->terminal_scene->node,
 			!presentation_visible);
@@ -2712,6 +2715,7 @@ static void sync_native_presentation_visibility(
 		view->mux_presentation_visible = root != NULL &&
 			root->view_id == pane->active_surface_id;
 		bool presentation_visible = pane->presentation_mapped &&
+			pane->lease_view_id == server->mux_client.primary_view_id &&
 			strcmp(pane->view_mode, "presentation") == 0;
 		bool enabled = pane->visible && presentation_visible &&
 			view->mux_presentation_visible;
@@ -2726,6 +2730,7 @@ static void sync_native_presentation_visibility(
 			pane_scene->pane_id, pane_scene->generation);
 		bool presentation_visible = pane != NULL && pane->visible &&
 			pane->presentation_mapped &&
+			pane->lease_view_id == server->mux_client.primary_view_id &&
 			strcmp(pane->view_mode, "presentation") == 0;
 		wlr_scene_node_set_enabled(&pane_scene->terminal_scene->node,
 			!presentation_visible);
@@ -3689,7 +3694,8 @@ static void write_shell_state(struct engineos_shell_server *server,
 	fprintf(file, ", \"prefix2\": ");
 	json_write_string(file, server->mux_client.prefix2);
 	fprintf(file,
-		", \"client_view_id\": %u, \"pane_id\": \"%%%u\", \"generation\": %u, \"grid\": {\"revision\": %llu, \"columns\": %u, \"rows\": %u, \"cursor_x\": %u, \"cursor_y\": %u, \"nonblank_cells\": %u, \"rendered\": %s, \"pixel_width\": %d, \"pixel_height\": %d, \"glyph_cells\": %u, \"renderer\": ",
+		", \"frontend_client_id\": %u, \"client_view_id\": %u, \"pane_id\": \"%%%u\", \"generation\": %u, \"grid\": {\"revision\": %llu, \"columns\": %u, \"rows\": %u, \"cursor_x\": %u, \"cursor_y\": %u, \"nonblank_cells\": %u, \"rendered\": %s, \"pixel_width\": %d, \"pixel_height\": %d, \"glyph_cells\": %u, \"renderer\": ",
+		server->mux_client.frontend_client_id,
 		server->mux_client.primary_view_id,
 		server->mux_client.pane_id, server->mux_client.pane_generation,
 		(unsigned long long)server->mux_client.grid_revision,
@@ -3725,10 +3731,15 @@ static void write_shell_state(struct engineos_shell_server *server,
 	json_write_string(file, server->mux_client.pane_presentation);
 	fprintf(file, ", \"view_mode\": ");
 	json_write_string(file, server->mux_client.pane_view_mode);
-	fprintf(file, ", \"mapped\": %s, \"surface_tabs\": %u, \"active_surface_id\": %u, \"popups\": %u, \"terminal_visible\": %s}",
+	fprintf(file, ", \"mapped\": %s, \"surface_tabs\": %u, \"active_surface_id\": %u, \"lease_client_id\": %u, \"lease_view_id\": %u, \"lease_owned_by_focused_view\": %s, \"popups\": %u, \"terminal_visible\": %s}",
 		server->mux_client.pane_presentation_mapped ? "true" : "false",
 		server->mux_client.pane_surface_tabs,
 		server->mux_client.pane_active_surface_id,
+		server->mux_client.pane_lease_client_id,
+		server->mux_client.pane_lease_view_id,
+		server->mux_client.pane_lease_view_id != 0 &&
+			server->mux_client.pane_lease_view_id ==
+			server->mux_client.primary_view_id ? "true" : "false",
 		server->mux_popup_count,
 		strcmp(server->mux_client.pane_view_mode, "presentation") == 0 &&
 			server->mux_client.pane_presentation_mapped ? "false" : "true");
@@ -3755,9 +3766,12 @@ static void write_shell_state(struct engineos_shell_server *server,
 		fprintf(file, ", \"view_mode\": ");
 		json_write_string(file, pane->view_mode);
 		fprintf(file,
-			", \"mapped\": %s, \"surface_tabs\": %u, \"active_surface_id\": %u, \"grid\": {\"ready\": %s, \"subscribed\": %s, \"revision\": %llu, \"columns\": %u, \"rows\": %u, \"nonblank_cells\": %u}, \"scene\": {\"rendered\": %s, \"terminal_visible\": %s, \"pixel_x\": %d, \"pixel_y\": %d, \"pixel_width\": %d, \"pixel_height\": %d, \"glyph_cells\": %u, \"damaged_cells\": %u, \"nonblank_pixels\": %u, \"frame\": %llu, \"renderer\": ",
+			", \"mapped\": %s, \"surface_tabs\": %u, \"active_surface_id\": %u, \"lease_client_id\": %u, \"lease_view_id\": %u, \"lease_owned_by_focused_view\": %s, \"grid\": {\"ready\": %s, \"subscribed\": %s, \"revision\": %llu, \"columns\": %u, \"rows\": %u, \"nonblank_cells\": %u}, \"scene\": {\"rendered\": %s, \"terminal_visible\": %s, \"pixel_x\": %d, \"pixel_y\": %d, \"pixel_width\": %d, \"pixel_height\": %d, \"glyph_cells\": %u, \"damaged_cells\": %u, \"nonblank_pixels\": %u, \"frame\": %llu, \"renderer\": ",
 			pane->presentation_mapped ? "true" : "false",
 			pane->surface_tabs, pane->active_surface_id,
+			pane->lease_client_id, pane->lease_view_id,
+			pane->lease_view_id != 0 && pane->lease_view_id ==
+				server->mux_client.primary_view_id ? "true" : "false",
 			pane->grid.ready ? "true" : "false",
 			pane->grid.subscribed ? "true" : "false",
 			(unsigned long long)pane->grid.revision,
@@ -3779,6 +3793,35 @@ static void write_shell_state(struct engineos_shell_server *server,
 		fprintf(file, "}}");
 	}
 	fprintf(file, "]}");
+	fprintf(file, ",\n  \"output_views\": [");
+	bool first_output_view = true;
+	struct engineos_shell_output *shell_output;
+	wl_list_for_each(shell_output, &server->outputs, link) {
+		if (!shell_output->mux_registered)
+			continue;
+		if (!first_output_view)
+			fprintf(file, ",");
+		first_output_view = false;
+		int output_width = 0, output_height = 0;
+		wlr_output_effective_resolution(shell_output->output,
+			&output_width, &output_height);
+		fprintf(file,
+			"{\"view_id\": %u, \"output\": ",
+			shell_output->mux_view_id);
+		json_write_string(file, shell_output->output->name);
+		fprintf(file,
+			", \"session_id\": ");
+		json_write_string(file, server->mux_client.session_id);
+		fprintf(file,
+			", \"pixel_width\": %d, \"pixel_height\": %d, \"scale_milli\": %u, \"focused\": %s, \"owns_selected_presentation\": %s}",
+			output_width, output_height,
+			(uint32_t)(shell_output->output->scale * 1000.0 + 0.5),
+			shell_output->mux_view_id == server->mux_client.primary_view_id ?
+				"true" : "false",
+			shell_output->mux_view_id ==
+				server->mux_client.pane_lease_view_id ? "true" : "false");
+	}
+	fprintf(file, "]");
 	fprintf(file, ",\n  \"active_slot\": ");
 	json_write_string(file, surface_role_name(server->active_slot));
 	fprintf(file, ",\n  \"pending_slot\": ");
@@ -6297,6 +6340,7 @@ static void native_presentation_set_tab_visible(
 		find_shell_pane_model(server, root->mux_pane_id,
 			root->mux_pane_generation) : NULL;
 	bool presentation_visible = pane != NULL && pane->presentation_mapped &&
+		pane->lease_view_id == server->mux_client.primary_view_id &&
 		strcmp(pane->view_mode, "presentation") == 0;
 	struct engineos_shell_view *candidate;
 	wl_list_for_each(candidate, &server->views, link) {

@@ -169,6 +169,8 @@ engine_pane_surface_clear(struct window_pane *wp)
 		TAILQ_REMOVE(&wp->engine_surfaces, surface, entry);
 		free(surface);
 	}
+	wp->engine_lease_client_id = 0;
+	wp->engine_lease_view_id = 0;
 }
 
 static struct engine_pane_surface *
@@ -312,6 +314,8 @@ engine_pane_surface_unmap(struct window_pane *wp, pid_t pid, u_int id,
 	if (wp->engine_surface_count == 0) {
 		wp->engine_mapped = 0;
 		wp->engine_view_mode = ENGINE_PANE_VIEW_CONSOLE;
+		wp->engine_lease_client_id = 0;
+		wp->engine_lease_view_id = 0;
 	}
 	engine_pane_changed(wp);
 	return (0);
@@ -327,6 +331,8 @@ engine_pane_reset_runtime(struct window_pane *wp, int preserve_command)
 	wp->engine_launch_deadline = 0;
 	wp->engine_surface_count = 0;
 	wp->engine_active_surface_id = 0;
+	wp->engine_lease_client_id = 0;
+	wp->engine_lease_view_id = 0;
 	wp->engine_mapped = 0;
 	free(wp->engine_scope);
 	wp->engine_scope = NULL;
@@ -388,6 +394,8 @@ engine_pane_inject_launch(struct window_pane *wp, const char *command,
 	wp->engine_launch_deadline = time(NULL) + 15;
 	wp->engine_surface_count = 0;
 	wp->engine_active_surface_id = 0;
+	wp->engine_lease_client_id = 0;
+	wp->engine_lease_view_id = 0;
 	wp->engine_mapped = 0;
 	engine_pane_changed(wp);
 	return (0);

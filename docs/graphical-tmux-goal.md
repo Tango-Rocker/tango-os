@@ -20,7 +20,7 @@ handshake, packaging, and contract tests.
 
 ## Progress Snapshot
 
-As of 2026-07-10, the in-server frontend, authoritative layout snapshots,
+As of 2026-07-11, the in-server frontend, authoritative layout snapshots,
 binary grids, sparse damage, scrollback/copy-mode metadata, headless native
 terminal scene, event-driven refresh, and native keyboard control are
 implemented side by side. Every shell output now registers as a real tmux
@@ -70,9 +70,19 @@ canonical grid changes, and uses authoritative pane visibility to retain but
 hide nonactive zoom scenes. The contract exercises resize, zoom/unzoom, and
 one hundred focus transitions under both renderers. Synthetic graphical tmux
 clients satisfy upstream tty ownership invariants, so ordinary `select-pane`
-redraw logic remains safe while physical tty output stays disabled. Leases,
-games/images, direct-KMS clipping, final hardware acceptance, and legacy
-cutover remain open. The server now exports every
+redraw logic remains safe while physical tty output stays disabled.
+Authoritative presentation lease identity and focus/disconnect transfer are
+now implemented: tmux stores one frontend-client/output-view owner for each
+mapped presentation, exports it through snapshots and formats, rejects a
+second live owner, clears invalid owners, and restores the preceding graphical
+view when a temporary client disconnects. The shell exposes each registered
+output view and lease in `shell-state.json`, gates graphical presentation
+visibility on ownership, and retries snapshots when an intervening state
+invalidation would otherwise leave stale focus or lease state. Pixman and the
+exact installed AMD/radeonsi GLES2 packages pass the two-output transfer
+contract. Per-output console scene copies, physical presentation-subtree
+isolation, lease-keyed images, games, direct-KMS clipping, final hardware
+acceptance, and legacy cutover remain open. The server now exports every
 pane's authoritative cell origin and size,
 and the shell validates and retains the complete pane set instead of discarding
 every pane except the selected one. `shell-state.json` exposes those stable

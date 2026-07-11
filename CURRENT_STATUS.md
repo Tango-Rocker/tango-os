@@ -99,8 +99,8 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
-  `engineos-mux 3.6b-26` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-38`, but native mode is not yet the live desktop
+  `engineos-mux 3.6b-27` with the decoder/renderer/control boundary in
+  `engineos-shell 0.1.0-39`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
@@ -162,7 +162,7 @@ These are historical proof artifacts only; they are not the active work path:
   resizing, ranged status-window selection, status-menu opening, and menu-item
   command activation. The shell routes pointer motion, buttons, and vertical
   scroll through that same boundary. The contract passes against the exact
-  `engineos-mux 3.6b-26` and `engineos-shell 0.1.0-38` package binaries. The
+  `engineos-mux 3.6b-27` and `engineos-shell 0.1.0-39` package binaries. The
   native renderer now keeps FreeType-rasterized, colour-keyed glyphs in a GPU
   texture atlas and draws them into double-buffered per-pane GPU targets.
   Sparse tmux cell damage is retained through the mux client, expanded only
@@ -254,9 +254,17 @@ These are historical proof artifacts only; they are not the active work path:
   timeout now signal the authoritative transient systemd scope through the user
   manager, eliminating the fast-map race and avoiding stale process-group
   guesses. Per-pane scenes and the complete terminal topology lifecycle now
-  pass in headless contracts. Direct-KMS clipping, simultaneous ordinary text
-  client acceptance, and graphical presentation leases are the next
-  acceptance boundary.
+  pass in headless contracts. Each mapped graphical presentation now has an
+  authoritative frontend-client/output-view lease stored by tmux and exposed
+  through snapshots, formats, and `shell-state.json`. Focus transfers the
+  lease, temporary graphical clients restore the previous owner on disconnect,
+  destroyed or out-of-window views lose ownership, and the shell settles
+  concurrent invalidations instead of retaining stale lease state. The exact
+  installed `engineos-mux 3.6b-27` and `engineos-shell 0.1.0-39` binaries pass
+  the complete two-output contract through AMD/radeonsi GLES2. Per-output
+  console scene copies, physical presentation-subtree isolation, lease-keyed
+  images, direct-KMS clipping, and simultaneous ordinary text-client
+  acceptance remain the next boundary.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 

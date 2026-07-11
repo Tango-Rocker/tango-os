@@ -361,11 +361,11 @@ run_mux() {
 		presentation-map "$pane_id" 1 "$pane_app_pid" 1002 popup >/dev/null
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" \
 		presentation-map "$pane_id" 1 "$pane_app_pid" 1003 toplevel >/dev/null
-	[[ "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+	pane_state="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		display-message -p -t "$pane_id" \
-		'#{pane_presentation}|#{pane_view_mode}|#{pane_presentation_mapped}|#{pane_surface_count}|#{pane_active_surface}')" == \
-		'wayland|presentation|1|2|1003' ]] ||
-		die "mapped presentation did not expose two pane-local toplevel tabs"
+		'#{pane_presentation}|#{pane_view_mode}|#{pane_presentation_mapped}|#{pane_surface_count}|#{pane_active_surface}')"
+	[[ "$pane_state" == 'wayland|presentation|1|2|1003' ]] ||
+		die "mapped presentation did not expose two pane-local toplevel tabs: $pane_state"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		select-pane-surface -t "$pane_id" previous
 	[[ "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
@@ -1080,8 +1080,9 @@ run_mux() {
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		move-window -s "$broken_window" -t topology-destination:
 	graphical_client="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
-		"$mux_bin" list-clients -F '#{client_name}' | \
-		awk '/^engineos-view-/ { print; exit }')"
+		"$mux_bin" list-clients -F '#{client_name}|#{client_tty}' | \
+		awk -F'|' '$1 ~ /^engineos-view-/ &&
+			$2 != "engine-muxctl-presentation" { print $1; exit }')"
 	[[ -n "$graphical_client" ]] ||
 		die "native mux graphical tmux client was not discoverable"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
@@ -1222,6 +1223,10 @@ run_mux() {
 			 .mux.presentation.type == "wayland" and
 			 .mux.presentation.view_mode == "presentation" and
 			 .mux.presentation.mapped == true and
+			 .mux.presentation.lease_client_id > 0 and
+			 .mux.presentation.lease_view_id == .mux.client_view_id and
+			 .mux.presentation.lease_owned_by_focused_view == true and
+			 ([.output_views[] | select(.owns_selected_presentation)] | length) == 1 and
 			 .mux.presentation.surface_tabs == 2 and
 			 .mux.presentation.popups == 1 and
 			 .mux.presentation.terminal_visible == false and
@@ -1238,6 +1243,10 @@ run_mux() {
 	done
 	jq -e --arg pane "$shell_pane_id" \
 		'.mux.presentation.view_mode == "presentation" and
+		 .mux.presentation.lease_client_id > 0 and
+		 .mux.presentation.lease_view_id == .mux.client_view_id and
+		 .mux.presentation.lease_owned_by_focused_view == true and
+		 ([.output_views[] | select(.owns_selected_presentation)] | length) == 1 and
 		 .mux.presentation.popups == 1 and
 		 .mux.presentation.surface_tabs == 2 and
 		 ([.windows[] | select(.bound == true and .pane_id == $pane)] | length) == 3 and
@@ -1249,6 +1258,40 @@ run_mux() {
 		jq '{mux,input,windows}' "$fixture/engineos/shell-state.json" >&2 || true
 		tail -100 "$fixture/shell-native.log" >&2 || true
 		die "scoped Wayland client did not bind to its native mux pane"
+	}
+	local pane_lease_format
+	pane_lease_format="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" display-message -p -t "$shell_pane_id" \
+		'#{pane_presentation_lease_client}|#{pane_presentation_lease_view}')"
+	[[ "$pane_lease_format" =~ ^[1-9][0-9]*\|[1-9][0-9]*$ ]] ||
+		die "tmux formats did not expose the live presentation client-view lease"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" focus-proof \
+		"$shell_pane_id" >"$fixture/presentation-lease-transfer.json"
+	jq -e '.schema == "engine-mux/focus-proof-v1" and
+		.lease_client_id > 0 and .lease_view_id == 2' \
+		"$fixture/presentation-lease-transfer.json" >/dev/null ||
+		die "presentation lease did not transfer to the newly focused graphical view"
+	for _ in {1..150}; do
+		jq -e '.mux.presentation.lease_view_id == .mux.client_view_id and
+			.mux.presentation.lease_owned_by_focused_view == true and
+			([.output_views[] | select(.owns_selected_presentation)] | length) == 1' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '.mux.presentation.lease_view_id == .mux.client_view_id and
+		.mux.presentation.lease_owned_by_focused_view == true' \
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '{mux: .mux.presentation, client_view_id: .mux.client_view_id,
+			frontend_client_id: .mux.frontend_client_id,
+			output_views}' "$fixture/engineos/shell-state.json" >&2 || true
+		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			list-clients -F '#{client_name}|#{client_flags}|#{client_termname}' \
+			>&2 || true
+		XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot \
+			| jq --arg pane "$shell_pane_id" \
+			'{focused_client_id, focused_view_id, pane: (.panes[] | select(.pane_id == $pane))}' \
+			>&2 || true
+		die "presentation lease did not return to the surviving shell output view"
 	}
 	primary_surface_id="$(jq -er '.windows[] | select(.bound == true and
 		.app_id == "engineos.presentation-proof") | .surface_id' \

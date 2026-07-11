@@ -811,19 +811,27 @@ static int request_focus_proof(int fd, uint32_t pane_id) {
 	struct json_object *panes = NULL;
 	json_object_object_get_ex(snapshot, "panes", &panes);
 	int64_t columns = -1, rows = -1;
+	int64_t lease_client_id = 0, lease_view_id = 0;
 	char expected[32];
 	snprintf(expected, sizeof(expected), "%%%u", pane_id);
 	for (size_t index = 0; panes != NULL &&
 			index < json_object_array_length(panes); index++) {
 		struct json_object *pane = json_object_array_get_idx(panes, index);
 		struct json_object *id_object = NULL, *columns_object = NULL;
-		struct json_object *rows_object = NULL;
+		struct json_object *rows_object = NULL, *lease_client_object = NULL;
+		struct json_object *lease_view_object = NULL;
 		if (!json_object_object_get_ex(pane, "pane_id", &id_object) ||
 				strcmp(json_object_get_string(id_object), expected) != 0) continue;
 		if (!json_object_object_get_ex(pane, "columns", &columns_object) ||
-				!json_object_object_get_ex(pane, "rows", &rows_object)) continue;
+				!json_object_object_get_ex(pane, "rows", &rows_object) ||
+				!json_object_object_get_ex(pane, "lease_client_id",
+					&lease_client_object) ||
+				!json_object_object_get_ex(pane, "lease_view_id",
+					&lease_view_object)) continue;
 		columns = json_object_get_int64(columns_object);
 		rows = json_object_get_int64(rows_object);
+		lease_client_id = json_object_get_int64(lease_client_object);
+		lease_view_id = json_object_get_int64(lease_view_object);
 		break;
 	}
 	json_object_put(snapshot);
@@ -835,6 +843,10 @@ static int request_focus_proof(int fd, uint32_t pane_id) {
 	json_object_object_add(result, "focused_view_id", json_object_new_int(2));
 	json_object_object_add(result, "columns", json_object_new_int64(columns));
 	json_object_object_add(result, "rows", json_object_new_int64(rows));
+	json_object_object_add(result, "lease_client_id",
+		json_object_new_int64(lease_client_id));
+	json_object_object_add(result, "lease_view_id",
+		json_object_new_int64(lease_view_id));
 	printf("%s\n", json_object_to_json_string_ext(result, JSON_C_TO_STRING_PRETTY));
 	json_object_put(result);
 	return 0;
@@ -1055,9 +1067,69 @@ static int request_ui(int fd, uint32_t pane_id, char **keys,
 	return 0;
 }
 
+static int register_presentation_view(int fd, uint32_t pane_id,
+		uint64_t *revision) {
+	uint16_t response_type = 0;
+	char *response = NULL;
+	if (exchange(fd, ENGINE_MUX_SNAPSHOT_REQUEST, 2998, 0, "{}",
+			&response_type, revision, &response) != 0 ||
+			response_type != ENGINE_MUX_SNAPSHOT) return -1;
+	struct json_object *snapshot = json_tokener_parse(response);
+	free(response);
+	if (snapshot == NULL) { errno = EPROTO; return -1; }
+	struct json_object *panes = NULL;
+	json_object_object_get_ex(snapshot, "panes", &panes);
+	const char *session_id = NULL;
+	for (size_t index = 0; panes != NULL &&
+			index < json_object_array_length(panes); index++) {
+		struct json_object *pane = json_object_array_get_idx(panes, index);
+		struct json_object *id = NULL, *session = NULL;
+		if (!json_object_object_get_ex(pane, "pane_id", &id) ||
+				!json_object_object_get_ex(pane, "session_id", &session)) continue;
+		char expected[32];
+		snprintf(expected, sizeof(expected), "%%%u", pane_id);
+		if (strcmp(json_object_get_string(id), expected) == 0) {
+			session_id = json_object_get_string(session);
+			break;
+		}
+	}
+	if (session_id == NULL) {
+		json_object_put(snapshot);
+		errno = ENOENT;
+		return -1;
+	}
+	struct json_object *request = json_object_new_object();
+	json_object_object_add(request, "schema",
+		json_object_new_string("engine-mux/view-register-v1"));
+	json_object_object_add(request, "view_id", json_object_new_int(1));
+	json_object_object_add(request, "session_id", json_object_new_string(session_id));
+	json_object_object_add(request, "output", json_object_new_string("engine-muxctl-presentation"));
+	json_object_object_add(request, "pixel_width", json_object_new_int(800));
+	json_object_object_add(request, "pixel_height", json_object_new_int(480));
+	json_object_object_add(request, "scale_milli", json_object_new_int(1000));
+	json_object_object_add(request, "columns", json_object_new_int(80));
+	json_object_object_add(request, "rows", json_object_new_int(24));
+	json_object_object_add(request, "focused", json_object_new_boolean(true));
+	const char *payload = json_object_to_json_string_ext(request,
+		JSON_C_TO_STRING_PLAIN);
+	int result = exchange(fd, ENGINE_MUX_VIEW_REGISTER_REQUEST, 2999,
+		*revision, payload, &response_type, revision, &response);
+	free(response);
+	json_object_put(request);
+	json_object_put(snapshot);
+	if (result != 0 || response_type != ENGINE_MUX_VIEW_REGISTER_ACK) {
+		errno = EPROTO;
+		return -1;
+	}
+	return 0;
+}
+
 static int request_presentation_surface(int fd, bool map, uint32_t pane_id,
 		uint32_t generation, pid_t pid, uint32_t surface_id,
 		const char *role) {
+	uint64_t response_revision = 0;
+	if (map && register_presentation_view(fd, pane_id,
+			&response_revision) != 0) return -1;
 	struct json_object *request = json_object_new_object();
 	json_object_object_add(request, "schema", json_object_new_string(map ?
 		"engine-mux/presentation-map-v1" :
@@ -1068,15 +1140,16 @@ static int request_presentation_surface(int fd, bool map, uint32_t pane_id,
 	json_object_object_add(request, "generation", json_object_new_int64(generation));
 	json_object_object_add(request, "pid", json_object_new_int64(pid));
 	json_object_object_add(request, "surface_id", json_object_new_int64(surface_id));
-	if (map)
+	if (map) {
+		json_object_object_add(request, "view_id", json_object_new_int(1));
 		json_object_object_add(request, "role", json_object_new_string(role));
+	}
 	const char *payload = json_object_to_json_string_ext(request,
 		JSON_C_TO_STRING_PLAIN);
 	uint16_t response_type = 0;
-	uint64_t response_revision = 0;
 	char *response = NULL;
 	int result = exchange(fd, map ? ENGINE_MUX_PRESENTATION_MAP_REQUEST :
-		ENGINE_MUX_PRESENTATION_UNMAP_REQUEST, 3001, 0, payload,
+		ENGINE_MUX_PRESENTATION_UNMAP_REQUEST, 3001, response_revision, payload,
 		&response_type, &response_revision, &response);
 	json_object_put(request);
 	if (result != 0)

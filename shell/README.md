@@ -61,9 +61,14 @@ transitions, inactive-window isolation, join/break/swap, cross-session window
 moves, linked windows, detach/reattach, and scoped compound presentations have
 contract coverage. Graphical snapshots follow only the attached session's
 active window, so linked or inactive windows cannot duplicate pane scenes.
-Direct-KMS clipping, ordinary simultaneous text-client acceptance, output
-leases, and final live
-hardware acceptance remain before native mode becomes the default.
+Tmux now assigns every mapped presentation one frontend-client/output-view
+lease. Focus transfer, temporary-client disconnect restoration, invalid-view
+cleanup, tmux formats, and `shell-state.json` output-view evidence pass against
+the exact installed AMD/radeonsi GLES2 packages. The compositor currently
+gates graphical presentation visibility on that lease. Per-output console
+scene copies and physical presentation-subtree isolation, lease-keyed images,
+direct-KMS clipping, ordinary simultaneous text-client acceptance, and final
+live hardware acceptance remain before native mode becomes the default.
 
 ## Surface Model
 
