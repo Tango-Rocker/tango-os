@@ -90,9 +90,13 @@ subtree, and zero presentation surfaces on the nonowner. Native pane previews
 are now keyed by pane ID, generation, frontend client, and output-view lease;
 their scene buffers live under the leased pane subtree, fail closed for an
 external lease, and appear on exactly one output in the installed radeonsi
-contract. Independent per-output session models, multiple simultaneous pane
-images and terminal image transport, direct-KMS clipping, final hardware
-acceptance, and legacy cutover remain open. Native `game` is now an
+contract. The shell retains one preview per native pane rather than one global
+preview, handles pane `%0` without a sentinel collision, exposes the complete
+set plus per-output counts, and removes images by owner or exact pane identity.
+The contract renders two pane images simultaneously and proves either can be
+removed without changing its sibling. Independent per-output session models,
+terminal image transport, direct-KMS clipping, final hardware acceptance, and
+legacy cutover remain open. Native `game` is now an
 authoritative launch/split presentation that survives respawn.
 `eos-app pane launch|split|view|signal|respawn|list` routes directly to
 `engine-mux` in native mode without launch-token or bridge fallback, and

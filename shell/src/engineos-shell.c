@@ -164,6 +164,7 @@ struct engineos_preview_bounds {
 };
 
 struct engineos_preview_surface {
+	struct wl_list link;
 	struct wlr_scene_buffer *scene_buffer;
 	struct wlr_buffer *buffer;
 	char *path;
@@ -176,6 +177,7 @@ struct engineos_preview_surface {
 	int image_width;
 	int image_height;
 	int opacity_percent;
+	bool native_pane;
 	uint32_t pane_id;
 	uint32_t pane_generation;
 	uint32_t lease_client_id;
@@ -285,7 +287,7 @@ struct engineos_shell_server {
 	char *preview_socket_path;
 	struct wl_event_source *preview_socket_source;
 	int preview_socket_fd;
-	struct engineos_preview_surface preview;
+	struct wl_list previews;
 	struct engineos_preview_surface wallpaper;
 	struct engineos_mux_client mux_client;
 	enum engineos_mux_mode mux_mode;
@@ -416,7 +418,7 @@ static struct engineos_pane_binding *pane_binding_for_view(
 static struct engineos_mux_pane_scene *find_mux_pane_scene(
 	struct engineos_shell_server *server, uint32_t pane_id,
 	uint32_t generation);
-static void sync_native_preview_lease(struct engineos_shell_server *server,
+static void sync_native_preview_leases(struct engineos_shell_server *server,
 	const char *reason);
 static void apply_view_layout(struct engineos_shell_view *view);
 static void schedule_outputs(struct engineos_shell_server *server);
@@ -2041,6 +2043,28 @@ static void json_write_string(FILE *file, const char *value) {
 	fputc('"', file);
 }
 
+static void write_preview_json(FILE *file,
+		const struct engineos_preview_surface *preview) {
+	fprintf(file, "{\"visible\": %s, \"path\": ",
+		preview != NULL && preview->scene_buffer != NULL ? "true" : "false");
+	json_write_string(file, preview != NULL ? preview->path : NULL);
+	fprintf(file, ", \"owner\": ");
+	json_write_string(file, preview != NULL ? preview->owner : NULL);
+	fprintf(file,
+		", \"native_pane\": %s, \"pane_id\": \"%%%u\", \"generation\": %u, \"lease_client_id\": %u, \"lease_view_id\": %u, \"x\": %d, \"y\": %d, \"width\": %d, \"height\": %d, \"image_width\": %d, \"image_height\": %d}",
+		preview != NULL && preview->native_pane ? "true" : "false",
+		preview != NULL ? preview->pane_id : 0,
+		preview != NULL ? preview->pane_generation : 0,
+		preview != NULL ? preview->lease_client_id : 0,
+		preview != NULL ? preview->lease_view_id : 0,
+		preview != NULL ? preview->x : 0,
+		preview != NULL ? preview->y : 0,
+		preview != NULL ? preview->width : 0,
+		preview != NULL ? preview->height : 0,
+		preview != NULL ? preview->image_width : 0,
+		preview != NULL ? preview->image_height : 0);
+}
+
 static void write_slot_state(FILE *file, struct engineos_shell_server *server,
 		enum engineos_surface_role role) {
 	struct engineos_shell_view *view = find_mapped_role(server, role);
@@ -2429,6 +2453,7 @@ static void reset_image_surface(struct engineos_preview_surface *surface) {
 	surface->image_width = 0;
 	surface->image_height = 0;
 	surface->opacity_percent = 0;
+	surface->native_pane = false;
 	surface->pane_id = 0;
 	surface->pane_generation = 0;
 	surface->lease_client_id = 0;
@@ -2472,7 +2497,24 @@ static struct engineos_mux_pane_model *native_preview_pane_for_request(
 		unsigned long parsed = strtoul(number, &end, 10);
 		if (*number == '\0' || *end != '\0' || parsed > UINT32_MAX)
 			return NULL;
-		return find_shell_pane_model(server, (uint32_t)parsed, 1);
+		struct json_object *generation_object = NULL;
+		if (json_object_object_get_ex(pane_object, "generation",
+				&generation_object)) {
+			if (!json_object_is_type(generation_object, json_type_int))
+				return NULL;
+			int64_t generation = json_object_get_int64(generation_object);
+			if (generation <= 0 || generation > UINT32_MAX)
+				return NULL;
+			return find_shell_pane_model(server, (uint32_t)parsed,
+				(uint32_t)generation);
+		}
+		for (size_t index = 0; index < server->mux_client.pane_count; index++) {
+			struct engineos_mux_pane_model *pane =
+				&server->mux_client.panes[index];
+			if (pane->pane_id == (uint32_t)parsed)
+				return pane;
+		}
+		return NULL;
 	}
 	return find_shell_pane_model(server, server->mux_client.pane_id,
 		server->mux_client.pane_generation);
@@ -2934,7 +2976,7 @@ static void sync_native_presentation_visibility(
 		sync_pointer_constraint(server, reason);
 		sync_cursor_image(server, reason);
 	}
-	sync_native_preview_lease(server, reason);
+	sync_native_preview_leases(server, reason);
 	schedule_outputs(server);
 }
 
@@ -2974,11 +3016,51 @@ static int native_mux_event(int fd, uint32_t mask, void *data) {
 
 static void hide_image_preview(struct engineos_shell_server *server,
 		const char *reason) {
-	reset_image_surface(&server->preview);
-	wlr_log(WLR_INFO, "image preview hidden reason=%s",
+	struct engineos_preview_surface *preview, *tmp;
+	size_t hidden = 0;
+	wl_list_for_each_safe(preview, tmp, &server->previews, link) {
+		wl_list_remove(&preview->link);
+		reset_image_surface(preview);
+		free(preview);
+		hidden++;
+	}
+	wlr_log(WLR_INFO, "image previews hidden count=%zu reason=%s", hidden,
 		reason != NULL ? reason : "unspecified");
 	write_shell_state(server, reason != NULL ? reason : "preview-hidden");
 	schedule_outputs(server);
+}
+
+static size_t hide_matching_image_previews(
+		struct engineos_shell_server *server, const char *owner,
+		bool pane_scoped, uint32_t pane_id, uint32_t pane_generation,
+		const char *reason) {
+	struct engineos_preview_surface *preview, *tmp;
+	size_t hidden = 0;
+	wl_list_for_each_safe(preview, tmp, &server->previews, link) {
+		if (owner != NULL && owner[0] != '\0' &&
+				(preview->owner == NULL || strcmp(owner, preview->owner) != 0))
+			continue;
+		if (pane_scoped && (!preview->native_pane ||
+				preview->pane_id != pane_id ||
+				(pane_generation != 0 &&
+				 preview->pane_generation != pane_generation)))
+			continue;
+		wl_list_remove(&preview->link);
+		reset_image_surface(preview);
+		free(preview);
+		hidden++;
+	}
+	wlr_log(WLR_INFO,
+		"image previews hidden count=%zu owner=%s pane_scoped=%s pane=%%%u generation=%u reason=%s",
+		hidden, owner != NULL ? owner : "", pane_scoped ? "true" : "false",
+		pane_id, pane_generation,
+		reason != NULL ? reason : "unspecified");
+	if (hidden > 0) {
+		write_shell_state(server,
+			reason != NULL ? reason : "preview-hidden");
+		schedule_outputs(server);
+	}
+	return hidden;
 }
 
 static void hide_wallpaper(struct engineos_shell_server *server,
@@ -3057,84 +3139,115 @@ static bool show_image_preview(struct engineos_shell_server *server,
 		return false;
 	}
 
-	hide_image_preview(server, "replace");
-	server->preview.buffer = buffer;
-	server->preview.scene_buffer =
-		wlr_scene_buffer_create(parent_tree, buffer);
-	if (server->preview.scene_buffer == NULL) {
+	uint32_t pane_id = mux_pane != NULL ? mux_pane->pane_id : 0;
+	uint32_t pane_generation = mux_pane != NULL ? mux_pane->generation : 0;
+	hide_matching_image_previews(server, NULL, mux_pane != NULL,
+		pane_id, pane_generation,
+		"replace-pane-preview");
+	struct engineos_preview_surface *preview = calloc(1, sizeof(*preview));
+	if (preview == NULL) {
 		wlr_buffer_drop(buffer);
-		server->preview.buffer = NULL;
+		snprintf(error, error_size, "failed to allocate preview state");
+		return false;
+	}
+	preview->buffer = buffer;
+	preview->scene_buffer = wlr_scene_buffer_create(parent_tree, buffer);
+	if (preview->scene_buffer == NULL) {
+		wlr_buffer_drop(buffer);
+		preview->buffer = NULL;
+		free(preview);
 		snprintf(error, error_size, "failed to create preview scene buffer");
 		return false;
 	}
 
-	server->preview.path = strdup(path);
-	server->preview.owner = owner != NULL && owner[0] != '\0' ?
+	preview->path = strdup(path);
+	preview->owner = owner != NULL && owner[0] != '\0' ?
 		strdup(owner) : NULL;
-	server->preview.x = box.x + (box.width - (int)dest_width) / 2;
-	server->preview.y = box.y + (box.height - (int)dest_height) / 2;
-	server->preview.width = (int)dest_width;
-	server->preview.height = (int)dest_height;
-	server->preview.image_width = image_width;
-	server->preview.image_height = image_height;
-	if (mux_pane != NULL) {
-		server->preview.pane_id = mux_pane->pane_id;
-		server->preview.pane_generation = mux_pane->generation;
-		server->preview.lease_client_id = lease_client_id;
-		server->preview.lease_view_id = lease_view_id;
+	if (preview->path == NULL || (owner != NULL && owner[0] != '\0' &&
+			preview->owner == NULL)) {
+		reset_image_surface(preview);
+		free(preview);
+		snprintf(error, error_size, "failed to allocate preview identity");
+		return false;
 	}
-	wlr_scene_buffer_set_dest_size(server->preview.scene_buffer,
-		server->preview.width, server->preview.height);
-	wlr_scene_node_set_position(&server->preview.scene_buffer->node,
-		server->preview.x, server->preview.y);
-	wlr_scene_node_raise_to_top(&server->preview.scene_buffer->node);
+	preview->x = box.x + (box.width - (int)dest_width) / 2;
+	preview->y = box.y + (box.height - (int)dest_height) / 2;
+	preview->width = (int)dest_width;
+	preview->height = (int)dest_height;
+	preview->image_width = image_width;
+	preview->image_height = image_height;
+	if (mux_pane != NULL) {
+		preview->native_pane = true;
+		preview->pane_id = mux_pane->pane_id;
+		preview->pane_generation = mux_pane->generation;
+		preview->lease_client_id = lease_client_id;
+		preview->lease_view_id = lease_view_id;
+	}
+	wlr_scene_buffer_set_dest_size(preview->scene_buffer,
+		preview->width, preview->height);
+	wlr_scene_node_set_position(&preview->scene_buffer->node,
+		preview->x, preview->y);
+	wlr_scene_node_raise_to_top(&preview->scene_buffer->node);
+	wl_list_insert(server->previews.prev, &preview->link);
 	wlr_log(WLR_INFO,
 		"image preview shown path=%s owner=%s slot=%s pane=%%%u generation=%u lease=%u:%u image=%dx%d x=%d y=%d size=%dx%d bounds=%dx%d",
 		path,
-		server->preview.owner != NULL ? server->preview.owner : "",
+		preview->owner != NULL ? preview->owner : "",
 		slot != NULL ? slot : "",
-		server->preview.pane_id, server->preview.pane_generation,
-		server->preview.lease_client_id, server->preview.lease_view_id,
-		image_width, image_height, server->preview.x,
-		server->preview.y, server->preview.width, server->preview.height,
+		preview->pane_id, preview->pane_generation,
+		preview->lease_client_id, preview->lease_view_id,
+		image_width, image_height, preview->x,
+		preview->y, preview->width, preview->height,
 		box.width, box.height);
 	write_shell_state(server, "preview-shown");
 	schedule_outputs(server);
 	return true;
 }
 
-static void sync_native_preview_lease(struct engineos_shell_server *server,
+static void sync_native_preview_leases(struct engineos_shell_server *server,
 		const char *reason) {
-	if (server->mux_mode != ENGINEOS_MUX_NATIVE ||
-			server->preview.scene_buffer == NULL ||
-			server->preview.pane_id == 0)
+	if (server->mux_mode != ENGINEOS_MUX_NATIVE)
 		return;
-	struct engineos_mux_pane_model *pane = find_shell_pane_model(server,
-		server->preview.pane_id, server->preview.pane_generation);
-	struct engineos_mux_pane_scene *pane_scene = pane != NULL ?
-		find_mux_pane_scene(server, pane->pane_id, pane->generation) : NULL;
-	uint32_t lease_client_id = pane != NULL && pane->presentation_mapped ?
-		pane->lease_client_id : server->mux_client.frontend_client_id;
-	uint32_t lease_view_id = pane != NULL && pane->presentation_mapped ?
-		pane->lease_view_id : server->mux_client.primary_view_id;
-	if (pane_scene == NULL || lease_client_id !=
-			server->mux_client.frontend_client_id || lease_view_id == 0) {
-		hide_image_preview(server,
+	struct engineos_preview_surface *preview, *tmp;
+	bool removed = false;
+	wl_list_for_each_safe(preview, tmp, &server->previews, link) {
+		if (!preview->native_pane)
+			continue;
+		struct engineos_mux_pane_model *pane = find_shell_pane_model(server,
+			preview->pane_id, preview->pane_generation);
+		struct engineos_mux_pane_scene *pane_scene = pane != NULL ?
+			find_mux_pane_scene(server, pane->pane_id, pane->generation) : NULL;
+		uint32_t lease_client_id = pane != NULL && pane->presentation_mapped ?
+			pane->lease_client_id : server->mux_client.frontend_client_id;
+		uint32_t lease_view_id = pane != NULL && pane->presentation_mapped ?
+			pane->lease_view_id : server->mux_client.primary_view_id;
+		struct engineos_mux_pane_output_scene *output_scene =
+			pane_scene != NULL && lease_client_id ==
+				server->mux_client.frontend_client_id && lease_view_id != 0 ?
+			find_mux_pane_output_scene(pane_scene, lease_view_id) : NULL;
+		if (output_scene == NULL) {
+			wlr_log(WLR_INFO,
+				"image preview lease lost pane=%%%u generation=%u reason=%s",
+				preview->pane_id, preview->pane_generation,
+				reason != NULL ? reason : "native-preview-lease-lost");
+			wl_list_remove(&preview->link);
+			reset_image_surface(preview);
+			free(preview);
+			removed = true;
+			continue;
+		}
+		if (preview->scene_buffer->node.parent != output_scene->tree)
+			wlr_scene_node_reparent(&preview->scene_buffer->node,
+				output_scene->tree);
+		preview->lease_client_id = lease_client_id;
+		preview->lease_view_id = lease_view_id;
+		wlr_scene_node_raise_to_top(&preview->scene_buffer->node);
+	}
+	if (removed) {
+		write_shell_state(server,
 			reason != NULL ? reason : "native-preview-lease-lost");
-		return;
+		schedule_outputs(server);
 	}
-	struct engineos_mux_pane_output_scene *output_scene =
-		find_mux_pane_output_scene(pane_scene, lease_view_id);
-	if (output_scene == NULL) {
-		hide_image_preview(server, "native-preview-output-missing");
-		return;
-	}
-	if (server->preview.scene_buffer->node.parent != output_scene->tree)
-		wlr_scene_node_reparent(&server->preview.scene_buffer->node,
-			output_scene->tree);
-	server->preview.lease_client_id = lease_client_id;
-	server->preview.lease_view_id = lease_view_id;
-	wlr_scene_node_raise_to_top(&server->preview.scene_buffer->node);
 }
 
 static bool compute_wallpaper_box(struct engineos_shell_server *server,
@@ -3336,15 +3449,23 @@ static void handle_preview_request_json(struct engineos_shell_server *server,
 	if (strcmp(op, "hide") == 0) {
 		char owner[128] = {0};
 		json_extract_string(request, "owner", owner, sizeof(owner));
-		if (owner[0] != '\0' && server->preview.owner != NULL &&
-				strcmp(owner, server->preview.owner) != 0) {
-			wlr_log(WLR_INFO,
-				"image preview hide ignored owner=%s current_owner=%s reason=stale-owner",
-				owner, server->preview.owner);
-			preview_write_response(client_fd, "ok", NULL);
+		struct json_object *pane_object = NULL;
+		bool has_pane = json_object_object_get_ex(request, "pane", &pane_object);
+		struct engineos_mux_pane_model *pane = has_pane ?
+			native_preview_pane_for_request(server, request) : NULL;
+		if (has_pane && pane == NULL) {
+			preview_write_response(client_fd, "error",
+				"preview pane is not in the active native mux view");
 			return;
 		}
-		hide_image_preview(server, "ipc-hide");
+		if (owner[0] == '\0' && pane == NULL)
+			hide_image_preview(server, "ipc-hide-all");
+		else
+			hide_matching_image_previews(server,
+				owner[0] != '\0' ? owner : NULL,
+				pane != NULL,
+				pane != NULL ? pane->pane_id : 0,
+				pane != NULL ? pane->generation : 0, "ipc-hide");
 		preview_write_response(client_fd, "ok", NULL);
 		return;
 	}
@@ -4091,7 +4212,7 @@ static void write_shell_state(struct engineos_shell_server *server,
 		json_write_string(file, server->mux_client.session_id);
 		size_t console_scene_count = 0, presentation_surface_count = 0;
 		size_t bound_presentation_surface_count = 0;
-		bool preview_visible = false;
+		size_t preview_count = 0;
 		struct engineos_mux_pane_scene *output_pane_scene;
 		wl_list_for_each(output_pane_scene, &server->mux_pane_scenes, link) {
 			struct engineos_mux_pane_output_scene *copy =
@@ -4099,10 +4220,13 @@ static void write_shell_state(struct engineos_shell_server *server,
 					shell_output->mux_view_id);
 			if (copy != NULL && copy->terminal_scene->node.enabled)
 				console_scene_count++;
-			if (copy != NULL && server->preview.scene_buffer != NULL &&
-					server->preview.scene_buffer->node.parent == copy->tree &&
-					server->preview.scene_buffer->node.enabled)
-				preview_visible = true;
+			struct engineos_preview_surface *output_preview;
+			wl_list_for_each(output_preview, &server->previews, link) {
+				if (copy != NULL && output_preview->scene_buffer != NULL &&
+						output_preview->scene_buffer->node.parent == copy->tree &&
+						output_preview->scene_buffer->node.enabled)
+					preview_count++;
+			}
 			struct engineos_shell_view *surface_view;
 			wl_list_for_each(surface_view, &server->views, link) {
 				if (copy != NULL && surface_view->mapped && surface_view->mux_bound &&
@@ -4114,7 +4238,7 @@ static void write_shell_state(struct engineos_shell_server *server,
 			}
 		}
 		fprintf(file,
-			", \"pixel_width\": %d, \"pixel_height\": %d, \"scale_milli\": %u, \"scene_x\": %d, \"scene_y\": %d, \"console_scene_count\": %zu, \"bound_presentation_surface_count\": %zu, \"presentation_surface_count\": %zu, \"preview_visible\": %s, \"focused\": %s, \"owns_selected_presentation\": %s}",
+			", \"pixel_width\": %d, \"pixel_height\": %d, \"scale_milli\": %u, \"scene_x\": %d, \"scene_y\": %d, \"console_scene_count\": %zu, \"bound_presentation_surface_count\": %zu, \"presentation_surface_count\": %zu, \"preview_count\": %zu, \"preview_visible\": %s, \"focused\": %s, \"owns_selected_presentation\": %s}",
 			output_width, output_height,
 			(uint32_t)(shell_output->output->scale * 1000.0 + 0.5),
 			shell_output->mux_scene_tree != NULL ?
@@ -4123,7 +4247,7 @@ static void write_shell_state(struct engineos_shell_server *server,
 				shell_output->mux_scene_tree->node.y : 0,
 			console_scene_count, bound_presentation_surface_count,
 			presentation_surface_count,
-			preview_visible ? "true" : "false",
+			preview_count, preview_count > 0 ? "true" : "false",
 			shell_output->mux_view_id == server->mux_client.primary_view_id ?
 				"true" : "false",
 			server->mux_client.pane_lease_client_id ==
@@ -4151,19 +4275,21 @@ static void write_shell_state(struct engineos_shell_server *server,
 		server->pointer_count, server->view_count);
 	fprintf(file, "  \"last_reason\": ");
 	json_write_string(file, reason != NULL ? reason : "unspecified");
-	fprintf(file,
-		",\n  \"preview\": {\"visible\": %s, \"path\": ",
-		server->preview.scene_buffer != NULL ? "true" : "false");
-	json_write_string(file, server->preview.path);
-	fprintf(file, ", \"owner\": ");
-	json_write_string(file, server->preview.owner);
-	fprintf(file,
-		", \"pane_id\": \"%%%u\", \"generation\": %u, \"lease_client_id\": %u, \"lease_view_id\": %u, \"x\": %d, \"y\": %d, \"width\": %d, \"height\": %d, \"image_width\": %d, \"image_height\": %d}",
-		server->preview.pane_id, server->preview.pane_generation,
-		server->preview.lease_client_id, server->preview.lease_view_id,
-		server->preview.x, server->preview.y, server->preview.width,
-		server->preview.height, server->preview.image_width,
-		server->preview.image_height);
+	struct engineos_preview_surface *primary_preview = NULL;
+	struct engineos_preview_surface *state_preview;
+	wl_list_for_each(state_preview, &server->previews, link)
+		primary_preview = state_preview;
+	fprintf(file, ",\n  \"preview\": ");
+	write_preview_json(file, primary_preview);
+	fprintf(file, ",\n  \"previews\": [");
+	bool first_preview = true;
+	wl_list_for_each(state_preview, &server->previews, link) {
+		if (!first_preview)
+			fprintf(file, ",");
+		first_preview = false;
+		write_preview_json(file, state_preview);
+	}
+	fprintf(file, "]");
 	fprintf(file, ",\n  \"wallpaper\": {\"visible\": %s, \"path\": ",
 		server->wallpaper.scene_buffer != NULL ? "true" : "false");
 	json_write_string(file, server->wallpaper.path);
@@ -5410,10 +5536,10 @@ static bool handle_keybinding(struct engineos_shell_server *server,
 		return false;
 	case XKB_KEY_F3:
 		if (modifiers == 0 &&
-				(server->preview.scene_buffer != NULL ||
+				(!wl_list_empty(&server->previews) ||
 				 server->wallpaper.scene_buffer != NULL)) {
 			wlr_log(WLR_INFO, "keybinding f3: close image surfaces");
-			if (server->preview.scene_buffer != NULL) {
+			if (!wl_list_empty(&server->previews)) {
 				hide_image_preview(server, "f3-close");
 			}
 			if (server->wallpaper.scene_buffer != NULL) {
@@ -7772,6 +7898,7 @@ int main(int argc, char **argv) {
 	wl_list_init(&server.pane_bindings);
 	wl_list_init(&server.terminal_clients);
 	wl_list_init(&server.mux_pane_scenes);
+	wl_list_init(&server.previews);
 
 	static const struct option options[] = {
 		{"headless", no_argument, NULL, 'H'},

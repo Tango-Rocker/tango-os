@@ -72,12 +72,13 @@ presentation from all output roots. `shell-state.json` exposes root positions,
 pane-copy counts, and bound/visible presentation counts. Native previews are
 keyed by pane ID, generation, frontend client, and output-view lease, parented
 under the leased pane scene, rejected for external ownership, and reported per
-output. The installed radeonsi contract proves a decoded image appears on only
-the owning output while the legacy preview contract remains green. Independent
-per-output session models, multiple simultaneous pane images and terminal
-image transport, direct-KMS clipping, ordinary simultaneous text-client
-acceptance, and final live hardware acceptance remain before native mode
-becomes the default.
+output. Multiple native panes retain independent previews, including pane
+`%0`; owner-scoped removal leaves sibling images intact. The installed
+radeonsi contract proves decoded images remain on their owning output while
+the legacy preview contract remains green. Independent per-output session
+models, terminal image transport, direct-KMS clipping, ordinary simultaneous
+text-client acceptance, and final live hardware acceptance remain before
+native mode becomes the default.
 
 ## Surface Model
 

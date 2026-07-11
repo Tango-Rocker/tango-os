@@ -1,6 +1,6 @@
 pkgname=engineos-tools
 pkgver=0.1.0
-pkgrel=32
+pkgrel=33
 pkgdesc="EngineOS command, proof, agent, and observability tools"
 arch=('any')
 url="https://example.invalid/engineos"

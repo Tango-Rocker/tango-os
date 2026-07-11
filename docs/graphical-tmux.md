@@ -40,14 +40,15 @@ now covers the complete terminal and compound-presentation foundation:
   mode, and preserve their type across respawn. Native `eos-app pane` wrappers
   call `engine-mux` directly; `eos-app launch quake` selects a game pane.
 - Pane previews are keyed by pane ID, generation, frontend client, and output
-  lease, and render on only the owning output.
+  lease, render on only the owning output, and coexist independently across
+  panes. Owner-scoped removal cannot clear a sibling pane's image.
 
 ## Remaining acceptance boundary
 
 Before cutover, prove real Falkon and Quake sessions, user-asset Quake capture
 and emergency release, simultaneous ordinary local and SSH tmux clients,
-multiple concurrent pane images and terminal-image transport, independent
-per-output session models, direct-KMS clipping, the complete upstream suite,
+terminal-image transport, independent per-output session models,
+direct-KMS clipping, the complete upstream suite,
 and the bare-metal boot/recovery gate. Native mode then becomes the default;
 only after that acceptance are the bridge, hooks, launch tokens, geometry
 files, shell-owned foot bootstrap, and rollback path removed.

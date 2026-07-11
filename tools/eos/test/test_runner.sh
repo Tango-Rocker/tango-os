@@ -1322,42 +1322,54 @@ PY
 		die "presentation lease did not return to the surviving shell output view"
 	}
 	python - "$fixture/engineos/preview.sock" "$preview_png" \
-		"$shell_pane_id" <<'PY'
+		"$shell_pane_id" "$other_shell_pane" <<'PY'
 import json
 import socket
 import sys
-request = {
-    "op": "show",
-    "path": sys.argv[2],
-    "owner": "native-mux-lease-proof",
-    "pane": {"pane_id": sys.argv[3]},
-}
-with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-    client.settimeout(3.0)
-    client.connect(sys.argv[1])
-    client.sendall((json.dumps(request) + "\n").encode())
-    response = json.loads(client.recv(4096))
-if response.get("status") != "ok":
-    raise SystemExit(f"preview request failed: {response}")
+for owner, pane in (
+    ("native-mux-lease-proof", sys.argv[3]),
+    ("native-mux-second-pane-proof", sys.argv[4]),
+):
+    request = {
+        "op": "show",
+        "path": sys.argv[2],
+        "owner": owner,
+        "pane": {"pane_id": pane},
+    }
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(3.0)
+        client.connect(sys.argv[1])
+        client.sendall((json.dumps(request) + "\n").encode())
+        response = json.loads(client.recv(4096))
+    if response.get("status") != "ok":
+        raise SystemExit(f"preview request failed for {pane}: {response}")
 PY
 	for _ in {1..100}; do
-		jq -e --arg pane "$shell_pane_id" \
-			'.preview.visible and .preview.pane_id == $pane and
-			 .preview.generation == .mux.generation and
-			 .preview.lease_client_id == .mux.presentation.lease_client_id and
-			 .preview.lease_view_id == .mux.presentation.lease_view_id and
-			 ([.output_views[] | select(.preview_visible)] | length) == 1 and
-			 ([.output_views[] | select(.preview_visible and
-			   .owns_selected_presentation)] | length) == 1' \
+		jq -e --arg first "$shell_pane_id" --arg second "$other_shell_pane" \
+			'(.previews | length) == 2 and
+			 ([.previews[].pane_id] | unique | sort) == ([$first, $second] | sort) and
+			 all(.previews[] as $preview;
+			   any(.mux.panes[]; .pane_id == $preview.pane_id and
+			     .generation == $preview.generation) and
+			   $preview.lease_client_id == .mux.frontend_client_id and
+			   $preview.lease_view_id == .mux.client_view_id) and
+			 ([.output_views[] | select(.preview_count == 2)] | length) == 1 and
+			 ([.output_views[].preview_count] | add) == 2' \
 			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
 		sleep 0.02
 	done
-	jq -e --arg pane "$shell_pane_id" \
-		'.preview.visible and .preview.pane_id == $pane and
-		 .preview.lease_view_id == .mux.presentation.lease_view_id and
-		 ([.output_views[] | select(.preview_visible)] | length) == 1' \
-		"$fixture/engineos/shell-state.json" >/dev/null ||
-		die "pane preview was not keyed to and isolated by its output lease"
+	jq -e --arg first "$shell_pane_id" --arg second "$other_shell_pane" \
+		'(.previews | length) == 2 and
+		 ([.previews[].pane_id] | unique | sort) == ([$first, $second] | sort) and
+		 ([.output_views[] | select(.preview_count == 2)] | length) == 1 and
+		 ([.output_views[].preview_count] | add) == 2' \
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '{previews,output_views,mux:{frontend_client_id:.mux.frontend_client_id,
+			client_view_id:.mux.client_view_id,panes:.mux.panes}}' \
+			"$fixture/engineos/shell-state.json" >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
+		die "simultaneous pane previews were not keyed to their panes and output lease"
+	}
 	python - "$fixture/engineos/preview.sock" <<'PY'
 import json
 import socket
@@ -1369,6 +1381,31 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
     response = json.loads(client.recv(4096))
 if response.get("status") != "ok":
     raise SystemExit(f"preview hide failed: {response}")
+PY
+	for _ in {1..100}; do
+		jq -e --arg pane "$other_shell_pane" \
+			'(.previews | length) == 1 and .previews[0].pane_id == $pane and
+			 .previews[0].owner == "native-mux-second-pane-proof" and
+			 ([.output_views[].preview_count] | add) == 1' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg pane "$other_shell_pane" \
+		'(.previews | length) == 1 and .previews[0].pane_id == $pane and
+		 .previews[0].owner == "native-mux-second-pane-proof"' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "hiding one pane preview removed or mutated its sibling"
+	python - "$fixture/engineos/preview.sock" <<'PY'
+import json
+import socket
+import sys
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+    client.settimeout(3.0)
+    client.connect(sys.argv[1])
+    client.sendall(b'{"op":"hide","owner":"native-mux-second-pane-proof"}\n')
+    response = json.loads(client.recv(4096))
+if response.get("status") != "ok":
+    raise SystemExit(f"second preview hide failed: {response}")
 PY
 	primary_surface_id="$(jq -er '.windows[] | select(.bound == true and
 		.app_id == "engineos.presentation-proof") | .surface_id' \
@@ -2827,7 +2864,7 @@ PY
       die "compiled shell did not decode and show wallpaper"
     grep -F "wallpaper hidden reason=ipc-hide-wallpaper" "$shell_log" >/dev/null ||
       die "compiled shell did not hide wallpaper"
-    grep -F "image preview hidden reason=ipc-hide" "$shell_log" >/dev/null ||
+    grep -E "image previews hidden count=1 .*reason=ipc-hide" "$shell_log" >/dev/null ||
       die "compiled shell did not hide image preview"
     grep -F 'launchpad slot unavailable role=terminal-secondary action=launch-requested trigger=ipc-launch' "$shell_log" >/dev/null ||
       die "compiled shell did not accept IPC slot launch"

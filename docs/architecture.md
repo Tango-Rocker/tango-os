@@ -74,7 +74,10 @@ The bridge is the deployed path while the native tmux frontend is developed
 side by side. [graphical-tmux.md](graphical-tmux.md) defines the compound
 console/presentation model and records the implemented protocol foundation.
 Selecting `engineos-shell --mux native` is explicit and fail-closed; it does
-not make the current bridge evidence count as native mux acceptance.
+not make the current bridge evidence count as native mux acceptance. Native
+pane images are compositor scene objects keyed by pane ID, generation, and the
+tmux-owned client-view lease. Multiple panes may retain images concurrently;
+an image is never reassigned from whichever pane happens to be focused.
 
 ### Quake Development
 

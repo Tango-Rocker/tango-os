@@ -77,10 +77,12 @@ Remaining evidence: a live Falkon focus-switch stress pass and real screenshot
 capture. Screenshot proof is currently blocked because the compositor does not
 expose the screen-capture protocol required by `grim`.
 
-The replacement path is staged in parallel: the versioned native mux protocol
-and fail-closed shell handshake are proven by `eos-test mux`. This does not yet
-satisfy the pane workflow acceptance above; terminal grid rendering and the
-tmux 3.6b fork are the next proof. See
+The replacement path is staged in parallel: the tmux 3.6b fork now owns the
+versioned frontend, terminal grids, graphical clients, compound presentations,
+leases, game panes, and independent lease-keyed pane previews. The exact
+installed mux and shell packages are exercised by `eos-test mux`; independent
+per-output sessions, terminal-image transport, real Falkon/Quake hardware
+acceptance, and final bridge removal remain. See
 [graphical-tmux.md](graphical-tmux.md).
 
 ### 3. Quake Development Loop
