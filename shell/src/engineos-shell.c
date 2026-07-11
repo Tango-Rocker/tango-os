@@ -357,6 +357,8 @@ struct engineos_shell_output {
 	struct wl_listener destroy;
 	struct wlr_scene_tree *mux_scene_tree;
 	struct wlr_scene_buffer *mux_ui_scene;
+	struct engineos_terminal_renderer *mux_ui_renderer;
+	struct engineos_terminal_render_stats mux_ui_stats;
 	struct engineos_mux_view_snapshot mux_snapshot;
 	uint32_t mux_view_id;
 	bool mux_registered;
@@ -2583,6 +2585,38 @@ static void ui_render_client(struct engineos_shell_server *server,
 	render_client->grid_full_damage = true;
 }
 
+static void view_ui_render_client(struct engineos_shell_server *server,
+		const struct engineos_mux_ui_model *ui,
+		struct engineos_mux_client *render_client) {
+	*render_client = server->mux_client;
+	render_client->ui_columns = ui->columns;
+	render_client->ui_rows = ui->rows;
+	render_client->ui_status_y = ui->status_y;
+	render_client->ui_status_rows = ui->status_rows;
+	render_client->ui_status_row_count = ui->status_row_count;
+	render_client->ui_menu_x = ui->menu_x;
+	render_client->ui_menu_y = ui->menu_y;
+	render_client->ui_menu_width = ui->menu_width;
+	render_client->ui_menu_height = ui->menu_height;
+	render_client->ui_menu_rows = ui->menu_rows;
+	render_client->ui_menu_row_count = ui->menu_row_count;
+	strcpy(render_client->ui_mode, ui->mode);
+	render_client->ui_prompt_active = ui->prompt_active;
+	render_client->ui_message_active = ui->message_active;
+	render_client->ui_menu_active = ui->menu_active;
+	render_client->ui_changed = ui->changed;
+	render_client->grid_columns = 0;
+	render_client->grid_rows = 0;
+	render_client->grid_cursor_x = 0;
+	render_client->grid_cursor_y = 0;
+	render_client->grid_nonblank_cells = 0;
+	render_client->grid_flags = 0;
+	render_client->grid_cells = NULL;
+	render_client->grid_damage_cells = NULL;
+	render_client->grid_damage_count = 0;
+	render_client->grid_full_damage = true;
+}
+
 static bool create_mux_pane_scene(struct engineos_shell_server *server,
 		struct engineos_mux_pane_model *pane, char *error, size_t error_size) {
 	(void)server;
@@ -2697,6 +2731,18 @@ static bool create_mux_output_scene(struct engineos_shell_output *output,
 		snprintf(error, error_size, "failed to create mux output scene root");
 		return false;
 	}
+	if (!output->mux_snapshot.ui.ready) {
+		snprintf(error, error_size, "mux output has no authoritative UI model");
+		return false;
+	}
+	struct engineos_mux_client ui_client;
+	view_ui_render_client(server, &output->mux_snapshot.ui, &ui_client);
+	output->mux_ui_renderer = engineos_terminal_renderer_create(server->renderer,
+		server->allocator, &ui_client, error, error_size);
+	if (output->mux_ui_renderer == NULL)
+		return false;
+	engineos_terminal_renderer_stats(output->mux_ui_renderer,
+		&output->mux_ui_stats);
 	struct wlr_output_layout_output *layout_output =
 		wlr_output_layout_get(server->output_layout, output->output);
 	if (layout_output != NULL)
@@ -2720,7 +2766,7 @@ static bool create_mux_output_scene(struct engineos_shell_output *output,
 			return false;
 	}
 	output->mux_ui_scene = wlr_scene_buffer_create(output->mux_scene_tree,
-		engineos_terminal_renderer_buffer(server->mux_ui_renderer));
+		engineos_terminal_renderer_buffer(output->mux_ui_renderer));
 	if (output->mux_ui_scene == NULL) {
 		snprintf(error, error_size, "failed to create mux output UI scene");
 		return false;
@@ -2743,6 +2789,9 @@ static void destroy_mux_output_scene(struct engineos_shell_output *output) {
 		output->mux_scene_tree = NULL;
 		output->mux_ui_scene = NULL;
 	}
+	engineos_terminal_renderer_destroy(output->mux_ui_renderer);
+	output->mux_ui_renderer = NULL;
+	memset(&output->mux_ui_stats, 0, sizeof(output->mux_ui_stats));
 }
 
 static bool setup_native_terminal_scene(struct engineos_shell_server *server) {
@@ -2937,11 +2986,26 @@ static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
 		return false;
 	}
 	wl_list_for_each(output, &server->outputs, link) {
-		if (output->mux_ui_scene == NULL)
+		if (output->mux_ui_scene == NULL || output->mux_ui_renderer == NULL ||
+				!output->mux_snapshot.ui.ready ||
+				output->mux_snapshot.ui.invalidated)
 			continue;
+		struct engineos_mux_client output_ui_client;
+		view_ui_render_client(server, &output->mux_snapshot.ui,
+			&output_ui_client);
+		if (!engineos_terminal_renderer_update(output->mux_ui_renderer,
+				&output_ui_client, error, sizeof(error))) {
+			wlr_log(WLR_ERROR,
+				"native mux output UI damage render failed view=%u: %s",
+				output->mux_view_id, error);
+			return false;
+		}
+		engineos_terminal_renderer_stats(output->mux_ui_renderer,
+			&output->mux_ui_stats);
 		wlr_scene_buffer_set_buffer_with_damage(output->mux_ui_scene,
-			engineos_terminal_renderer_buffer(server->mux_ui_renderer),
-			engineos_terminal_renderer_damage(server->mux_ui_renderer));
+			engineos_terminal_renderer_buffer(output->mux_ui_renderer),
+			engineos_terminal_renderer_damage(output->mux_ui_renderer));
+		output->mux_snapshot.ui.changed = false;
 		if (output->mux_view_id == server->mux_client.primary_view_id)
 			server->mux_ui_scene = output->mux_ui_scene;
 	}
@@ -3069,6 +3133,13 @@ static bool refresh_native_output_snapshots(
 				output->mux_view_id, &output->mux_snapshot, &changed,
 				error, error_size))
 			return false;
+		bool ui_changed = false;
+		if ((!output->mux_snapshot.ui.ready ||
+				output->mux_snapshot.ui.invalidated) &&
+				!engineos_mux_client_request_view_ui(&server->mux_client,
+					output->mux_view_id, &output->mux_snapshot, &ui_changed,
+					error, error_size))
+			return false;
 		if (output->mux_snapshot.output == NULL ||
 				strcmp(output->mux_snapshot.output, output->output->name) != 0) {
 			snprintf(error, error_size,
@@ -3076,9 +3147,28 @@ static bool refresh_native_output_snapshots(
 				output->mux_view_id);
 			return false;
 		}
-		*grid_changed = *grid_changed || changed;
+		*grid_changed = *grid_changed || changed || ui_changed;
 	}
-		if (!server->mux_client.state_invalidated_pending)
+		if (!engineos_mux_client_refresh_presentation(&server->mux_client,
+				error, error_size))
+			return false;
+		bool focused_model_matches = false;
+		wl_list_for_each(output, &server->outputs, link) {
+			if (!output->mux_registered || output->mux_view_id !=
+					server->mux_client.primary_view_id)
+				continue;
+			focused_model_matches = output->mux_snapshot.ready &&
+				output->mux_snapshot.pane_id == server->mux_client.pane_id &&
+				output->mux_snapshot.pane_generation ==
+					server->mux_client.pane_generation &&
+				output->mux_snapshot.session_id != NULL &&
+				server->mux_client.session_id != NULL &&
+				strcmp(output->mux_snapshot.session_id,
+					server->mux_client.session_id) == 0;
+			break;
+		}
+		if (!server->mux_client.state_invalidated_pending &&
+				focused_model_matches)
 			return true;
 	}
 	snprintf(error, error_size, "mux output snapshots did not settle");
@@ -4228,6 +4318,15 @@ static void write_shell_state(struct engineos_shell_server *server,
 	json_write_string(file, server->mux_client.prefix);
 	fprintf(file, ", \"prefix2\": ");
 	json_write_string(file, server->mux_client.prefix2);
+	const struct engineos_mux_ui_model *focused_ui = NULL;
+	struct engineos_shell_output *ui_output;
+	wl_list_for_each(ui_output, &server->outputs, link) {
+		if (ui_output->mux_registered && ui_output->mux_view_id ==
+				server->mux_client.primary_view_id) {
+			focused_ui = &ui_output->mux_snapshot.ui;
+			break;
+		}
+	}
 	fprintf(file,
 		", \"frontend_client_id\": %u, \"client_view_id\": %u, \"pane_id\": \"%%%u\", \"generation\": %u, \"grid\": {\"revision\": %llu, \"columns\": %u, \"rows\": %u, \"cursor_x\": %u, \"cursor_y\": %u, \"nonblank_cells\": %u, \"rendered\": %s, \"pixel_width\": %d, \"pixel_height\": %d, \"glyph_cells\": %u, \"renderer\": ",
 		server->mux_client.frontend_client_id,
@@ -4248,19 +4347,30 @@ static void write_shell_state(struct engineos_shell_server *server,
 		server->mux_terminal_damaged_cells,
 		server->mux_terminal_nonblank_pixels,
 		(unsigned long long)server->mux_terminal_frame,
-		server->mux_client.ui_columns, server->mux_client.ui_rows,
-		server->mux_client.ui_status_y,
-		server->mux_client.ui_status_row_count);
-	json_write_string(file, server->mux_client.ui_mode);
+		focused_ui != NULL ? focused_ui->columns : server->mux_client.ui_columns,
+		focused_ui != NULL ? focused_ui->rows : server->mux_client.ui_rows,
+		focused_ui != NULL ? focused_ui->status_y : server->mux_client.ui_status_y,
+		focused_ui != NULL ? focused_ui->status_row_count :
+			server->mux_client.ui_status_row_count);
+	json_write_string(file, focused_ui != NULL ? focused_ui->mode :
+		server->mux_client.ui_mode);
 	fprintf(file,
 		", \"rendered\": %s, \"prompt_active\": %s, \"message_active\": %s, \"menu_active\": %s, \"menu_x\": %u, \"menu_y\": %u, \"menu_width\": %u, \"menu_height\": %u}",
-		server->mux_terminal_scene != NULL &&
-			server->mux_client.ui_status_row_count != 0 ? "true" : "false",
-		server->mux_client.ui_prompt_active ? "true" : "false",
-		server->mux_client.ui_message_active ? "true" : "false",
-		server->mux_client.ui_menu_active ? "true" : "false",
-		server->mux_client.ui_menu_x, server->mux_client.ui_menu_y,
-		server->mux_client.ui_menu_width, server->mux_client.ui_menu_height);
+		server->mux_ui_scene != NULL &&
+			(focused_ui != NULL ? focused_ui->status_row_count :
+			 server->mux_client.ui_status_row_count) != 0 ? "true" : "false",
+		focused_ui != NULL ? (focused_ui->prompt_active ? "true" : "false") :
+			(server->mux_client.ui_prompt_active ? "true" : "false"),
+		focused_ui != NULL ? (focused_ui->message_active ? "true" : "false") :
+			(server->mux_client.ui_message_active ? "true" : "false"),
+		focused_ui != NULL ? (focused_ui->menu_active ? "true" : "false") :
+			(server->mux_client.ui_menu_active ? "true" : "false"),
+		focused_ui != NULL ? focused_ui->menu_x : server->mux_client.ui_menu_x,
+		focused_ui != NULL ? focused_ui->menu_y : server->mux_client.ui_menu_y,
+		focused_ui != NULL ? focused_ui->menu_width :
+			server->mux_client.ui_menu_width,
+		focused_ui != NULL ? focused_ui->menu_height :
+			server->mux_client.ui_menu_height);
 	fprintf(file, ", \"presentation\": {");
 	fprintf(file, "\"type\": ");
 	json_write_string(file, server->mux_client.pane_presentation);
@@ -4440,7 +4550,26 @@ static void write_shell_state(struct engineos_shell_server *server,
 			(unsigned long long)selected_renderer_frame);
 		json_write_string(file, selected_renderer);
 		fprintf(file,
-			", \"bound_presentation_surface_count\": %zu, \"presentation_surface_count\": %zu, \"preview_count\": %zu, \"preview_visible\": %s, \"focused\": %s, \"owns_selected_presentation\": %s}",
+			", \"ui\": {\"ready\": %s, \"columns\": %u, \"rows\": %u, \"status_y\": %d, \"status_rows\": %zu, \"mode\": ",
+			shell_output->mux_snapshot.ui.ready ? "true" : "false",
+			shell_output->mux_snapshot.ui.columns,
+			shell_output->mux_snapshot.ui.rows,
+			shell_output->mux_snapshot.ui.status_y,
+			shell_output->mux_snapshot.ui.status_row_count);
+		json_write_string(file, shell_output->mux_snapshot.ui.mode);
+		fprintf(file, ", \"status_text\": ");
+		json_write_string(file,
+			shell_output->mux_snapshot.ui.status_row_count != 0 ?
+			shell_output->mux_snapshot.ui.status_rows[0].text : NULL);
+		fprintf(file,
+			", \"rendered\": %s, \"renderer\": ",
+			shell_output->mux_ui_scene != NULL &&
+			shell_output->mux_ui_renderer != NULL ? "true" : "false");
+		json_write_string(file, shell_output->mux_ui_renderer != NULL ?
+			engineos_terminal_renderer_mode(shell_output->mux_ui_renderer) : NULL);
+		fprintf(file,
+			", \"frame\": %llu}, \"bound_presentation_surface_count\": %zu, \"presentation_surface_count\": %zu, \"preview_count\": %zu, \"preview_visible\": %s, \"focused\": %s, \"owns_selected_presentation\": %s}",
+			(unsigned long long)shell_output->mux_ui_stats.frame,
 			bound_presentation_surface_count,
 			presentation_surface_count,
 			preview_count, preview_count > 0 ? "true" : "false",
@@ -6864,7 +6993,18 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 			wl_display_terminate(server->display);
 			return;
 		}
+		bool view_ui_grid_changed = false;
+		if (!engineos_mux_client_request_view_ui(&server->mux_client,
+				shell_output->mux_view_id, &shell_output->mux_snapshot,
+				&view_ui_grid_changed, error, sizeof(error))) {
+			wlr_log(WLR_ERROR,
+				"native mux output UI model failed: %s", error);
+			server->mux_client.ready = false;
+			wl_display_terminate(server->display);
+			return;
+		}
 		grid_changed = grid_changed || snapshot_grid_changed;
+		grid_changed = grid_changed || view_ui_grid_changed;
 		if (!create_mux_output_scene(shell_output, error, sizeof(error))) {
 			wlr_log(WLR_ERROR, "native mux output scene failed: %s", error);
 			server->mux_client.ready = false;

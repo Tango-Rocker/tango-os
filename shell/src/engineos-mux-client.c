@@ -148,6 +148,17 @@ static bool track_view_snapshot(struct engineos_mux_client *client,
 	return true;
 }
 
+static struct engineos_mux_view_snapshot *find_view_snapshot(
+		struct engineos_mux_client *client, uint32_t view_id) {
+	for (size_t index = 0; index < client->view_snapshot_count; index++) {
+		struct engineos_mux_view_snapshot *snapshot =
+			client->view_snapshots[index];
+		if (snapshot != NULL && snapshot->view_id == view_id)
+			return snapshot;
+	}
+	return NULL;
+}
+
 static bool mark_grid_invalidation(struct engineos_mux_client *client,
 		uint32_t pane_id, uint32_t generation, char *error,
 		size_t error_size) {
@@ -1608,6 +1619,10 @@ bool engineos_mux_client_request_view_snapshot(
 			}
 		}
 	}
+	if (snapshot->ui.ready && snapshot->ui.view_id == response_view_id) {
+		replacement.ui = snapshot->ui;
+		memset(&snapshot->ui, 0, sizeof(snapshot->ui));
+	}
 	engineos_mux_view_snapshot_destroy(snapshot);
 	*snapshot = replacement;
 	if (!track_view_snapshot(client, snapshot, error, error_size))
@@ -1663,9 +1678,20 @@ bool engineos_mux_client_handle_event(struct engineos_mux_client *client,
 		}
 		memcpy(&invalidated, packet + sizeof(frame), sizeof(invalidated));
 		uint32_t view_id = ntohl(invalidated.view_id);
-		if (view_id != client->primary_view_id) return true;
+		struct engineos_mux_view_snapshot *snapshot =
+			find_view_snapshot(client, view_id);
+		if (snapshot == NULL) {
+			snprintf(error, error_size,
+				"UI invalidation has no retained graphical view");
+			return false;
+		}
+		snapshot->ui.invalidated = true;
+		if (view_id != client->primary_view_id &&
+				snapshot->session_id != NULL && client->session_id != NULL &&
+				strcmp(snapshot->session_id, client->session_id) == 0)
+			return true;
 		bool changed_during_request = false;
-		if (!engineos_mux_client_request_ui(client, view_id,
+		if (!engineos_mux_client_request_view_ui(client, view_id, snapshot,
 				&changed_during_request, error, error_size)) return false;
 		*grid_changed = true;
 		return true;
@@ -1795,6 +1821,14 @@ static void free_ui_rows(struct engineos_mux_ui_row *rows, size_t count) {
 	free(rows);
 }
 
+static void clear_ui_model(struct engineos_mux_ui_model *ui) {
+	if (ui == NULL)
+		return;
+	free_ui_rows(ui->status_rows, ui->status_row_count);
+	free_ui_rows(ui->menu_rows, ui->menu_row_count);
+	memset(ui, 0, sizeof(*ui));
+}
+
 static bool json_u32(struct json_object *parent, const char *name,
 		uint32_t maximum, uint32_t *value) {
 	struct json_object *object = NULL;
@@ -1879,23 +1913,26 @@ static bool parse_ui_rows(struct json_object *array, uint32_t columns,
 	return true;
 }
 
-static bool parse_ui_model(struct engineos_mux_client *client,
+static bool parse_ui_model(struct engineos_mux_ui_model *ui,
+		uint32_t requested_view_id,
 		struct json_object *root, char *error, size_t error_size) {
 	struct json_object *status = NULL, *status_rows = NULL, *mode = NULL;
 	struct json_object *prompt = NULL, *message = NULL, *menu = NULL;
 	struct json_object *menu_rows = NULL, *active = NULL;
-	uint32_t columns, rows, menu_x = 0, menu_y = 0;
+	uint32_t response_view_id, columns, rows, menu_x = 0, menu_y = 0;
 	int32_t status_y;
 	uint32_t menu_width = 0, menu_height = 0;
 	struct engineos_mux_ui_row *new_status_rows = NULL, *new_menu_rows = NULL;
 	size_t new_status_count = 0, new_menu_count = 0;
-	if (!json_u32(root, "columns", 16384, &columns) || columns == 0 ||
+	if (!json_u32(root, "view_id", UINT32_MAX, &response_view_id) ||
+			response_view_id != requested_view_id ||
+			!json_u32(root, "columns", 16384, &columns) || columns == 0 ||
 			!json_u32(root, "rows", 16384, &rows) || rows == 0 ||
 			!json_object_object_get_ex(root, "status", &status) ||
 			!json_object_is_type(status, json_type_object) ||
 			!json_object_object_get_ex(status, "mode", &mode) ||
 			!json_object_is_type(mode, json_type_string) ||
-			strlen(json_object_get_string(mode)) >= sizeof(client->ui_mode) ||
+			strlen(json_object_get_string(mode)) >= sizeof(ui->mode) ||
 			!json_i32(status, "y", -1, (int32_t)rows, &status_y) ||
 			!json_object_object_get_ex(status, "rows", &status_rows) ||
 			!parse_ui_rows(status_rows, columns, &new_status_rows,
@@ -1930,24 +1967,26 @@ static bool parse_ui_model(struct engineos_mux_client *client,
 					&new_menu_count, error, error_size) ||
 				new_menu_count != menu_height) goto invalid;
 	}
-	free_ui_rows(client->ui_status_rows, client->ui_status_row_count);
-	free_ui_rows(client->ui_menu_rows, client->ui_menu_row_count);
-	client->ui_columns = columns;
-	client->ui_rows = rows;
-	client->ui_status_y = status_y;
-	client->ui_status_rows = new_status_rows;
-	client->ui_status_row_count = new_status_count;
-	client->ui_menu_x = menu_x;
-	client->ui_menu_y = menu_y;
-	client->ui_menu_width = menu_width;
-	client->ui_menu_height = menu_height;
-	client->ui_menu_rows = new_menu_rows;
-	client->ui_menu_row_count = new_menu_count;
-	strcpy(client->ui_mode, json_object_get_string(mode));
-	client->ui_prompt_active = prompt_active;
-	client->ui_message_active = message_active;
-	client->ui_menu_active = menu_active;
-	client->ui_changed = true;
+	clear_ui_model(ui);
+	ui->view_id = response_view_id;
+	ui->columns = columns;
+	ui->rows = rows;
+	ui->status_y = status_y;
+	ui->status_rows = new_status_rows;
+	ui->status_row_count = new_status_count;
+	ui->menu_x = menu_x;
+	ui->menu_y = menu_y;
+	ui->menu_width = menu_width;
+	ui->menu_height = menu_height;
+	ui->menu_rows = new_menu_rows;
+	ui->menu_row_count = new_menu_count;
+	strcpy(ui->mode, json_object_get_string(mode));
+	ui->prompt_active = prompt_active;
+	ui->message_active = message_active;
+	ui->menu_active = menu_active;
+	ui->changed = true;
+	ui->invalidated = false;
+	ui->ready = true;
 	return true;
 
 invalid:
@@ -2032,6 +2071,13 @@ static bool exchange_json_request(struct engineos_mux_client *client,
 					"invalid UI invalidation during request");
 				return false;
 			}
+			struct engine_mux_ui_invalidation invalidated;
+			memcpy(&invalidated, packet + sizeof(frame), sizeof(invalidated));
+			struct engineos_mux_view_snapshot *snapshot = find_view_snapshot(
+				client, ntohl(invalidated.view_id));
+			if (snapshot != NULL)
+				snapshot->ui.invalidated = true;
+			*grid_changed = true;
 			free(packet);
 			continue;
 		}
@@ -2273,7 +2319,62 @@ bool engineos_mux_client_request_ui(struct engineos_mux_client *client,
 		grid_changed, error, error_size);
 	json_object_put(request);
 	if (!result) return false;
-	result = parse_ui_model(client, response, error, error_size);
+	struct engineos_mux_ui_model ui = {0};
+	result = parse_ui_model(&ui, view_id, response, error, error_size);
+	json_object_put(response);
+	if (!result)
+		return false;
+	free_ui_rows(client->ui_status_rows, client->ui_status_row_count);
+	free_ui_rows(client->ui_menu_rows, client->ui_menu_row_count);
+	client->ui_columns = ui.columns;
+	client->ui_rows = ui.rows;
+	client->ui_status_y = ui.status_y;
+	client->ui_status_rows = ui.status_rows;
+	client->ui_status_row_count = ui.status_row_count;
+	client->ui_menu_x = ui.menu_x;
+	client->ui_menu_y = ui.menu_y;
+	client->ui_menu_width = ui.menu_width;
+	client->ui_menu_height = ui.menu_height;
+	client->ui_menu_rows = ui.menu_rows;
+	client->ui_menu_row_count = ui.menu_row_count;
+	strcpy(client->ui_mode, ui.mode);
+	client->ui_prompt_active = ui.prompt_active;
+	client->ui_message_active = ui.message_active;
+	client->ui_menu_active = ui.menu_active;
+	client->ui_changed = true;
+	ui.status_rows = NULL;
+	ui.status_row_count = 0;
+	ui.menu_rows = NULL;
+	ui.menu_row_count = 0;
+	return result;
+}
+
+bool engineos_mux_client_request_view_ui(struct engineos_mux_client *client,
+		uint32_t view_id, struct engineos_mux_view_snapshot *snapshot,
+		bool *grid_changed, char *error, size_t error_size) {
+	if (view_id == 0 || snapshot == NULL || snapshot->view_id != view_id ||
+			!snapshot->ready) {
+		snprintf(error, error_size, "invalid graphical view UI request");
+		return false;
+	}
+	struct json_object *request = json_object_new_object();
+	if (request == NULL) {
+		snprintf(error, error_size, "out of memory");
+		return false;
+	}
+	json_object_object_add(request, "schema",
+		json_object_new_string("engine-mux/ui-request-v1"));
+	json_object_object_add(request, "view_id", json_object_new_int64(view_id));
+	const char *payload = json_object_to_json_string_ext(request,
+		JSON_C_TO_STRING_PLAIN);
+	struct json_object *response = NULL;
+	bool result = exchange_json_request(client, ENGINE_MUX_UI_REQUEST,
+		ENGINE_MUX_UI_MODEL, payload, "engine-mux/ui-model-v1", &response,
+		grid_changed, error, error_size);
+	json_object_put(request);
+	if (!result)
+		return false;
+	result = parse_ui_model(&snapshot->ui, view_id, response, error, error_size);
 	json_object_put(response);
 	return result;
 }
@@ -2427,6 +2528,7 @@ void engineos_mux_view_snapshot_destroy(
 	free(snapshot->output);
 	free(snapshot->session_id);
 	free_pane_models(snapshot->panes, snapshot->pane_count);
+	clear_ui_model(&snapshot->ui);
 	memset(snapshot, 0, sizeof(*snapshot));
 }
 

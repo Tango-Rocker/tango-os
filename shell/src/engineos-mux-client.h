@@ -21,6 +21,28 @@ struct engineos_mux_ui_row {
 	size_t span_count;
 };
 
+struct engineos_mux_ui_model {
+	uint32_t view_id;
+	uint32_t columns;
+	uint32_t rows;
+	int32_t status_y;
+	struct engineos_mux_ui_row *status_rows;
+	size_t status_row_count;
+	uint32_t menu_x;
+	uint32_t menu_y;
+	uint32_t menu_width;
+	uint32_t menu_height;
+	struct engineos_mux_ui_row *menu_rows;
+	size_t menu_row_count;
+	char mode[16];
+	bool prompt_active;
+	bool message_active;
+	bool menu_active;
+	bool changed;
+	bool invalidated;
+	bool ready;
+};
+
 struct engineos_mux_damage_cell {
 	uint32_t x;
 	uint32_t y;
@@ -80,6 +102,7 @@ struct engineos_mux_view_snapshot {
 	char *session_id;
 	struct engineos_mux_pane_model *panes;
 	size_t pane_count;
+	struct engineos_mux_ui_model ui;
 	bool ready;
 };
 
@@ -170,6 +193,9 @@ bool engineos_mux_client_send_mouse(struct engineos_mux_client *client,
 	char *error, size_t error_size);
 bool engineos_mux_client_request_ui(struct engineos_mux_client *client,
 	uint32_t view_id, bool *grid_changed, char *error, size_t error_size);
+bool engineos_mux_client_request_view_ui(struct engineos_mux_client *client,
+	uint32_t view_id, struct engineos_mux_view_snapshot *snapshot,
+	bool *grid_changed, char *error, size_t error_size);
 bool engineos_mux_client_resolve_presentation(struct engineos_mux_client *client,
 	int32_t pid, struct engineos_mux_presentation_target *target,
 	bool *grid_changed, char *error, size_t error_size);

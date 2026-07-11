@@ -113,8 +113,12 @@ or JSON request servicing until all output snapshots settle. Independent
 terminal renderers now live in each output-pane scene with their own render
 targets, buffers, damage, and statistics. Canonical grid ownership survives
 session focus changes, and nonfocused damage advances only the corresponding
-output renderer. Per-output UI renderers and input promotion, terminal image transport, direct-KMS
-clipping, final hardware acceptance, and legacy cutover remain open. Native
+output renderer. Each output now also owns a validated view-addressed UI model
+and renderer for status rows, menus, messages, and prompts. UI invalidations
+are retained per view, revision races settle before state publication, and a
+nonfocused session-specific status update advances only its output renderer.
+Focused-output input promotion, terminal image transport, direct-KMS clipping,
+final hardware acceptance, and legacy cutover remain open. Native
 `game` is now an
 authoritative launch/split presentation that survives respawn.
 `eos-app pane launch|split|view|signal|respawn|list` routes directly to

@@ -895,7 +895,10 @@ PY
 		   .pane_generation > 0 and .grid_ready_count == .pane_count and
 		   .grid_subscribed_count == .pane_count and .grid_revision > 0 and
 		   .rendered_pane_count == .pane_count and
-		   .selected_renderer_frame > 0 and .selected_renderer != null)' \
+		   .selected_renderer_frame > 0 and .selected_renderer != null and
+		   .ui.ready and .ui.columns > 0 and .ui.rows > 0 and
+		   .ui.status_rows > 0 and .ui.status_text != null and
+		   .ui.rendered and .ui.renderer != null and .ui.frame > 0)' \
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "shell did not retain an authoritative model for every output view"
 	jq -e '
@@ -1051,8 +1054,12 @@ PY
 		 ([.mux.panes[] | select(.active and .window_active)] | length) == 1 and
 		 all(.mux.panes[]; .grid.columns == .columns and
 		  .grid.rows == .rows and .scene.rendered)' \
-		"$fixture/engineos/shell-state.json" >/dev/null ||
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '{mux:{pane_id:.mux.pane_id,panes:.mux.panes},output_views,last_reason}' \
+			"$fixture/engineos/shell-state.json" >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
 		die "one hundred native pane focus transitions left stale scene state"
+	}
 
 	local topology_pane topology_generation
 	local topology_left topology_top swapped_left swapped_top broken_window
@@ -1805,7 +1812,7 @@ PY
 	local focused_session nonfocused_output nonfocused_client
 	local output_session_id output_session_pane output_grid_revision
 	local updated_output_grid_revision output_renderer_frame
-	local updated_output_renderer_frame
+	local updated_output_renderer_frame output_ui_frame updated_output_ui_frame
 	focused_session="$(jq -er '.mux.session_id' \
 		"$fixture/engineos/shell-state.json")"
 	nonfocused_output="$(jq -er \
@@ -1846,14 +1853,46 @@ PY
 		   .session_id == $session and .pane_id == $pane and .pane_count == 1 and
 		   .grid_ready_count == 1 and .grid_subscribed_count == 1 and
 		   .grid_revision > 0 and .rendered_pane_count == 1 and
-		   .console_scene_count == 1 and .selected_renderer_frame > 0) and
-		 any(.output_views[]; .focused and .session_id == $focused_session)' \
+		   .console_scene_count == 1 and .selected_renderer_frame > 0 and
+		   .ui.ready and .ui.rendered and .ui.frame > 0) and
+		 any(.output_views[]; .focused and .session_id == $focused_session and
+		   .ui.ready and .ui.rendered and .ui.frame > 0)' \
 		"$fixture/engineos/shell-state.json" >/dev/null || {
 		jq '{mux:{session_id:.mux.session_id,client_view_id:.mux.client_view_id},output_views}' \
 			"$fixture/engineos/shell-state.json" >&2 || true
 		tail -100 "$fixture/shell-native.log" >&2 || true
-		die "shell did not retain independent authoritative output models"
+		 die "shell did not retain independent authoritative output models"
 	}
+	output_ui_frame="$(jq -er --arg output "$nonfocused_output" \
+		'.output_views[] | select(.output == $output) | .ui.frame' \
+		"$fixture/engineos/shell-state.json")"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		set-option -t shell-output-model status-left 'OUTPUT-LOCAL-UI '
+	updated_output_ui_frame="$output_ui_frame"
+	for _ in {1..150}; do
+		updated_output_ui_frame="$(jq -er --arg output "$nonfocused_output" \
+			'.output_views[] | select(.output == $output) | .ui.frame' \
+			"$fixture/engineos/shell-state.json")"
+		jq -e --arg output "$nonfocused_output" \
+			'any(.output_views[]; .output == $output and
+			  (.ui.status_text | contains("OUTPUT-LOCAL-UI"))) and
+			 all(.output_views[]; .output == $output or
+			  (.ui.status_text | contains("OUTPUT-LOCAL-UI") | not))' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 &&
+			[[ "$updated_output_ui_frame" -gt "$output_ui_frame" ]] && break
+		sleep 0.02
+	done
+	if ! [[ "$updated_output_ui_frame" -gt "$output_ui_frame" ]] || !
+		jq -e --arg output "$nonfocused_output" \
+			'any(.output_views[]; .output == $output and
+			  (.ui.status_text | contains("OUTPUT-LOCAL-UI"))) and
+			 all(.output_views[]; .output == $output or
+			  (.ui.status_text | contains("OUTPUT-LOCAL-UI") | not))' \
+			"$fixture/engineos/shell-state.json" >/dev/null; then
+		jq '{output_views,last_reason}' "$fixture/engineos/shell-state.json" >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
+		die "nonfocused output UI did not retain and render its own status model"
+	fi
 	output_grid_revision="$(jq -er --arg output "$nonfocused_output" \
 		'.output_views[] | select(.output == $output) | .grid_revision' \
 		"$fixture/engineos/shell-state.json")"

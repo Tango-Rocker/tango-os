@@ -81,8 +81,10 @@ focused-output shell refresh. Every registered output also retains its own
 validated session, selected-pane, generation, pane-count, and revision model
 in `shell-state.json`; the contract proves a nonfocused output can move to
 another session without overwriting the focused model and that its cache
-follows reattachment. Independent per-output UI renderers and input promotion
-remain. Each output model already resolves retained, subscribed pane
+follows reattachment. Each output also owns its view-addressed
+status/menu/prompt model and GPU renderer; a nonfocused session's status
+damage advances only that output and cannot overwrite the focused UI.
+Focused-output input promotion remains. Each output model already resolves retained, subscribed pane
 grids—including panes in a different nonfocused session—and reports grid
 readiness, subscription coverage, and selected-grid revision. State
 invalidations remain sticky across request servicing so output snapshots
