@@ -66,4 +66,5 @@ clients beside the graphical views, verifies backing-console and presentation
 metadata, drives `prefix+v`, and proves the smaller ttys cannot replace
 graphical canonical sizing. The SSH leg authenticates generated keys to an
 isolated loopback OpenSSH server and forces the remote `engine-mux` command to
-own a PTY. The next migration proof is direct-KMS clipping.
+own a PTY. Direct-KMS split, resize, and zoom clipping now passes through
+`eos-proof native-kms`; real Falkon and Quake pane sessions are next.

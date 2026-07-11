@@ -84,7 +84,7 @@ These are historical proof artifacts only; they are not the active work path:
   also replaces tmux's client-terminating bare `new-session` action with
   detached creation followed by an explicit switch of the invoking client.
   The EngineOS command-surface hardening is deployed through
-  `engineos-tools 0.1.0-39`: `eos-source-test` clears installed-session
+  `engineos-tools 0.1.0-41`: `eos-source-test` clears installed-session
   contamination, `eos-proof` fails closed on required evidence, repeatable
   package selection is normalized through `eos-ci local`, and
   `eos-runtime shell restart-live` only reports success when a new
@@ -100,7 +100,7 @@ These are historical proof artifacts only; they are not the active work path:
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
   `engineos-mux 3.6b-34` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-50`, but native mode is not yet the live desktop
+  `engineos-shell 0.1.0-52`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
@@ -162,7 +162,7 @@ These are historical proof artifacts only; they are not the active work path:
   resizing, ranged status-window selection, status-menu opening, and menu-item
   command activation. The shell routes pointer motion, buttons, and vertical
   scroll through that same boundary. The contract passes against the exact
-  `engineos-mux 3.6b-34` and `engineos-shell 0.1.0-50` package binaries. The
+  `engineos-mux 3.6b-34` and `engineos-shell 0.1.0-52` package binaries. The
   native renderer now keeps FreeType-rasterized, colour-keyed glyphs in a GPU
   texture atlas and draws them into double-buffered per-pane GPU targets.
   Sparse tmux cell damage is retained through the mux client, expanded only
@@ -173,8 +173,7 @@ These are historical proof artifacts only; they are not the active work path:
   contract passes through the local AMD render node with GLES2, `radeonsi`, a
   nonblank target readback, and a later frame touching fewer cells than the
   full grid; pixman is explicitly labeled `cpu-pixman-smoke` rather than
-  silently accepted as hardware. Direct-KMS native-mode clipping across
-  multiple panes, resize, and zoom remains part of final hardware acceptance.
+  silently accepted as hardware.
   One frontend connection now subscribes to every active pane grid. The shell
   retains those grids across authoritative snapshot refreshes, forces a full
   resynchronization when canonical pane dimensions change, and renders each
@@ -260,7 +259,7 @@ These are historical proof artifacts only; they are not the active work path:
   lease, temporary graphical clients restore the previous owner on disconnect,
   destroyed or out-of-window views lose ownership, and the shell settles
   concurrent invalidations instead of retaining stale lease state. The exact
-  installed `engineos-mux 3.6b-34` and `engineos-shell 0.1.0-50` binaries pass
+  installed `engineos-mux 3.6b-34` and `engineos-shell 0.1.0-52` binaries pass
   the complete two-output contract through AMD/radeonsi GLES2. Every output
   now owns a layout-positioned mux scene root with a console buffer node for
   every pane. The live XDG toplevel/transient set is parented only beneath the
@@ -345,10 +344,20 @@ These are historical proof artifacts only; they are not the active work path:
   graphical canonical window size unchanged. The fork excludes ordinary
   clients from sizing only for windows owned by registered graphical views;
   ordinary tmux sizing remains unchanged for all other windows. Package
-  `engineos-mux 3.6b-34`, packaged proof driver in `engineos-tools 0.1.0-39`,
+  `engineos-mux 3.6b-34`, packaged proof driver in `engineos-tools 0.1.0-41`,
   the installed pixman contract, and the exact installed AMD/radeonsi GLES2
-  contract pass. Direct-KMS clipping is the next hardware boundary before
-  native `/usr/bin/tmux` cutover.
+  contract pass. Direct-KMS clipping now has a repeatable live acceptance
+  command: `eos-proof native-kms`. It starts an isolated native mux session,
+  temporarily restarts tty1 against that socket, and requires the real
+  `drm,libinput` backend, a DRM GBM allocator, AMD/radeonsi GLES2, connector
+  modesets, and successful scene-output commits. The 2026-07-11 run exercised
+  two 1920x1080 outputs and two nonblank pane buffers per output; every buffer
+  stayed inside its output and did not overlap its sibling through split,
+  resize, zoom, and unzoom. Both outputs reported positive frame commits and
+  zero commit failures. The proof restored the prior legacy desktop and
+  removed its isolated mux server. Evidence is retained in
+  `/var/log/engineos/proof-native-kms-20260711T100643Z/`. Real Falkon and Quake
+  pane sessions are the next native acceptance boundary before cutover.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 

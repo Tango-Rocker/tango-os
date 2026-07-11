@@ -144,10 +144,19 @@ loopback OpenSSH server, generated keys, verified public-key authentication,
 a forced remote PTY, and a remote `engine-mux attach-session` command. Engine
 mux excludes ordinary clients from size calculation only when a registered
 graphical view owns that window, preserving normal upstream sizing everywhere
-else. The proof driver is installed by `engineos-tools 0.1.0-39`; its pixman
+else. The proof driver is installed by `engineos-tools 0.1.0-41`; its pixman
 source contract and exact installed `engineos-mux 3.6b-34` plus AMD/radeonsi
-shell contract pass. Direct-KMS clipping, final hardware acceptance, and
-legacy cutover remain open. Native
+shell contract pass. Direct-KMS clipping now passes through installed
+`eos-proof native-kms` and `engineos-shell 0.1.0-52`. The workflow temporarily
+attaches tty1 to an isolated two-pane native mux and requires the DRM/libinput
+backend, a DRM GBM allocator, AMD/radeonsi GLES2, real connector modesets,
+positive scene-output commits, and zero commit failures. Every pane buffer
+remains nonoverlapping and inside each of two physical 1920x1080 outputs
+through split, resize, zoom, and unzoom; zoom disables the hidden terminal
+subtree on both outputs. The proof keeps `/var/log/engineos/proof-native-kms-*`
+evidence, restores the prior desktop mode, and removes its isolated mux server.
+Real Falkon and Quake sessions, the remaining bare-metal recovery/input gate,
+full upstream-suite closure, and legacy cutover remain open. Native
 `game` is now an
 authoritative launch/split presentation that survives respawn.
 `eos-app pane launch|split|view|signal|respawn|list` routes directly to

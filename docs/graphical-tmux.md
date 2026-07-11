@@ -59,8 +59,8 @@ now covers the complete terminal and compound-presentation foundation:
 ## Remaining acceptance boundary
 
 Before cutover, prove real Falkon and Quake sessions, user-asset Quake capture
-and emergency release, direct-KMS clipping, the complete upstream suite,
-and the bare-metal boot/recovery gate. Native mode then becomes the default;
+and emergency release, the complete upstream suite, and the bare-metal
+boot/recovery gate. Native mode then becomes the default;
 only after that acceptance are the bridge, hooks, launch tokens, geometry
 files, shell-owned foot bootstrap, and rollback path removed.
 
@@ -74,6 +74,7 @@ files, shell-owned foot bootstrap, and rollback path removed.
 ./tools/engineos/eos-lint packages --package engineos-mux --package engineos-shell
 ENGINEOS_MUX_TEST_RENDERER=gles2 ENGINEOS_MUX_REQUIRE_RADEONSI=true \
   ./tools/engineos/eos-test mux
+eos-proof native-kms
 ```
 
 The mux contract uses a real isolated tmux server, deterministic PTY and
@@ -82,7 +83,9 @@ grid and UI transport, topology lifecycle, leases, previews, Wayland tabs and
 transients, game capture/console transitions, respawn, and teardown. The app
 and game-workflow contracts separately prove native wrapper routing and that
 pane-owned Quake executes its runner in the foreground instead of escaping to
-the user service.
+the user service. `eos-proof native-kms` is the live-only gate: it temporarily
+restarts tty1 against an isolated native session, captures split/resize/zoom
+state and KMS logs, and restores the prior desktop mode.
 
 ## Upstream baseline and rebase procedure
 

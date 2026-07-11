@@ -100,9 +100,12 @@ and statistics; linked outputs may resolve the same canonical grid but never
 share compositor render targets. Grid ownership is preserved when focus moves
 between sessions, and the contract proves nonfocused damage advances the
 correct output renderer.
-Direct-KMS clipping, ordinary simultaneous
-text-client acceptance, and final live hardware acceptance remain before
-native mode becomes the default.
+Ordinary local and SSH text-client acceptance and direct-KMS clipping now pass.
+`eos-proof native-kms` records per-output frame commits and pane bounds while
+exercising split, resize, zoom, and unzoom on the live DRM/GBM/radeonsi path,
+then restores the previous desktop mode. Real Falkon and Quake sessions plus
+the remaining live recovery gates remain before native mode becomes the
+default.
 
 ## Surface Model
 

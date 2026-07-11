@@ -36,6 +36,12 @@ app surfaces, image overlays, and pane-bound GUI rendering. Applications enter
 the shell through `eos-app`; they do not discover compositor sockets or place
 their own top-level windows outside the shell contract.
 
+Native mux observability records the selected backend, successful and failed
+scene-output commits, and each output's pane-buffer bounds in
+`shell-state.json`. `eos-proof native-kms` uses that state plus DRM/GBM and
+AMD/radeonsi logs to prove split, resize, zoom, and unzoom on tty1, then
+restores the prior desktop mode.
+
 The app manifest defines terminal, secondary terminal, cube, and Quake slots.
 Ordinary desktop applications can remain floating for diagnostics, while the
 normal tmux-integrated GUI path is explicit:

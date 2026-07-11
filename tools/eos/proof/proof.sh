@@ -24,6 +24,7 @@ Usage: proof.sh build-lab [--dry-run] [--profile enginedev]
        proof.sh booted-iso [--vm|--runtime|--bare-metal] [--dry-run]
        proof.sh shell-launch [--vm|--runtime|--bare-metal] [--dry-run]
        proof.sh launchpad [--vm|--runtime|--bare-metal] [--dry-run]
+       proof.sh native-kms
        proof.sh visual [--dry-run] [--allow-metadata]
        proof.sh mc-preview [--dry-run] [--visual]
 
@@ -44,11 +45,252 @@ The booted-iso proof runs inside a generated ISO after it boots.
 The shell-launch proof verifies that engineos-shell is the graphical launch
 point for terminal/tmux and OpenGL app clients.
 The launchpad proof verifies the terminal, cube, and engine slot contract.
+The native-kms proof temporarily runs the live tty1 shell against an isolated
+two-pane native mux session, proves real DRM/GBM/radeonsi output commits through
+split, resize, and zoom, then restores the prior shell mode.
 The visual proof requires a real frame image by default; metadata-only capture
 is diagnostic unless --allow-metadata is explicitly passed.
 The mc-preview proof runs the Quick View/image-preview acceptance path and can
 optionally include a visual frame capture.
 HELP
+}
+
+NATIVE_KMS_CLEANED=true
+NATIVE_KMS_MANAGER_CHANGED=false
+NATIVE_KMS_SHELL_SWITCHED=false
+NATIVE_KMS_FIXTURE=""
+NATIVE_KMS_RUNTIME=""
+NATIVE_KMS_MUX_BIN=""
+NATIVE_KMS_OLD_MODE=""
+NATIVE_KMS_OLD_SOCKET=""
+NATIVE_KMS_RUNTIME_CMD=""
+NATIVE_KMS_SYSTEMCTL=()
+
+native_kms_restore_environment() {
+  local assignment
+  for assignment in "$NATIVE_KMS_OLD_MODE" "$NATIVE_KMS_OLD_SOCKET"; do
+    if [[ -n "$assignment" ]]; then
+      "${NATIVE_KMS_SYSTEMCTL[@]}" set-environment "$assignment"
+    fi
+  done
+  [[ -n "$NATIVE_KMS_OLD_MODE" ]] ||
+    "${NATIVE_KMS_SYSTEMCTL[@]}" unset-environment ENGINEOS_MUX_MODE
+  [[ -n "$NATIVE_KMS_OLD_SOCKET" ]] ||
+    "${NATIVE_KMS_SYSTEMCTL[@]}" unset-environment ENGINEOS_MUX_SOCKET
+}
+
+native_kms_cleanup() {
+  local incoming_rc=$?
+  local cleanup_rc=0
+  [[ "$NATIVE_KMS_CLEANED" == false ]] || return "$incoming_rc"
+  NATIVE_KMS_CLEANED=true
+  set +e
+  if [[ "$NATIVE_KMS_MANAGER_CHANGED" == true ]]; then
+    native_kms_restore_environment || cleanup_rc=$?
+  fi
+  if [[ "$NATIVE_KMS_SHELL_SWITCHED" == true ]]; then
+    "$NATIVE_KMS_RUNTIME_CMD" shell restart-live --timeout 20 || cleanup_rc=$?
+  fi
+  if [[ -n "$NATIVE_KMS_MUX_BIN" && -n "$NATIVE_KMS_RUNTIME" ]]; then
+    XDG_RUNTIME_DIR="$NATIVE_KMS_RUNTIME" TMUX_TMPDIR="$NATIVE_KMS_RUNTIME" \
+      "$NATIVE_KMS_MUX_BIN" kill-server >/dev/null 2>&1 || true
+  fi
+  [[ -z "$NATIVE_KMS_FIXTURE" ]] || rm -rf "$NATIVE_KMS_FIXTURE"
+  set -e
+  if (( incoming_rc != 0 )); then
+    return "$incoming_rc"
+  fi
+  return "$cleanup_rc"
+}
+
+wait_for_native_kms_state() {
+  local state_file="$1"
+  local filter="$2"
+  local description="$3"
+  local attempt
+  for attempt in {1..200}; do
+    if jq -e "$filter" "$state_file" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.05
+  done
+  jq "$filter" "$state_file" >/dev/null 2>&1 || true
+  die "native KMS state did not reach $description"
+}
+
+validate_native_kms_split_state() {
+  local state_file="$1"
+  jq -e '
+    .mode == "tty" and .backend == "drm,libinput" and
+    .mux.mode == "native" and .mux.connected == true and
+    (.mux.panes | length) == 2 and
+    ([.mux.panes[] | select(.visible)] | length) == 2 and
+    ([.output_views[] | select(
+      .frame_commits > 0 and .frame_failures == 0 and
+      .rendered_pane_count == 2 and
+      .selected_renderer == "gpu-glyph-atlas-gles2" and
+      (.panes | length) == 2 and
+      ([.panes[] | select(
+        .visible and .terminal_visible and .within_output and
+        .frame > 0 and .nonblank_pixels > 0 and
+        .renderer == "gpu-glyph-atlas-gles2"
+      )] | length) == 2 and
+      ((.panes | sort_by(.pixel_x)) as $p |
+        ($p[0].pixel_x + $p[0].pixel_width) <= $p[1].pixel_x)
+    )] | length) == (.output_views | length) and
+    (.output_views | length) > 0
+  ' "$state_file" >/dev/null ||
+    die "native KMS split state lacks committed, clipped radeonsi pane frames"
+}
+
+proof_native_kms() {
+  [[ $# -eq 0 ]] || die "native-kms proof takes no options"
+  have_cmd jq || die "native-kms proof requires jq"
+  have_cmd systemctl || die "native-kms proof requires systemctl"
+  have_cmd sudo || [[ "$(id -u)" -eq 0 ]] ||
+    die "native-kms proof requires sudo or root"
+
+  local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  local state_file="$runtime_dir/engineos/shell-state.json"
+  local shell_log="${ENGINEOS_SHELL_LOG:-${ENGINEOS_LOG_DIR:-$(default_log_dir)}/dev-shell-start.log}"
+  local log_dir="${ENGINEOS_LOG_DIR:-$(default_log_dir)}"
+  local stamp="$(timestamp_utc)"
+  local artifact_dir="$log_dir/proof-native-kms-$stamp"
+  local fixture="${TMPDIR:-/tmp}/engineos-native-kms-proof-$$"
+  local mux_bin="${ENGINEOS_MUX_BIN:-$(command -v engine-mux || true)}"
+  local runtime_cmd="$(eos_command eos-runtime)"
+  local log_start=0
+  local initial_mode=""
+  local initial_columns initial_frames resized_frames
+
+  [[ -x "$mux_bin" ]] || die "native-kms proof requires installed engine-mux"
+  [[ -r "$state_file" ]] || die "live shell state missing: $state_file"
+  [[ -r "$shell_log" ]] || die "live shell log missing: $shell_log"
+  [[ -c /dev/tty1 ]] || die "native-kms proof requires tty1"
+  compgen -G '/dev/dri/card*' >/dev/null ||
+    die "native-kms proof requires a DRM card"
+  systemctl is-active --quiet engineos-dev-shell.service ||
+    die "engineos-dev-shell.service is not active"
+  jq -e '.mode == "tty"' "$state_file" >/dev/null ||
+    die "live shell is not currently attached to tty/DRM"
+
+  mkdir -p "$artifact_dir" "$fixture/runtime"
+  chmod 0700 "$fixture" "$fixture/runtime"
+  initial_mode="$(jq -r '.mux.mode' "$state_file")"
+  cp "$state_file" "$artifact_dir/before.json"
+  log_start="$(wc -l <"$shell_log")"
+
+  NATIVE_KMS_CLEANED=false
+  NATIVE_KMS_MANAGER_CHANGED=false
+  NATIVE_KMS_SHELL_SWITCHED=false
+  NATIVE_KMS_FIXTURE="$fixture"
+  NATIVE_KMS_RUNTIME="$fixture/runtime"
+  NATIVE_KMS_MUX_BIN="$mux_bin"
+  NATIVE_KMS_RUNTIME_CMD="$runtime_cmd"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    NATIVE_KMS_SYSTEMCTL=(systemctl)
+  else
+    NATIVE_KMS_SYSTEMCTL=(sudo -n systemctl)
+  fi
+  NATIVE_KMS_OLD_MODE="$(systemctl show-environment | sed -n '/^ENGINEOS_MUX_MODE=/{p;q;}')"
+  NATIVE_KMS_OLD_SOCKET="$(systemctl show-environment | sed -n '/^ENGINEOS_MUX_SOCKET=/{p;q;}')"
+  trap native_kms_cleanup EXIT
+  trap 'exit 130' INT TERM
+
+  printf 'EngineOS native KMS proof\n'
+  printf '  state:    %s\n' "$state_file"
+  printf '  log:      %s\n' "$shell_log"
+  printf '  artifacts:%s\n' "$artifact_dir"
+  printf '  restore:  %s\n' "$initial_mode"
+
+  XDG_RUNTIME_DIR="$NATIVE_KMS_RUNTIME" TMUX_TMPDIR="$NATIVE_KMS_RUNTIME" \
+    "$mux_bin" new-session -d -s engineos-kms-proof -x 120 -y 36 \
+      'printf "LEFT-KMS-PROOF\\n"; exec sh'
+  XDG_RUNTIME_DIR="$NATIVE_KMS_RUNTIME" TMUX_TMPDIR="$NATIVE_KMS_RUNTIME" \
+    "$mux_bin" split-window -h -t '=engineos-kms-proof:' \
+      'printf "RIGHT-KMS-PROOF\\n"; exec sh'
+  XDG_RUNTIME_DIR="$NATIVE_KMS_RUNTIME" TMUX_TMPDIR="$NATIVE_KMS_RUNTIME" \
+    "$mux_bin" select-layout -t '=engineos-kms-proof:' even-horizontal
+  local mux_socket="$NATIVE_KMS_RUNTIME/engineos/mux.sock"
+  [[ -S "$mux_socket" ]] || die "isolated native mux frontend socket missing"
+
+  "${NATIVE_KMS_SYSTEMCTL[@]}" set-environment \
+    ENGINEOS_MUX_MODE=native ENGINEOS_MUX_SOCKET="$mux_socket"
+  NATIVE_KMS_MANAGER_CHANGED=true
+  NATIVE_KMS_SHELL_SWITCHED=true
+  "$runtime_cmd" shell restart-live --timeout 20
+
+  wait_for_native_kms_state "$state_file" '
+    .mode == "tty" and .backend == "drm,libinput" and
+    .mux.mode == "native" and .mux.connected == true and
+    (.mux.panes | length) == 2 and
+    (.output_views | length) > 0 and
+    ([.output_views[] | select(.frame_commits > 0)] | length) ==
+      (.output_views | length)
+  ' "initial direct-KMS split frames"
+  validate_native_kms_split_state "$state_file"
+  cp "$state_file" "$artifact_dir/split.json"
+  initial_columns="$(jq '.mux.panes[0].columns' "$state_file")"
+  initial_frames="$(jq '[.output_views[].panes[].frame] | add' "$state_file")"
+
+  XDG_RUNTIME_DIR="$NATIVE_KMS_RUNTIME" TMUX_TMPDIR="$NATIVE_KMS_RUNTIME" \
+    "$mux_bin" resize-pane -t '%0' -R 8
+  XDG_RUNTIME_DIR="$NATIVE_KMS_RUNTIME" TMUX_TMPDIR="$NATIVE_KMS_RUNTIME" \
+    "$mux_bin" send-keys -t '%0' 'printf "LEFT-RESIZED-KMS\\n"' Enter
+  XDG_RUNTIME_DIR="$NATIVE_KMS_RUNTIME" TMUX_TMPDIR="$NATIVE_KMS_RUNTIME" \
+    "$mux_bin" send-keys -t '%1' 'printf "RIGHT-RESIZED-KMS\\n"' Enter
+  wait_for_native_kms_state "$state_file" ".mux.panes[0].columns != $initial_columns and
+    ([.output_views[].panes[].frame] | add) > $initial_frames" \
+    "resized nonblank pane frames"
+  validate_native_kms_split_state "$state_file"
+  cp "$state_file" "$artifact_dir/resized.json"
+  resized_frames="$(jq '[.output_views[].panes[].frame] | add' "$state_file")"
+
+  XDG_RUNTIME_DIR="$NATIVE_KMS_RUNTIME" TMUX_TMPDIR="$NATIVE_KMS_RUNTIME" \
+    "$mux_bin" resize-pane -Z -t '%1'
+  wait_for_native_kms_state "$state_file" '
+    ([.mux.panes[] | select(.visible)] | length) == 1 and
+    ([.output_views[] | select(
+      ([.panes[] | select(.visible)] | length) == 1 and
+      ([.panes[] | select(.visible and .terminal_visible and .within_output and
+        .renderer == "gpu-glyph-atlas-gles2" and .frame > 0)] | length) == 1
+      and ([.panes[] | select((.visible | not) and
+        (.terminal_visible | not))] | length) == 1
+    )] | length) == (.output_views | length)
+  ' "zoomed single-pane clipping"
+  cp "$state_file" "$artifact_dir/zoomed.json"
+
+  XDG_RUNTIME_DIR="$NATIVE_KMS_RUNTIME" TMUX_TMPDIR="$NATIVE_KMS_RUNTIME" \
+    "$mux_bin" resize-pane -Z -t '%1'
+  wait_for_native_kms_state "$state_file" "
+    ([.mux.panes[] | select(.visible)] | length) == 2 and
+    ([.output_views[].panes[].frame] | add) > $resized_frames
+  " "unzoomed split clipping"
+  validate_native_kms_split_state "$state_file"
+  cp "$state_file" "$artifact_dir/unzoomed.json"
+
+  sed -n "$((log_start + 1)),\$p" "$shell_log" >"$artifact_dir/kms.log"
+  grep -F 'renderer diagnostics backend=drm,libinput' \
+    "$artifact_dir/kms.log" >/dev/null ||
+    die "native KMS log lacks DRM/libinput backend evidence"
+  grep -E 'GL renderer: AMD .*radeonsi' "$artifact_dir/kms.log" >/dev/null ||
+    die "native KMS log lacks AMD/radeonsi renderer evidence"
+  grep -F 'Created GBM allocator with backend drm' \
+    "$artifact_dir/kms.log" >/dev/null ||
+    die "native KMS log lacks DRM GBM allocator evidence"
+  grep -F 'Modesetting with ' "$artifact_dir/kms.log" >/dev/null ||
+    die "native KMS log lacks a real connector modeset"
+  if grep -F 'failed to commit scene output' "$artifact_dir/kms.log" >/dev/null; then
+    die "native KMS scene output commit failed"
+  fi
+
+  native_kms_cleanup
+  trap - EXIT INT TERM
+  wait_for_native_kms_state "$state_file" ".mux.mode == \"$initial_mode\"" \
+    "restored $initial_mode shell mode"
+  cp "$state_file" "$artifact_dir/restored.json"
+  printf 'Native KMS clipping proof passed.\n'
+  printf 'Proof artifacts: %s\n' "$artifact_dir"
 }
 
 default_log_dir() {
@@ -880,6 +1122,9 @@ case "$ACTION" in
     ;;
   launchpad)
     proof_launchpad "$@"
+    ;;
+  native-kms)
+    proof_native_kms "$@"
     ;;
   visual)
     proof_visual "$@"

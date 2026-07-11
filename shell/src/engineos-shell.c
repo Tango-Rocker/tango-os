@@ -362,6 +362,8 @@ struct engineos_shell_output {
 	struct engineos_terminal_renderer *mux_ui_renderer;
 	struct engineos_terminal_render_stats mux_ui_stats;
 	struct engineos_mux_view_snapshot mux_snapshot;
+	uint64_t frame_commits;
+	uint64_t frame_failures;
 	uint32_t mux_view_id;
 	bool mux_registered;
 };
@@ -4557,6 +4559,8 @@ static void write_shell_state(struct engineos_shell_server *server,
 	fprintf(file, "  \"pid\": %ld,\n", (long)getpid());
 	fprintf(file, "  \"mode\": ");
 	json_write_string(file, server->mode_name);
+	fprintf(file, ",\n  \"backend\": ");
+	json_write_string(file, getenv("WLR_BACKENDS"));
 	fprintf(file, ",\n  \"wayland_display\": ");
 	json_write_string(file, getenv("WAYLAND_DISPLAY"));
 	fprintf(file, ",\n  \"bootstrap\": ");
@@ -4817,16 +4821,59 @@ static void write_shell_state(struct engineos_shell_server *server,
 			}
 		}
 		fprintf(file,
-			", \"pixel_width\": %d, \"pixel_height\": %d, \"scale_milli\": %u, \"scene_x\": %d, \"scene_y\": %d, \"console_scene_count\": %zu, \"rendered_pane_count\": %zu, \"selected_renderer_frame\": %llu, \"selected_renderer\": ",
+			", \"pixel_width\": %d, \"pixel_height\": %d, \"scale_milli\": %u, \"scene_x\": %d, \"scene_y\": %d, \"frame_commits\": %llu, \"frame_failures\": %llu, \"console_scene_count\": %zu, \"rendered_pane_count\": %zu, \"selected_renderer_frame\": %llu, \"selected_renderer\": ",
 			output_width, output_height,
 			(uint32_t)(shell_output->output->scale * 1000.0 + 0.5),
 			shell_output->mux_scene_tree != NULL ?
 				shell_output->mux_scene_tree->node.x : 0,
 			shell_output->mux_scene_tree != NULL ?
 				shell_output->mux_scene_tree->node.y : 0,
+			(unsigned long long)shell_output->frame_commits,
+			(unsigned long long)shell_output->frame_failures,
 			console_scene_count, rendered_pane_count,
 			(unsigned long long)selected_renderer_frame);
 		json_write_string(file, selected_renderer);
+		fprintf(file, ", \"panes\": [");
+		bool first_output_pane = true;
+		for (size_t pane_index = 0;
+				pane_index < shell_output->mux_snapshot.pane_count;
+				pane_index++) {
+			struct engineos_mux_pane_model *pane =
+				&shell_output->mux_snapshot.panes[pane_index];
+			if (!pane->window_active)
+				continue;
+			struct engineos_mux_pane_scene *pane_scene = find_mux_pane_scene(
+				server, pane->pane_id, pane->generation);
+			struct engineos_mux_pane_output_scene *copy = pane_scene != NULL ?
+				find_mux_pane_output_scene(pane_scene,
+					shell_output->mux_view_id) : NULL;
+			if (!first_output_pane)
+				fprintf(file, ",");
+			first_output_pane = false;
+			int pane_x = copy != NULL ? copy->tree->node.x : 0;
+			int pane_y = copy != NULL ? copy->tree->node.y : 0;
+			int pane_width = copy != NULL ? copy->stats.width : 0;
+			int pane_height = copy != NULL ? copy->stats.height : 0;
+			bool within_output = copy != NULL && pane_x >= 0 && pane_y >= 0 &&
+				pane_width > 0 && pane_height > 0 &&
+				pane_x + pane_width <= output_width &&
+				pane_y + pane_height <= output_height;
+			fprintf(file,
+				"{\"pane_id\": \"%%%u\", \"generation\": %u, \"visible\": %s, \"terminal_visible\": %s, \"pixel_x\": %d, \"pixel_y\": %d, \"pixel_width\": %d, \"pixel_height\": %d, \"within_output\": %s, \"frame\": %llu, \"nonblank_pixels\": %u, \"renderer\": ",
+				pane->pane_id, pane->generation,
+				pane->visible ? "true" : "false",
+				copy != NULL && pane->visible &&
+					copy->terminal_scene->node.enabled ?
+					"true" : "false",
+				pane_x, pane_y, pane_width, pane_height,
+				within_output ? "true" : "false",
+				(unsigned long long)(copy != NULL ? copy->stats.frame : 0),
+				copy != NULL ? copy->stats.nonblank_pixels : 0);
+			json_write_string(file, copy != NULL ?
+				engineos_terminal_renderer_mode(copy->renderer) : NULL);
+			fprintf(file, "}");
+		}
+		fprintf(file, "]");
 		fprintf(file,
 			", \"ui\": {\"ready\": %s, \"columns\": %u, \"rows\": %u, \"status_y\": %d, \"status_rows\": %zu, \"mode\": ",
 			shell_output->mux_snapshot.ui.ready ? "true" : "false",
@@ -7153,10 +7200,18 @@ static void output_frame(struct wl_listener *listener, void *data) {
 		wl_container_of(listener, output, frame);
 
 	if (!wlr_scene_output_commit(output->scene_output, NULL)) {
+		bool first_failure = output->frame_failures == 0;
+		output->frame_failures++;
 		wlr_log(WLR_ERROR, "failed to commit scene output name=%s",
 			output->output->name[0] != '\0' ? output->output->name : "(unnamed)");
+		if (first_failure)
+			write_shell_state(output->server, "output-frame-failed");
 		return;
 	}
+	bool first_commit = output->frame_commits == 0;
+	output->frame_commits++;
+	if (first_commit)
+		write_shell_state(output->server, "output-first-frame");
 
 	struct timespec now;
 	clock_gettime(CLOCK_MONOTONIC, &now);

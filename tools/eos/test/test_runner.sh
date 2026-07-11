@@ -909,8 +909,10 @@ PY
 	shell_pid=$!
 	for _ in {1..100}; do
 		[[ -f "$fixture/engineos/shell-state.json" ]] &&
-			jq -e '.mux.client_view_id > 0 and .mux.grid.rendered == true and
-				.mux.ui.mode == "status" and .mux.ui.status_rows == 1' \
+			jq -e '.backend == "headless" and .mux.client_view_id > 0 and
+				.mux.grid.rendered == true and .mux.ui.mode == "status" and
+				.mux.ui.status_rows == 1 and (.output_views | length) == 2 and
+				all(.output_views[]; .frame_commits > 0)' \
 				"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
 		sleep 0.02
 	done
@@ -932,10 +934,14 @@ PY
 		'(.output_views | length) == 2 and
 		 all(.output_views[]; .model_ready and .model_revision > 0 and
 		   .session_id == $session and .pane_count > 0 and
+		   .frame_commits > 0 and .frame_failures == 0 and
 		   .pane_generation > 0 and .grid_ready_count == .pane_count and
 		   .grid_subscribed_count == .pane_count and .grid_revision > 0 and
 		   .rendered_pane_count == .pane_count and
 		   .selected_renderer_frame > 0 and .selected_renderer != null and
+		   (.panes | length) == .pane_count and
+		   all(.panes[]; .within_output and .pixel_width > 0 and
+		     .pixel_height > 0 and .frame > 0 and .renderer != null) and
 		   .ui.ready and .ui.columns > 0 and .ui.rows > 0 and
 		   .ui.status_rows > 0 and .ui.status_text != null and
 		   .ui.rendered and .ui.renderer != null and .ui.frame > 0) and
@@ -1054,23 +1060,33 @@ PY
 			 any(.mux.panes[]; .pane_id == $pane and .visible and
 			  .scene.terminal_visible) and
 			 all(.mux.panes[]; .visible or
-			  (.scene.terminal_visible == false))' \
+			  (.scene.terminal_visible == false)) and
+			 all(.output_views[];
+			  ([.panes[] | select(.visible and .terminal_visible)] | length) == 1 and
+			  all(.panes[]; .visible or (.terminal_visible == false)))' \
 			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
 		sleep 0.02
 	done
 	jq -e --arg pane "$other_shell_pane" \
 		'([.mux.panes[] | select(.visible)] | length) == 1 and
-		 any(.mux.panes[]; .pane_id == $pane and .visible)' \
+		 any(.mux.panes[]; .pane_id == $pane and .visible) and
+		 all(.output_views[];
+		  ([.panes[] | select(.visible and .terminal_visible)] | length) == 1 and
+		  all(.panes[]; .visible or (.terminal_visible == false)))' \
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "native mux zoom did not hide nonvisible pane scenes"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		resize-pane -Z -t "$other_shell_pane"
 	for _ in {1..150}; do
-		jq -e '[.mux.panes[] | select(.visible)] | length == 2' \
+		jq -e '([.mux.panes[] | select(.visible)] | length) == 2 and
+			all(.output_views[];
+			 ([.panes[] | select(.visible and .terminal_visible)] | length) == 2)' \
 			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
 		sleep 0.02
 	done
-	jq -e '[.mux.panes[] | select(.visible)] | length == 2' \
+	jq -e '([.mux.panes[] | select(.visible)] | length) == 2 and
+		all(.output_views[];
+		 ([.panes[] | select(.visible and .terminal_visible)] | length) == 2)' \
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "native mux unzoom did not restore pane scenes"
 	local focus_target
@@ -5475,6 +5491,7 @@ FAKE
 
 run_proof() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-proof-test-$$"
+  local shell_pid_before shell_pid_after
 
   cleanup_proof() {
     rm -rf "$tmp_dir"
@@ -5482,6 +5499,20 @@ run_proof() {
   trap cleanup_proof RETURN
 
   mkdir -p "$tmp_dir/logs"
+  "$PROOF_DIR/proof.sh" --help >"$tmp_dir/help.txt"
+  grep -F 'proof.sh native-kms' "$tmp_dir/help.txt" >/dev/null ||
+    die "proof help does not expose native KMS acceptance"
+  shell_pid_before="$(pgrep -n -x engineos-shell 2>/dev/null || true)"
+  if "$PROOF_DIR/proof.sh" native-kms --dry-run \
+      >"$tmp_dir/native-kms-invalid.txt" 2>&1; then
+    die "native KMS proof accepted a dry-run substitute"
+  fi
+  grep -F 'native-kms proof takes no options' \
+    "$tmp_dir/native-kms-invalid.txt" >/dev/null ||
+    die "native KMS proof did not reject non-acceptance options explicitly"
+  shell_pid_after="$(pgrep -n -x engineos-shell 2>/dev/null || true)"
+  [[ "$shell_pid_after" == "$shell_pid_before" ]] ||
+    die "rejected native KMS proof mutated the live shell"
   ENGINEOS_LOG_DIR="$tmp_dir/logs" "$PROOF_DIR/proof.sh" release-candidate --dry-run --out-dir "$tmp_dir/out" >"$tmp_dir/release-candidate.txt"
   grep -F 'build EngineRuntime ISO dry-run' "$tmp_dir/release-candidate.txt" >/dev/null ||
     die "release-candidate proof did not include EngineRuntime ISO dry-run"
