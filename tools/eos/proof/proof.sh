@@ -240,12 +240,12 @@ validate_native_kms_split_state() {
     ([.output_views[] | select(
       .frame_commits > 0 and .frame_failures == 0 and
       .rendered_pane_count == 2 and
-      .selected_renderer == "gpu-glyph-atlas-gles2" and
+      .selected_renderer == "gpu-fcft-atlas-gles2" and
       (.panes | length) == 2 and
       ([.panes[] | select(
         .visible and .terminal_visible and .within_output and
         .frame > 0 and .nonblank_pixels > 0 and
-        .renderer == "gpu-glyph-atlas-gles2"
+        .renderer == "gpu-fcft-atlas-gles2"
       )] | length) == 2 and
 		(. as $view | (.panes | sort_by(.pixel_x)) as $p |
 		  $p[0].pixel_x == 0 and
@@ -358,7 +358,7 @@ proof_native_kms() {
     ([.output_views[] | select(
       ([.panes[] | select(.visible)] | length) == 1 and
       ([.panes[] | select(.visible and .terminal_visible and .within_output and
-        .renderer == "gpu-glyph-atlas-gles2" and .frame > 0)] | length) == 1
+        .renderer == "gpu-fcft-atlas-gles2" and .frame > 0)] | length) == 1
       and ([.panes[] | select((.visible | not) and
         (.terminal_visible | not))] | length) == 1
     )] | length) == (.output_views | length)

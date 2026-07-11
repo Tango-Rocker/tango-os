@@ -58,3 +58,15 @@ fi
 
 alias lg='lazygit'
 alias engineos-tmux='engineos-tmux-attach-primary'
+
+# Graphical applications must enter through the native mux so their Wayland
+# surfaces can be resolved to the pane's transient scope. Calling /usr/bin
+# directly here also prevents the scoped child from recursing through this
+# interactive-shell function.
+falkon() {
+  if ! command -v eos-app >/dev/null 2>&1; then
+    print -u2 'falkon: eos-app is required for pane-scoped graphical launch'
+    return 127
+  fi
+  eos-app pane launch -- /usr/bin/falkon "$@"
+}

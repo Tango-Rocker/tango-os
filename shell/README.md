@@ -41,10 +41,13 @@ grid and records pane identity, grid revision, dimensions, cursor, and
 nonblank-cell evidence in `shell-state.json`. Each pane has its own clipped
 wlroots scene subtree, renderer, and double-buffered target; tmux UI uses a
 separate overlay. Output registration derives canonical rows and columns from
-the effective output size and the same FreeType cell metrics used by the
-renderer, so the target fills the output instead of inheriting a stale 80x24
-grid. CPU-rasterized FreeType glyphs are cached in a colour-keyed
-GPU atlas. Flow-controlled server invalidations retain sparse cell coordinates
+the effective output size and the same fcft primary-monospace metrics used by
+the renderer, so the target fills the output instead of inheriting a stale
+80x24 grid. fcft supplies Fontconfig selection, fallback fonts, and cached
+rasterization; EngineOS uploads those glyphs into a colour-keyed GPU atlas.
+Noto CJK, Noto color-emoji, and Nerd Symbols are explicit fallbacks, while
+wide fallbacks retain two-cell slots without changing the canonical one-cell
+advance. Flow-controlled server invalidations retain sparse cell coordinates
 for every subscribed pane, update only affected glyph/cursor neighbours with
 clipped GPU draws. Because the renderer alternates backing buffers, each buffer
 swap damages the complete owning pane scene so DRM cannot retain the previous

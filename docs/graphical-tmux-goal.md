@@ -168,7 +168,14 @@ adapter, authoritative transient scope and mapped client PID, PTY foreground
 process group, live backing console, console/application toggles, process exit,
 prompt restoration, and restoration of the prior shell mode. Evidence is
 retained in `/var/log/engineos/proof-native-falkon-20260711T130532Z/`. The
-transport now sizes both ends of the seqpacket connection for the protocol's
+managed interactive `falkon` command now enters that same scoped `eos-app`
+path; its live proof maps in the pane scope, receives pointer focus and a real
+Alt+F4 close, and restores the prompt. The terminal glyph component is now
+fcft rather than direct FreeType/fontconfig face management. The GPU atlas and
+damage/composition boundary remains compositor-owned, with explicit Noto CJK,
+color-emoji, and Nerd Symbols fallbacks. AMD/radeonsi and grim evidence is in
+`/var/log/engineos/proof-fcft-glyphs-20260711-175537/`. The transport now sizes
+both ends of the seqpacket connection for the protocol's
 valid maximum, with a 240x67 regression proving large grid snapshots.
 Split-pane hosts retire their empty application scope before entering the
 replacement login shell. Real Quake now passes through `eos-proof native-quake`

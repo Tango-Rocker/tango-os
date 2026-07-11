@@ -64,7 +64,7 @@ These are historical proof artifacts only; they are not the active work path:
   `engineos-dev-shell-start` creates or reuses the authoritative `engineos`
   session, requires its frontend socket, disables launchpad bootstrap for that
   run, and fails closed if native mux preparation fails. The active package set
-  is `engineos-mux 3.6b-41`, `engineos-shell 0.1.0-73`,
+  is `engineos-mux 3.6b-41`, `engineos-shell 0.1.0-74`,
   `engineos-tools 0.1.0-52`, and `engineos-config 0.1.0-6`. The live tty1 shell
   has two registered graphical output clients, uses the DRM/libinput backend
   and radeonsi GPU glyph atlas, and starts no shell-owned foot client. The
@@ -258,8 +258,11 @@ These are historical proof artifacts only; they are not the active work path:
   command activation. The shell routes pointer motion, buttons, and vertical
   scroll through that same boundary. The contract passes against the exact
   `engineos-mux 3.6b-34` and `engineos-shell 0.1.0-52` package binaries. The
-  native renderer now keeps FreeType-rasterized, colour-keyed glyphs in a GPU
-  texture atlas and draws them into double-buffered per-pane GPU targets.
+  native renderer now uses fcft for font discovery, fallback selection, and
+  glyph rasterization, then keeps colour-keyed glyphs in a GPU texture atlas
+  and draws them into double-buffered per-pane GPU targets. Explicit Noto CJK,
+  Noto color-emoji, and Nerd Symbols fallbacks cover mixed terminal text while
+  the primary monospace advance remains the canonical single-cell width.
   Sparse tmux cell damage is retained through the mux client, expanded only
   for wide-glyph and cursor neighbours, applied as clipped GPU draws, and
   reported to the wlroots scene as pixel damage. Full UI transitions redraw
@@ -268,7 +271,13 @@ These are historical proof artifacts only; they are not the active work path:
   contract passes through the local AMD render node with GLES2, `radeonsi`, a
   nonblank target readback, and a later frame touching fewer cells than the
   full grid; pixman is explicitly labeled `cpu-pixman-smoke` rather than
-  silently accepted as hardware.
+  silently accepted as hardware. Installed `engineos-shell 0.1.0-74` passes
+  the full native mux contract on AMD/radeonsi as
+  `gpu-fcft-atlas-gles2`. A live two-output proof retained 192 canonical
+  columns, rendered box drawing, Greek, Cyrillic, CJK, color emoji, combining
+  accents, and ANSI colors, advanced the pane frame immediately after a PTY
+  write without a view switch, and reported zero frame failures. Grim evidence
+  is retained in `/var/log/engineos/proof-fcft-glyphs-20260711-175537/`.
   One frontend connection now subscribes to every active pane grid. The shell
   retains those grids across authoritative snapshot refreshes, forces a full
   resynchronization when canonical pane dimensions change, and renders each
@@ -460,6 +469,11 @@ These are historical proof artifacts only; they are not the active work path:
   presentation and console, signals the app, verifies the shell regains the
   foreground PTY and accepts a post-exit marker, then restores the native
   default session.
+  Ordinary interactive `falkon` commands now use a managed Zsh wrapper that
+  enters `eos-app pane launch` instead of starting an unscoped Wayland client.
+  The live command-path proof mapped `org.kde.falkon` in
+  `engine-pane-725-24-1.scope`, accepted pointer focus and a real Alt+F4 close,
+  then restored the pane prompt. Direct unscoped clients remain rejected.
   Evidence is retained in
   `/var/log/engineos/proof-native-falkon-20260711T130532Z/`. The same checkpoint
   raises mux frontend/client socket buffers so a valid 240x67 grid cannot fail

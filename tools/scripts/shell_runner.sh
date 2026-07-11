@@ -362,6 +362,8 @@ run_refresh_user() {
   local refresh_reason="none"
   local tmux_conf
   local tmux_force_config=false
+  local zsh_conf
+  local zsh_force_config=false
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -409,6 +411,22 @@ run_refresh_user() {
   fi
   if ! install_user_file "$PAYLOAD_DIR/assets/tmux.conf" "$tmux_conf" 0644 "$dry_run" "$tmux_force_config"; then
     printf '  result:     failed reason=install-tmux-config-failed\n'
+    return 1
+  fi
+
+  zsh_conf="$USER_HOME/.zshrc"
+  if [[ "$force_config" == true ]]; then
+    zsh_force_config=true
+  elif [[ -e "$zsh_conf" ]] &&
+      grep -F '# EngineOS managed zsh defaults for the live dev instance.' \
+        "$zsh_conf" >/dev/null 2>&1 &&
+      ! cmp -s "$PAYLOAD_DIR/assets/zshrc" "$zsh_conf"; then
+    zsh_force_config=true
+    printf '  managed_update: %s\n' "$zsh_conf"
+  fi
+  if ! install_user_file "$PAYLOAD_DIR/assets/zshrc" "$zsh_conf" 0644 \
+      "$dry_run" "$zsh_force_config"; then
+    printf '  result:     failed reason=install-zsh-config-failed\n'
     return 1
   fi
   for helper in engineos-tmux-attach-primary engineos-tmux-pane-bridge \

@@ -1526,7 +1526,7 @@ PY
 				>/dev/null ||
 				die "native GLES2 mux proof did not use the AMD radeonsi driver"
 		fi
-		jq -e '.mux.grid.renderer == "gpu-glyph-atlas-gles2" and
+		jq -e '.mux.grid.renderer == "gpu-fcft-atlas-gles2" and
 			.mux.grid.atlas_entries > 0 and .mux.grid.nonblank_pixels > 0 and
 			.mux.grid.frame >= 1' \
 			"$fixture/engineos/shell-state.json" >/dev/null ||
@@ -3273,6 +3273,12 @@ esac
 exit 1
 FAKE
   chmod +x "$fake_bin/fake-kill" "$fake_bin/tmux"
+  for helper in engineos-tmux-pane-bridge engineos-tmux-pane-sync \
+      engineos-tmux-window-move engineos-tmux-window-sync \
+      engineos-tmux-window-focus engineos-tmux-window-proxy; do
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$helper_dir/$helper"
+    chmod +x "$helper_dir/$helper"
+  done
   PATH="$fake_bin:$PATH" \
     ENGINEOS_USER_HOME="$refresh_home" \
     ENGINEOS_TMUX_HELPER_DIR="$helper_dir" \
@@ -3285,19 +3291,17 @@ FAKE
   "$SCRIPT_DIR/shell_runner.sh" refresh-user --force-config >"$refresh_out"
   [[ -f "$refresh_home/.tmux.conf" ]] ||
     die "refresh-user did not install tmux config"
+  [[ -f "$refresh_home/.zshrc" ]] ||
+    die "refresh-user did not install managed zsh config"
+  grep -F 'eos-app pane launch -- /usr/bin/falkon "$@"' \
+      "$refresh_home/.zshrc" >/dev/null ||
+    die "managed zsh config does not scope direct Falkon launches"
   for helper in engineos-tmux-pane-bridge engineos-tmux-pane-sync engineos-tmux-window-move engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
-    [[ -x "$helper_dir/$helper" ]] ||
-      die "refresh-user did not install helper: $helper"
+    [[ ! -e "$helper_dir/$helper" ]] ||
+      die "refresh-user did not remove retired helper: $helper"
   done
-  grep -F -- '-TERM 222' "$kill_log" >/dev/null ||
-    die "refresh-user did not terminate the existing tmux sync daemon"
-  if grep -F '111' "$kill_log" >/dev/null || grep -F '333' "$kill_log" >/dev/null || grep -F '444' "$kill_log" >/dev/null; then
-    die "refresh-user killed a non-target tmux sync process"
-  fi
   grep -F 'source-file '"$refresh_home/.tmux.conf" "$tmux_log" >/dev/null ||
     die "refresh-user did not source tmux config"
-  grep -F 'run-shell engineos-tmux-pane-bridge sync' "$tmux_log" >/dev/null ||
-    die "refresh-user did not sync tmux pane bridge through tmux"
   grep -F 'result:     refreshed' "$refresh_out" >/dev/null ||
     die "refresh-user did not report full refresh result"
 
@@ -3312,7 +3316,8 @@ FAKE
     ENGINEOS_TMUX_CMD="$fake_bin/tmux" \
     ENGINEOS_FAKE_TMUX_LOG="$tmux_log" \
     "$SCRIPT_DIR/shell_runner.sh" refresh-user >"$refresh_out"
-  grep -F 'Move to Session...' "$refresh_home/.tmux.conf" >/dev/null ||
+  cmp -s "$ROOT/tools/post-install-payload/assets/tmux.conf" \
+      "$refresh_home/.tmux.conf" ||
     die "refresh-user did not update a stale EngineOS-managed tmux config"
   grep -F 'managed_update:' "$refresh_out" >/dev/null ||
     die "refresh-user did not report the managed tmux config update"
@@ -3333,52 +3338,12 @@ FAKE
   grep -F 'keep:' "$refresh_out" >/dev/null ||
     die "refresh-user did not report preserving an unmanaged tmux config"
 
-  local bridge_log="$tmp_dir/bridge-eos-app.log"
-  : >"$bridge_log"
-  cat >"$fake_bin/eos-app" <<'FAKE'
-#!/usr/bin/env bash
-printf 'TMUX_PANE=%s args=%s\n' "${TMUX_PANE:-}" "$*" >>"$ENGINEOS_FAKE_BRIDGE_LOG"
-FAKE
-  cat >"$fake_bin/tmux" <<'FAKE'
-#!/usr/bin/env bash
-case "$1" in
-  list-panes)
-    printf '%%7\t1\n%%8\t1\n%%9\t0\n'
-    exit 0
-    ;;
-  display-message)
-    printf '%%7\n'
-    exit 0
-    ;;
-esac
-exit 1
-FAKE
-  chmod +x "$fake_bin/eos-app" "$fake_bin/tmux"
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_FAKE_BRIDGE_LOG="$bridge_log" \
-    TMUX="/tmp/engineos-tmux,1,0" \
-    TMUX_PANE="%7" \
-    "$ROOT/tools/post-install-payload/scripts/engineos-tmux-pane-bridge" focus
-  grep -F 'TMUX_PANE=%7 args=pane focus --pane %7' "$bridge_log" >/dev/null ||
-    die "tmux pane bridge focus did not send active pane to eos-app"
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_FAKE_BRIDGE_LOG="$bridge_log" \
-    TMUX="/tmp/engineos-tmux,1,0" \
-    "$ROOT/tools/post-install-payload/scripts/engineos-tmux-pane-bridge" geometry --all-visible
-  grep -F 'TMUX_PANE=%7 args=pane geometry --pane %7' "$bridge_log" >/dev/null ||
-    die "tmux pane bridge geometry did not sync visible pane %7"
-  grep -F 'TMUX_PANE=%8 args=pane geometry --pane %8' "$bridge_log" >/dev/null ||
-    die "tmux pane bridge geometry did not sync visible pane %8"
-  if grep -F 'TMUX_PANE=%9 args=pane geometry --pane %9' "$bridge_log" >/dev/null; then
-    die "tmux pane bridge geometry synced invisible pane"
-  fi
-
   ENGINEOS_USER_HOME="$refresh_home" \
     ENGINEOS_TMUX_HELPER_DIR="$helper_dir" \
     ENGINEOS_TMUX_CMD="$tmp_dir/missing-tmux" \
     "$SCRIPT_DIR/shell_runner.sh" refresh-user >"$refresh_out"
-  grep -F 'tmux:       unavailable; tmux config source and pane bridge sync skipped' "$refresh_out" >/dev/null ||
-    die "refresh-user missing tmux condition was not clear and non-fatal"
+  grep -F 'mux:        unavailable; native config source skipped' "$refresh_out" >/dev/null ||
+    die "refresh-user missing mux condition was not clear and non-fatal"
   grep -F 'result:     partial reason=tmux-unavailable' "$refresh_out" >/dev/null ||
     die "refresh-user missing tmux condition did not report a partial result"
 

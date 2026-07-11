@@ -26,8 +26,7 @@ xkbcommon_dep = dependency('xkbcommon', required: true)
 libpng_dep = dependency('libpng', required: true)
 libjpeg_dep = dependency('libjpeg', required: true)
 json_c_dep = dependency('json-c', required: true)
-freetype_dep = dependency('freetype2', required: true)
-fontconfig_dep = dependency('fontconfig', required: true)
+fcft_dep = dependency('fcft', required: true)
 pixman_dep = dependency('pixman-1', required: true)
 mux_inc = include_directories('../mux/include')
 
@@ -70,8 +69,7 @@ executable(
     libpng_dep,
     libjpeg_dep,
     json_c_dep,
-    freetype_dep,
-    fontconfig_dep,
+    fcft_dep,
     pixman_dep,
   ],
   install: true,

@@ -7,9 +7,7 @@
 
 #include <arpa/inet.h>
 #include <drm_fourcc.h>
-#include <fontconfig/fontconfig.h>
-#include <ft2build.h>
-#include FT_FREETYPE_H
+#include <fcft/fcft.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -83,21 +81,82 @@ static void fill_rect(uint8_t *pixels, int image_width, int image_height,
 	}
 }
 
-static void blend_bitmap(uint8_t *pixels, int image_width, int image_height,
-		FT_Bitmap *bitmap, int x, int y, uint32_t colour) {
-	for (unsigned int by = 0; by < bitmap->rows; by++) {
-		int py = y + (int)by;
-		if (py < 0 || py >= image_height) continue;
-		for (unsigned int bx = 0; bx < bitmap->width; bx++) {
-			int px = x + (int)bx;
-			if (px < 0 || px >= image_width) continue;
-			uint8_t alpha = bitmap->buffer[by * bitmap->pitch + bx];
-			uint8_t *pixel = pixels + ((size_t)py * image_width + px) * 4;
-			pixel[0] = (uint8_t)((pixel[0] * (255 - alpha) + (colour >> 16) * alpha) / 255);
-			pixel[1] = (uint8_t)((pixel[1] * (255 - alpha) + ((colour >> 8) & 255) * alpha) / 255);
-			pixel[2] = (uint8_t)((pixel[2] * (255 - alpha) + (colour & 255) * alpha) / 255);
-		}
+static bool ensure_fcft(char *error, size_t error_size) {
+	static bool initialized;
+	if (initialized) return true;
+	if (!fcft_init(FCFT_LOG_COLORIZE_NEVER, false, FCFT_LOG_CLASS_ERROR)) {
+		snprintf(error, error_size, "failed to initialize fcft");
+		return false;
 	}
+	initialized = true;
+	return true;
+}
+
+static struct fcft_font *create_terminal_font(char *error, size_t error_size) {
+	if (!ensure_fcft(error, error_size)) return NULL;
+	const char *names[] = {
+		"monospace:pixelsize=16",
+		"Symbols Nerd Font Mono:pixelsize=16",
+		"Noto Sans Mono CJK SC:pixelsize=16",
+		"Noto Color Emoji:pixelsize=16",
+	};
+	struct fcft_font *font = fcft_from_name(
+		sizeof(names) / sizeof(names[0]), names, NULL);
+	if (font == NULL)
+		snprintf(error, error_size, "failed to load terminal font through fcft");
+	return font;
+}
+
+static void terminal_font_metrics(struct fcft_font *font, int *cell_width,
+		int *cell_height, int *baseline) {
+	/* fcft's max_advance includes explicit wide fallback fonts. Canonical tmux
+	 * columns must instead follow the primary monospace advance; wide glyphs
+	 * are drawn into the atlas's existing two-cell slots. */
+	const struct fcft_glyph *primary = fcft_rasterize_char_utf32(font, 'M',
+		FCFT_SUBPIXEL_NONE);
+	*cell_width = primary != NULL && primary->advance.x > 0 ?
+		primary->advance.x : 9;
+	*cell_height = font->height + 2;
+	if (*cell_height < 1) *cell_height = 18;
+	if (baseline != NULL) *baseline = font->ascent + 1;
+}
+
+static pixman_image_t *solid_colour(uint32_t colour) {
+	pixman_color_t value = {
+		.red = (uint16_t)(((colour >> 16) & 0xff) * 0x101),
+		.green = (uint16_t)(((colour >> 8) & 0xff) * 0x101),
+		.blue = (uint16_t)((colour & 0xff) * 0x101),
+		.alpha = 0xffff,
+	};
+	return pixman_image_create_solid_fill(&value);
+}
+
+static void composite_glyph(pixman_image_t *target,
+		const struct fcft_glyph *glyph, int x, int y, uint32_t colour) {
+	if (glyph == NULL || glyph->pix == NULL || glyph->width <= 0 ||
+			glyph->height <= 0) return;
+	if (glyph->is_color_glyph) {
+		pixman_image_composite32(PIXMAN_OP_OVER, glyph->pix, NULL, target,
+			0, 0, 0, 0, x + glyph->x, y - glyph->y,
+			glyph->width, glyph->height);
+		return;
+	}
+	pixman_image_t *source = solid_colour(colour);
+	if (source == NULL) return;
+	pixman_image_composite32(PIXMAN_OP_OVER, source, glyph->pix, target,
+		0, 0, 0, 0, x + glyph->x, y - glyph->y,
+		glyph->width, glyph->height);
+	pixman_image_unref(source);
+}
+
+static void blend_glyph(uint8_t *pixels, int image_width, int image_height,
+		const struct fcft_glyph *glyph, int x, int baseline_y,
+		uint32_t colour) {
+	pixman_image_t *target = pixman_image_create_bits(PIXMAN_a8b8g8r8,
+		image_width, image_height, (uint32_t *)pixels, image_width * 4);
+	if (target == NULL) return;
+	composite_glyph(target, glyph, x, baseline_y, colour);
+	pixman_image_unref(target);
 }
 
 static const struct engineos_mux_ui_span *ui_span_at(
@@ -110,7 +169,7 @@ static const struct engineos_mux_ui_span *ui_span_at(
 }
 
 static void render_ui_rows(uint8_t *pixels, int image_width, int image_height,
-		FT_Face face, int cell_width, int cell_height, int baseline,
+		struct fcft_font *font, int cell_width, int cell_height, int baseline,
 		const struct engineos_mux_ui_row *rows, size_t row_count,
 		uint32_t columns, uint32_t origin_x, uint32_t origin_y,
 		uint32_t *glyph_cells) {
@@ -139,14 +198,13 @@ static void render_ui_rows(uint8_t *pixels, int image_width, int image_height,
 			if (span != NULL && (span->attributes & GRID_ATTR_REVERSE)) {
 				int32_t swap = foreground; foreground = background; background = swap;
 			}
-			if (codepoint != 0 && codepoint != ' ' &&
-					FT_Load_Char(face, codepoint, FT_LOAD_RENDER) == 0) {
-				blend_bitmap(pixels, image_width, image_height,
-					&face->glyph->bitmap,
-					(int)(origin_x + glyph_column) * cell_width +
-						face->glyph->bitmap_left,
-					(int)(origin_y + row_index) * cell_height + baseline -
-						face->glyph->bitmap_top,
+			const struct fcft_glyph *glyph = codepoint == 0 || codepoint == ' ' ?
+				NULL : fcft_rasterize_char_utf32(font, codepoint,
+					FCFT_SUBPIXEL_NONE);
+			if (glyph != NULL) {
+				blend_glyph(pixels, image_width, image_height, glyph,
+					(int)(origin_x + glyph_column) * cell_width,
+					(int)(origin_y + row_index) * cell_height + baseline,
 					palette_colour(foreground, true));
 				(*glyph_cells)++;
 			}
@@ -161,100 +219,20 @@ bool engineos_terminal_cell_metrics(int *cell_width, int *cell_height,
 		snprintf(error, error_size, "terminal cell metric output is missing");
 		return false;
 	}
-	FcPattern *pattern = FcNameParse((const FcChar8 *)"monospace");
-	if (pattern == NULL) {
-		snprintf(error, error_size, "failed to create terminal font pattern");
-		return false;
-	}
-	FcConfigSubstitute(NULL, pattern, FcMatchPattern);
-	FcDefaultSubstitute(pattern);
-	FcResult match_result;
-	FcPattern *match = FcFontMatch(NULL, pattern, &match_result);
-	FcChar8 *font_path = NULL;
-	if (match == NULL ||
-			FcPatternGetString(match, FC_FILE, 0, &font_path) != FcResultMatch) {
-		snprintf(error, error_size, "no monospace font found");
-		if (match != NULL) FcPatternDestroy(match);
-		FcPatternDestroy(pattern);
-		return false;
-	}
-	FT_Library library;
-	FT_Face face;
-	if (FT_Init_FreeType(&library) != 0) {
-		snprintf(error, error_size, "failed to initialize terminal font");
-		FcPatternDestroy(match);
-		FcPatternDestroy(pattern);
-		return false;
-	}
-	if (FT_New_Face(library, (const char *)font_path, 0, &face) != 0) {
-		snprintf(error, error_size, "failed to initialize terminal font face");
-		FT_Done_FreeType(library);
-		FcPatternDestroy(match);
-		FcPatternDestroy(pattern);
-		return false;
-	}
-	if (FT_Set_Pixel_Sizes(face, 0, 16) != 0) {
-		snprintf(error, error_size, "failed to size terminal font");
-		FT_Done_Face(face);
-		FT_Done_FreeType(library);
-		FcPatternDestroy(match);
-		FcPatternDestroy(pattern);
-		return false;
-	}
-	*cell_width = (int)(face->size->metrics.max_advance >> 6);
-	*cell_height = (int)(face->size->metrics.height >> 6) + 2;
-	if (*cell_width < 1) *cell_width = 9;
-	if (*cell_height < 1) *cell_height = 18;
-	FT_Done_Face(face);
-	FT_Done_FreeType(library);
-	FcPatternDestroy(match);
-	FcPatternDestroy(pattern);
+	struct fcft_font *font = create_terminal_font(error, error_size);
+	if (font == NULL) return false;
+	terminal_font_metrics(font, cell_width, cell_height, NULL);
+	fcft_destroy(font);
 	return true;
 }
 
 struct wlr_buffer *engineos_terminal_render(
 		const struct engineos_mux_client *client, int *width, int *height,
 		uint32_t *glyph_cells, char *error, size_t error_size) {
-	FcPattern *pattern = FcNameParse((const FcChar8 *)"monospace");
-	FcConfigSubstitute(NULL, pattern, FcMatchPattern);
-	FcDefaultSubstitute(pattern);
-	FcResult match_result;
-	FcPattern *match = FcFontMatch(NULL, pattern, &match_result);
-	FcChar8 *font_path = NULL;
-	if (match == NULL || FcPatternGetString(match, FC_FILE, 0, &font_path) != FcResultMatch) {
-		snprintf(error, error_size, "no monospace font found");
-		if (match != NULL) FcPatternDestroy(match);
-		FcPatternDestroy(pattern);
-		return NULL;
-	}
-	FT_Library library;
-	FT_Face face;
-	if (FT_Init_FreeType(&library) != 0) {
-		snprintf(error, error_size, "failed to initialize terminal font");
-		FcPatternDestroy(match);
-		FcPatternDestroy(pattern);
-		return NULL;
-	}
-	if (FT_New_Face(library, (const char *)font_path, 0, &face) != 0) {
-		snprintf(error, error_size, "failed to initialize terminal font");
-		FT_Done_FreeType(library);
-		FcPatternDestroy(match);
-		FcPatternDestroy(pattern);
-		return NULL;
-	}
-	if (FT_Set_Pixel_Sizes(face, 0, 16) != 0) {
-		snprintf(error, error_size, "failed to size terminal font");
-		FT_Done_Face(face);
-		FT_Done_FreeType(library);
-		FcPatternDestroy(match);
-		FcPatternDestroy(pattern);
-		return NULL;
-	}
-	int cell_width = (int)(face->size->metrics.max_advance >> 6);
-	int cell_height = (int)(face->size->metrics.height >> 6) + 2;
-	int baseline = (int)(face->size->metrics.ascender >> 6) + 1;
-	if (cell_width < 1) cell_width = 9;
-	if (cell_height < 1) cell_height = 18;
+	struct fcft_font *font = create_terminal_font(error, error_size);
+	if (font == NULL) return NULL;
+	int cell_width, cell_height, baseline;
+	terminal_font_metrics(font, &cell_width, &cell_height, &baseline);
 	uint32_t render_columns = client->grid_columns;
 	uint32_t render_rows = client->grid_rows;
 	if (client->ui_columns > render_columns) render_columns = client->ui_columns;
@@ -264,16 +242,12 @@ struct wlr_buffer *engineos_terminal_render(
 	if (*width <= 0 || *height <= 0 || *width > 4096 || *height > 4096 ||
 			(int64_t)*width * *height > 16777216) {
 		snprintf(error, error_size, "terminal render target is too large");
-		FT_Done_Face(face); FT_Done_FreeType(library);
-		FcPatternDestroy(match); FcPatternDestroy(pattern); return NULL;
+		fcft_destroy(font); return NULL;
 	}
 	uint8_t *pixels = calloc((size_t)*width * *height, 4);
 	if (pixels == NULL) {
 		snprintf(error, error_size, "out of memory");
-		FT_Done_Face(face);
-		FT_Done_FreeType(library);
-		FcPatternDestroy(match);
-		FcPatternDestroy(pattern);
+		fcft_destroy(font);
 		return NULL;
 	}
 	*glyph_cells = 0;
@@ -288,27 +262,27 @@ struct wlr_buffer *engineos_terminal_render(
 		while (offset < cell->text_length) {
 			uint32_t codepoint = next_codepoint(cell->text, cell->text_length, &offset);
 			if (codepoint == 0 || codepoint == ' ') continue;
-			if (FT_Load_Char(face, codepoint, FT_LOAD_RENDER) != 0) continue;
-			blend_bitmap(pixels, *width, *height, &face->glyph->bitmap,
-				(int)x * cell_width + face->glyph->bitmap_left,
-				(int)y * cell_height + baseline - face->glyph->bitmap_top, fg);
+			const struct fcft_glyph *glyph = fcft_rasterize_char_utf32(font,
+				codepoint, FCFT_SUBPIXEL_NONE);
+			if (glyph == NULL) continue;
+			blend_glyph(pixels, *width, *height, glyph,
+				(int)x * cell_width, (int)y * cell_height + baseline, fg);
 			drew = true;
 		}
 		if (drew) (*glyph_cells)++;
 	}
 	if (client->ui_status_y >= 0 && client->ui_status_row_count != 0) {
-		render_ui_rows(pixels, *width, *height, face, cell_width, cell_height,
+		render_ui_rows(pixels, *width, *height, font, cell_width, cell_height,
 			baseline, client->ui_status_rows, client->ui_status_row_count,
 			client->ui_columns, 0, (uint32_t)client->ui_status_y, glyph_cells);
 	}
 	if (client->ui_menu_active && client->ui_menu_row_count != 0) {
-		render_ui_rows(pixels, *width, *height, face, cell_width, cell_height,
+		render_ui_rows(pixels, *width, *height, font, cell_width, cell_height,
 			baseline, client->ui_menu_rows, client->ui_menu_row_count,
 			client->ui_menu_width, client->ui_menu_x, client->ui_menu_y,
 			glyph_cells);
 	}
-	FT_Done_Face(face); FT_Done_FreeType(library);
-	FcPatternDestroy(match); FcPatternDestroy(pattern);
+	fcft_destroy(font);
 	struct wlr_buffer *buffer = engineos_pixel_buffer_create(pixels, *width, *height);
 	if (buffer == NULL) { free(pixels); snprintf(error, error_size, "failed to create terminal buffer"); }
 	return buffer;
@@ -333,8 +307,7 @@ struct engineos_terminal_renderer {
 	uint64_t gpu_buffer_points[2];
 	unsigned int gpu_buffer_index;
 	struct wlr_texture *atlas;
-	FT_Library library;
-	FT_Face face;
+	struct fcft_font *font;
 	struct engineos_atlas_entry *entries;
 	size_t entry_count;
 	size_t entry_capacity;
@@ -493,34 +466,30 @@ static bool atlas_rebuild(struct engineos_terminal_renderer *terminal,
 		snprintf(error, error_size, "out of memory building glyph atlas");
 		return false;
 	}
+	pixman_image_t *target = pixman_image_create_bits(PIXMAN_a8b8g8r8,
+		terminal->atlas_width, terminal->atlas_height, (uint32_t *)pixels,
+		(int)stride);
+	if (target == NULL) {
+		free(pixels);
+		snprintf(error, error_size, "failed to create fcft glyph atlas image");
+		return false;
+	}
 	for (size_t index = 0; index < terminal->entry_count; index++) {
 		struct engineos_atlas_entry *entry = &terminal->entries[index];
-		if (FT_Load_Char(terminal->face, entry->codepoint, FT_LOAD_RENDER) != 0)
-			continue;
-		FT_Bitmap *bitmap = &terminal->face->glyph->bitmap;
+		const struct fcft_glyph *glyph = fcft_rasterize_char_utf32(terminal->font,
+			entry->codepoint, FCFT_SUBPIXEL_NONE);
+		if (glyph == NULL) continue;
 		int slot_x = (int)(index % (size_t)columns) * terminal->slot_width;
 		int slot_y = (int)(index / (size_t)columns) * terminal->cell_height;
-		int glyph_x = slot_x + terminal->face->glyph->bitmap_left;
-		int glyph_y = slot_y + terminal->baseline - terminal->face->glyph->bitmap_top;
-		for (unsigned int by = 0; by < bitmap->rows; by++) {
-			int y = glyph_y + (int)by;
-			if (y < slot_y || y >= slot_y + terminal->cell_height) continue;
-			const uint8_t *bitmap_row = bitmap->pitch >= 0 ?
-				bitmap->buffer + (size_t)by * (size_t)bitmap->pitch :
-				bitmap->buffer + (size_t)(bitmap->rows - 1 - by) *
-					(size_t)(-bitmap->pitch);
-			for (unsigned int bx = 0; bx < bitmap->width; bx++) {
-				int x = glyph_x + (int)bx;
-				if (x < slot_x || x >= slot_x + terminal->slot_width) continue;
-				uint8_t alpha = bitmap_row[bx];
-				uint8_t *pixel = pixels + (size_t)y * stride + (size_t)x * 4;
-				pixel[0] = (uint8_t)(((entry->colour >> 16) & 255) * alpha / 255);
-				pixel[1] = (uint8_t)(((entry->colour >> 8) & 255) * alpha / 255);
-				pixel[2] = (uint8_t)((entry->colour & 255) * alpha / 255);
-				pixel[3] = alpha;
-			}
-		}
+		pixman_region32_t clip;
+		pixman_region32_init_rect(&clip, slot_x, slot_y,
+			(uint32_t)terminal->slot_width, (uint32_t)terminal->cell_height);
+		pixman_image_set_clip_region32(target, &clip);
+		composite_glyph(target, glyph, slot_x, slot_y + terminal->baseline,
+			entry->colour);
+		pixman_region32_fini(&clip);
 	}
+	pixman_image_unref(target);
 	struct wlr_texture *atlas = wlr_texture_from_pixels(terminal->renderer,
 		DRM_FORMAT_ABGR8888, (uint32_t)stride,
 		(uint32_t)terminal->atlas_width, (uint32_t)terminal->atlas_height,
@@ -961,9 +930,9 @@ struct engineos_terminal_renderer *engineos_terminal_renderer_create(
 		return terminal;
 	}
 	if (wlr_renderer_is_gles2(renderer))
-		strcpy(terminal->mode, "gpu-glyph-atlas-gles2");
+		strcpy(terminal->mode, "gpu-fcft-atlas-gles2");
 	else if (wlr_renderer_is_vk(renderer))
-		strcpy(terminal->mode, "gpu-glyph-atlas-vulkan");
+		strcpy(terminal->mode, "gpu-fcft-atlas-vulkan");
 	else {
 		snprintf(error, error_size, "unsupported terminal renderer backend");
 		goto fail;
@@ -978,39 +947,10 @@ struct engineos_terminal_renderer *engineos_terminal_renderer_create(
 			goto fail;
 		}
 	}
-	FcPattern *pattern = FcNameParse((const FcChar8 *)"monospace");
-	if (pattern == NULL) {
-		snprintf(error, error_size, "failed to create terminal font pattern");
-		goto fail;
-	}
-	FcConfigSubstitute(NULL, pattern, FcMatchPattern);
-	FcDefaultSubstitute(pattern);
-	FcResult match_result;
-	FcPattern *match = FcFontMatch(NULL, pattern, &match_result);
-	FcChar8 *font_path = NULL;
-	if (match == NULL ||
-			FcPatternGetString(match, FC_FILE, 0, &font_path) != FcResultMatch) {
-		snprintf(error, error_size, "no monospace font found");
-		if (match != NULL) FcPatternDestroy(match);
-		FcPatternDestroy(pattern);
-		goto fail;
-	}
-	if (FT_Init_FreeType(&terminal->library) != 0 ||
-			FT_New_Face(terminal->library, (const char *)font_path, 0,
-				&terminal->face) != 0 ||
-			FT_Set_Pixel_Sizes(terminal->face, 0, 16) != 0) {
-		snprintf(error, error_size, "failed to initialize GPU terminal font");
-		FcPatternDestroy(match);
-		FcPatternDestroy(pattern);
-		goto fail;
-	}
-	FcPatternDestroy(match);
-	FcPatternDestroy(pattern);
-	terminal->cell_width = (int)(terminal->face->size->metrics.max_advance >> 6);
-	terminal->cell_height = (int)(terminal->face->size->metrics.height >> 6) + 2;
-	terminal->baseline = (int)(terminal->face->size->metrics.ascender >> 6) + 1;
-	if (terminal->cell_width < 1) terminal->cell_width = 9;
-	if (terminal->cell_height < 1) terminal->cell_height = 18;
+	terminal->font = create_terminal_font(error, error_size);
+	if (terminal->font == NULL) goto fail;
+	terminal_font_metrics(terminal->font, &terminal->cell_width,
+		&terminal->cell_height, &terminal->baseline);
 	terminal->slot_width = terminal->cell_width * 2;
 	if (!gpu_update(terminal, client, error, error_size)) goto fail;
 	return terminal;
@@ -1072,8 +1012,7 @@ void engineos_terminal_renderer_destroy(
 		if (terminal->gpu_buffers[index] != NULL)
 			wlr_buffer_drop(terminal->gpu_buffers[index]);
 	}
-	if (terminal->face != NULL) FT_Done_Face(terminal->face);
-	if (terminal->library != NULL) FT_Done_FreeType(terminal->library);
+	if (terminal->font != NULL) fcft_destroy(terminal->font);
 	free(terminal->entries);
 	pixman_region32_fini(&terminal->damage);
 	free(terminal);
