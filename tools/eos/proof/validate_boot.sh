@@ -18,6 +18,7 @@ RUNTIME_CONF="${ENGINEOS_RUNTIME_CONF:-/etc/engineos/runtime.conf}"
 APPS_MANIFEST="${ENGINEOS_APPS_MANIFEST:-$(engineos_apps_manifest "$(engineos_root)")}"
 LOG_DIR="${ENGINEOS_LOG_DIR:-/var/log/engineos}"
 SHELL_LOG="${ENGINEOS_SHELL_LOG:-$LOG_DIR/shell.log}"
+DEV_SHELL_LOG="${ENGINEOS_DEV_SHELL_LOG:-$LOG_DIR/dev-shell-start.log}"
 DRI_DIR="${ENGINEOS_DRI_DIR:-/dev/dri}"
 DRM_SYSFS="${ENGINEOS_DRM_SYSFS:-/sys/class/drm}"
 DOCTOR_CMD="${ENGINEOS_DOCTOR_CMD:-$SCRIPT_DIR/doctor.sh}"
@@ -82,6 +83,19 @@ enabled_service_check() {
     ok "$unit enabled"
   else
     fail "$unit not enabled"
+  fi
+}
+
+active_service_check() {
+  local unit="$1"
+  if ! have_cmd systemctl; then
+    fail "systemctl unavailable; cannot check $unit"
+    return
+  fi
+  if systemctl is-active --quiet "$unit"; then
+    ok "$unit active"
+  else
+    fail "$unit not active"
   fi
 }
 
@@ -201,6 +215,9 @@ runtime_config_check() {
   fi
 
   enabled_service_check "getty@${recovery_tty}.service"
+  if [[ "$MODE" == "bare-metal" ]]; then
+    active_service_check "getty@${recovery_tty}.service"
+  fi
 }
 
 runtime_recovery_help_check() {
@@ -256,6 +273,30 @@ runtime_autostart_log_check() {
 	else
 		warn "runtime autostart appears to still be running; no final outcome in $runtime_log"
 	fi
+}
+
+dev_shell_startup_log_check() {
+  if [[ ! -r "$DEV_SHELL_LOG" ]]; then
+    fail "EngineDev shell startup log missing: $DEV_SHELL_LOG"
+    return
+  fi
+
+  ok "EngineDev shell startup log exists"
+  if grep -Eq 'starting EngineDev shell|dev shell autostart disabled' \
+      "$DEV_SHELL_LOG"; then
+    ok "EngineDev shell startup log records startup decision"
+  else
+    fail "EngineDev shell startup log does not record startup decision"
+  fi
+  if have_cmd systemctl &&
+      systemctl is-active --quiet engineos-dev-shell.service; then
+    ok "EngineDev shell service is the active startup outcome"
+  elif grep -Eq 'EngineDev shell (exited cleanly|failed rc=)|dev shell autostart disabled' \
+      "$DEV_SHELL_LOG"; then
+    ok "EngineDev shell startup log records final outcome"
+  else
+    fail "EngineDev shell startup outcome is unavailable"
+  fi
 }
 
 shell_renderer_check() {
@@ -333,10 +374,16 @@ bare_metal_graphics_check() {
     fail "bare-metal doctor failed; see $VALIDATE_DOCTOR_OUT"
     return
   fi
-  if printf '%s\n' "$doctor_output" | grep -Eiq 'llvmpipe|softpipe|software rasterizer'; then
-    fail "bare-metal validation detected software renderer"
+  if printf '%s\n' "$doctor_output" |
+      grep -Eq '^active shell backend:[[:space:]]+drm,libinput$' &&
+      printf '%s\n' "$doctor_output" |
+      grep -Eq '^active shell renderer:[[:space:]]+AMD .*radeonsi'; then
+    ok "active bare-metal shell uses DRM/libinput and AMD/radeonsi"
+  elif printf '%s\n' "$doctor_output" |
+      grep -Eiq 'llvmpipe|softpipe|software rasterizer'; then
+    fail "active bare-metal renderer is unverified and a software renderer was detected"
   else
-    ok "bare-metal renderer is not obviously software"
+    fail "active bare-metal shell lacks direct DRM/AMD renderer evidence"
   fi
 }
 
@@ -394,8 +441,11 @@ if [[ "$MODE" == "vm" ]]; then
   service_check sshd.service
 fi
 service_check engineos-live-setup.service
-if [[ "$MODE" == "runtime" || "$MODE" == "bare-metal" ]]; then
+if [[ "$MODE" == "runtime" ]]; then
 	service_check engineos-runtime.service
+elif [[ "$MODE" == "bare-metal" ]]; then
+  enabled_service_check engineos-dev-shell.service
+  active_service_check engineos-dev-shell.service
 fi
 
 package_check engineos-config
@@ -420,7 +470,11 @@ if [[ "$MODE" == "runtime" || "$MODE" == "bare-metal" ]]; then
   app_manifest_check
   runtime_config_check
   runtime_recovery_help_check
-  runtime_autostart_log_check
+  if [[ "$MODE" == "runtime" ]]; then
+    runtime_autostart_log_check
+  else
+    dev_shell_startup_log_check
+  fi
   shell_renderer_check
 fi
 

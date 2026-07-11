@@ -1,6 +1,6 @@
 pkgname=engineos-config
 pkgver=0.1.0
-pkgrel=4
+pkgrel=5
 pkgdesc="Baseline EngineOS system configuration"
 arch=('any')
 url="https://example.invalid/engineos"
@@ -17,5 +17,8 @@ package() {
   install -Dm644 "$startdir/files/etc/engineos/runtime.conf" "$pkgdir/etc/engineos/runtime.conf"
   install -Dm644 "$startdir/files/etc/engineos/quake.conf" "$pkgdir/etc/engineos/quake.conf"
   install -Dm644 "$startdir/files/etc/engineos/apps.toml" "$pkgdir/etc/engineos/apps.toml"
+  install -d -m0755 "$pkgdir/usr/lib/systemd/system/getty.target.wants"
+  ln -s ../getty@.service \
+    "$pkgdir/usr/lib/systemd/system/getty.target.wants/getty@tty2.service"
   install -Dm644 "$_engineos_root/LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

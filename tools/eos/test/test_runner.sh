@@ -2547,6 +2547,7 @@ run_installed_preflight() {
     cp "$ROOT/tools/engineos/eos-wrapper" "$bin_dir/$cmd"
   done
   cp "$ROOT/tools/engineos/engineos" "$bin_dir/engineos"
+  cp "$ROOT/tools/scripts/recovery_help.sh" "$bin_dir/engineos-recovery-help"
   cp "$ROOT/tools/scripts/"*.sh "$script_dir/"
   cp "$ROOT/tools/scripts/agent_router.py" "$ROOT/tools/scripts/agent_hygiene.py" "$script_dir/"
   cp -R "$ROOT/tools/eos"/. "$eos_dir/"
@@ -4507,6 +4508,8 @@ run_reliability() {
 
   if command -v engineos-recovery-help >/dev/null 2>&1; then
     recovery_help="$(command -v engineos-recovery-help)"
+  elif [[ -x "$ROOT/tools/scripts/recovery_help.sh" ]]; then
+    recovery_help="$ROOT/tools/scripts/recovery_help.sh"
   elif [[ -x "$ROOT/archiso/engineruntime/airootfs/usr/local/bin/engineos-recovery-help" ]]; then
     recovery_help="$ROOT/archiso/engineruntime/airootfs/usr/local/bin/engineos-recovery-help"
   fi
@@ -4526,6 +4529,10 @@ run_reliability() {
     die "runtime recovery helper does not point to crash bundle"
   grep -F 'engineos.noautostart' "$tmp_dir/recovery-help.txt" >/dev/null ||
     die "runtime recovery helper does not mention autostart disable flag"
+  grep -F 'engineos.nodevshell' "$tmp_dir/recovery-help.txt" >/dev/null ||
+    die "runtime recovery helper does not mention EngineDev shell disable flag"
+  grep -F 'tty2 remains available' "$tmp_dir/recovery-help.txt" >/dev/null ||
+    die "runtime recovery helper does not identify the recovery TTY"
 
   if [[ -r "$ROOT/archiso/engineruntime/airootfs/etc/skel/.bash_profile" ]]; then
     runtime_login_profile="$ROOT/archiso/engineruntime/airootfs/etc/skel/.bash_profile"
@@ -6368,6 +6375,10 @@ EOF_MANIFEST
     printf '[2026-01-01T00:00:00Z] starting EngineOS shell mode=--tty recovery=tty2\n'
     printf '[2026-01-01T00:00:01Z] EngineOS shell failed rc=77; recovery TTY should remain available\n'
   } >"$log_dir/runtime-start.log"
+  {
+    printf '[2026-01-01T00:00:00Z] starting EngineDev shell mode=--tty bootstrap=terminal\n'
+    printf '[2026-01-01T00:00:01Z] GL renderer: AMD Test GPU (radeonsi)\n'
+  } >"$log_dir/dev-shell-start.log"
   printf 'connected\n' >"$drm_sysfs/card0-HDMI-A-1/status"
   printf 'enabled\n' >"$drm_sysfs/card0-HDMI-A-1/enabled"
   printf '1920x1080\n' >"$drm_sysfs/card0-HDMI-A-1/modes"
@@ -6451,6 +6462,8 @@ FAKE
 printf '%s\n' "$*" >>"$ENGINEOS_FAKE_DOCTOR_ARGS"
 printf 'EngineOS doctor fixture\n'
 printf 'OpenGL core profile renderer: AMD RADV\n'
+printf 'active shell backend:    drm,libinput\n'
+printf 'active shell renderer:   AMD Test GPU (radeonsi)\n'
 FAKE
   chmod +x "$fake_bin/doctor-ok"
   if PATH="$fake_bin:$PATH" "$PROOF_DIR/validate_boot.sh" >"$out" 2>&1; then
@@ -6609,6 +6622,18 @@ FAKE
     die "bare-metal boot validation did not check shell renderer log"
   grep -F 'bare-metal shell renderer has GL-capable evidence' "$out" >/dev/null ||
     die "bare-metal boot validation did not require GL-capable shell evidence"
+  grep -F 'engineos-dev-shell.service enabled' "$out" >/dev/null ||
+    die "bare-metal boot validation did not require enabled EngineDev shell service"
+  grep -F 'engineos-dev-shell.service active' "$out" >/dev/null ||
+    die "bare-metal boot validation did not require active EngineDev shell service"
+  grep -F 'getty@tty2.service active' "$out" >/dev/null ||
+    die "bare-metal boot validation did not require active recovery getty"
+  grep -F 'EngineDev shell startup log records startup decision' "$out" >/dev/null ||
+    die "bare-metal boot validation did not verify EngineDev startup decision"
+  grep -F 'EngineDev shell service is the active startup outcome' "$out" >/dev/null ||
+    die "bare-metal boot validation did not verify EngineDev startup outcome"
+  grep -F 'active bare-metal shell uses DRM/libinput and AMD/radeonsi' "$out" >/dev/null ||
+    die "bare-metal boot validation did not require direct active-shell renderer evidence"
   grep -Fx -- '--bare-metal' "$doctor_log" >/dev/null ||
     die "bare-metal boot validation did not call doctor in bare-metal mode"
   grep -F 'bare-metal doctor completed' "$out" >/dev/null ||

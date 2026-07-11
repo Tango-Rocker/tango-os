@@ -379,7 +379,16 @@ These are historical proof artifacts only; they are not the active work path:
   recovery, clean process exit, prompt restoration, and rollback to the prior
   shell mode. Evidence is retained in
   `/var/log/engineos/proof-native-quake-20260711T110032Z/`. Recovery/startup
-  acceptance, upstream-suite closure, and cutover remain open.
+  acceptance now also passes. `engineos-config 0.1.0-5` installs tty2 as a
+  recovery getty, `engineos-tools 0.1.0-47` installs
+  `engineos-recovery-help`, and the real tty2 `agetty` is active. The installed
+  `eos-proof shell-launch --bare-metal` run verifies the active EngineDev
+  startup decision, tty1 shell service, tty2 recovery service, recovery
+  command, DRM/libinput backend, and RX 5600 XT/radeonsi renderer. Generic EGL
+  enumeration still exposes a separate llvmpipe device, but it no longer
+  overrides direct evidence from the active shell. Evidence is retained in
+  `/var/log/engineos/proof-shell-launch-bare-metal-20260711T111350Z.log`.
+  Upstream-suite closure and cutover remain open.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 
@@ -389,13 +398,6 @@ These are historical proof artifacts only; they are not the active work path:
   Quake surface in Runtime.
 - Interactive Quake keyboard, mouse, and audible audio in a live Runtime
   console session with user assets.
-- Full `eos-proof shell-launch --bare-metal` still fails in the boot-validation
-  gate: `getty@tty2.service` is not enabled, `engineos-recovery-help` is
-  unavailable, `runtime-start.log` has no final
-  startup decision, and the broad renderer heuristic sees an llvmpipe device.
-  The restarted `engineos-shell` log itself shows AMD/radeonsi GLES2 rendering
-  on the current shell, so the remaining failure is the broader boot gate, not
-  the tmux pane bridge deploy path.
 - Manual TrenchBroom GUI compile/run click-through proof. Setup generation,
   open-file smoke, packaged launcher setup, the equivalent compile/launch
   command path, entity-browser placement, and OS-level Wayland drag-and-drop
@@ -418,16 +420,15 @@ Bare-metal/source-checkout loop:
 ./tools/engineos/eos-ci local --test agent --install --clean-generated --no-validate-repo
 eos-app manifest validate
 eos-proof mc-preview
-eos-proof native-falkon
-eos-proof native-quake
+./tools/engineos/eos-test mux
 eos-proof shell-launch --bare-metal
 ```
 
 Bare-metal hardware gate:
 
 ```bash
-eos-validate boot --bare-metal
-eos-proof shell-launch --bare-metal
+ENGINEOS_MUX_TEST_RENDERER=gles2 ENGINEOS_MUX_REQUIRE_RADEONSI=true \
+  ./tools/engineos/eos-test mux
 ```
 
 Agent and harness hygiene:

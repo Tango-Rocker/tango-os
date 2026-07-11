@@ -144,7 +144,7 @@ loopback OpenSSH server, generated keys, verified public-key authentication,
 a forced remote PTY, and a remote `engine-mux attach-session` command. Engine
 mux excludes ordinary clients from size calculation only when a registered
 graphical view owns that window, preserving normal upstream sizing everywhere
-else. The proof driver is installed by `engineos-tools 0.1.0-45`; its pixman
+else. The proof driver is installed by `engineos-tools 0.1.0-47`; its pixman
 source contract and AMD/radeonsi shell contract pass. The current live package
 set is `engineos-mux 3.6b-36` plus `engineos-shell 0.1.0-53`. Direct-KMS
 clipping now passes through installed
@@ -172,9 +172,17 @@ an uncorked PipeWire/Pulse stream on the ALSA hardware sink, capture and cursor
 lock, both directions of the native prefix binding, a real Ctrl+Alt+Backspace
 event injected through uinput, capture release and recovery, process exit, and
 prompt restoration. Evidence is retained in
-`/var/log/engineos/proof-native-quake-20260711T110032Z/`. The remaining
-bare-metal recovery gate, full upstream-suite closure, and legacy cutover
-remain open. Native
+`/var/log/engineos/proof-native-quake-20260711T110032Z/`. Bare-metal startup
+and recovery acceptance now passes through the installed
+`eos-proof shell-launch --bare-metal`. `engineos-config 0.1.0-5` makes tty2 a
+vendor-enabled recovery getty, `engineos-tools 0.1.0-47` provides the recovery
+operator command, and the proof requires the live EngineDev startup decision,
+active tty1 shell, active tty2 getty, DRM/libinput backend, and RX 5600
+XT/radeonsi renderer. Renderer acceptance is tied to the active compositor,
+so an unrelated llvmpipe device exposed by generic EGL enumeration cannot
+produce a false failure or a false success. Evidence is retained in
+`/var/log/engineos/proof-shell-launch-bare-metal-20260711T111350Z.log`. Full
+upstream-suite closure and legacy cutover remain open. Native
 `game` is now an
 authoritative launch/split presentation that survives respawn.
 `eos-app pane launch|split|view|signal|respawn|list` routes directly to
@@ -212,11 +220,11 @@ Falkon, and real Quake lifecycle are proven. The ordered completion gates are:
 1. **Complete:** run a real Quake pane on bare metal with user assets and prove
    its foreground PTY, mapped game presentation, audio, pointer capture,
    `prefix + v`, emergency release, process exit, and console recovery.
-2. **Next:** close the bare-metal recovery gate. Enable and prove the recovery
-   VT and recovery helper, record the final startup decision, and make
-   `eos-proof shell-launch --bare-metal` distinguish the active radeonsi shell
-   from unrelated llvmpipe devices.
-3. Close the unchanged upstream tmux suite. Reproduce and resolve every
+2. **Complete:** close the bare-metal recovery gate. The recovery VT and helper
+   are installed and active, the EngineDev startup decision is recorded, and
+   `eos-proof shell-launch --bare-metal` distinguishes the active radeonsi
+   shell from unrelated llvmpipe devices.
+3. **Next:** close the unchanged upstream tmux suite. Reproduce and resolve every
    remaining failure relative to a pristine tmux 3.6b build; timing-sensitive
    or host-caused failures need repeatable evidence, not exclusions.
 4. Enable native mux as the EngineDev default and run an acceptance soak across

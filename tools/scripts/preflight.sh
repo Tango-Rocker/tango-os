@@ -213,6 +213,7 @@ check_package_inputs() {
       require_file "tools/scripts/release.sh"
       require_file "tools/scripts/artifacts.sh"
       require_file "tools/scripts/doctor.sh"
+      require_file "tools/scripts/recovery_help.sh"
       require_file "tools/scripts/logs.sh"
       require_file "tools/scripts/crash_bundle.sh"
       require_file "tools/scripts/validate_builder.sh"
@@ -349,6 +350,7 @@ check_installed_scripts() {
   require_abs_file "$INSTALLED_BIN_DIR/eos-source-test"
   require_abs_file "$INSTALLED_BIN_DIR/eos-test"
   require_abs_file "$INSTALLED_BIN_DIR/engineos"
+  require_abs_file "$INSTALLED_BIN_DIR/engineos-recovery-help"
   require_abs_file "$INSTALLED_SCRIPT_DIR/common.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/preflight.sh"
   require_abs_file "$INSTALLED_SCRIPT_DIR/app.sh"
@@ -385,6 +387,7 @@ check_installed_scripts() {
   check_abs_bash_syntax "$INSTALLED_BIN_DIR/eos-source-test"
   check_abs_bash_syntax "$INSTALLED_BIN_DIR/eos-test"
   check_abs_bash_syntax "$INSTALLED_BIN_DIR/engineos"
+  check_abs_bash_syntax "$INSTALLED_BIN_DIR/engineos-recovery-help"
   for script in "$INSTALLED_SCRIPT_DIR"/*.sh; do
     [[ -e "$script" ]] || {
       fail "missing installed scripts in $INSTALLED_SCRIPT_DIR"
@@ -502,6 +505,7 @@ check_scripts() {
   check_bash_syntax "tools/scripts/terminal_launcher.sh"
   check_bash_syntax "tools/scripts/capture_frame.sh"
   check_bash_syntax "tools/scripts/doctor.sh"
+  check_bash_syntax "tools/scripts/recovery_help.sh"
 	check_bash_syntax "tools/scripts/game.sh"
 	check_bash_syntax "tools/scripts/dev_workflow.sh"
   check_bash_syntax "tools/scripts/input_trace.sh"

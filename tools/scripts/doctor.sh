@@ -16,6 +16,8 @@ lspci_output=""
 glx_output=""
 egl_output=""
 vk_output=""
+SHELL_STATE_FILE="${ENGINEOS_SHELL_STATE_FILE:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/engineos/shell-state.json}"
+DEV_SHELL_LOG="${ENGINEOS_DEV_SHELL_LOG:-/var/log/engineos/dev-shell-start.log}"
 
 usage() {
   cat <<'HELP'
@@ -103,6 +105,7 @@ run_egl_probe() {
 }
 
 bare_metal_summary() {
+  local active_backend="" active_renderer=""
   section "Bare-Metal AMD Readiness"
 
   if [[ -n "$virt" && "$virt" != "none" ]]; then
@@ -177,13 +180,31 @@ bare_metal_summary() {
     print_kv "AMD display device" "unavailable"
   fi
 
-  if printf '%s\n%s\n%s\n' "$glx_output" "$egl_output" "$vk_output" | grep -Eiq 'llvmpipe|softpipe|software rasterizer'; then
-    print_kv "software renderer" "detected"
-    printf 'WARNING: software rendering is not acceptable for bare-metal MVP validation.\n'
-  elif [[ -n "$glx_output$egl_output$vk_output" ]]; then
-    print_kv "software renderer" "not detected in collected renderer output"
+  if [[ -r "$SHELL_STATE_FILE" ]] && have_cmd jq; then
+    active_backend="$(jq -r 'select(.mode == "tty") | .backend // empty' \
+      "$SHELL_STATE_FILE" 2>/dev/null || true)"
+  fi
+  if [[ -r "$DEV_SHELL_LOG" ]]; then
+    active_renderer="$(tac "$DEV_SHELL_LOG" 2>/dev/null | \
+      grep -F -m1 'GL renderer:' | sed 's/.*GL renderer: //' || true)"
+  fi
+  print_kv "active shell backend" "${active_backend:-unavailable}"
+  print_kv "active shell renderer" "${active_renderer:-unavailable}"
+  if [[ "$active_backend" == "drm,libinput" &&
+      "$active_renderer" =~ AMD.*radeonsi ]]; then
+    print_kv "active shell hardware" "verified"
   else
-    print_kv "software renderer" "unknown; OpenGL/Vulkan probes unavailable"
+    print_kv "active shell hardware" "unverified"
+    printf 'WARNING: active tty shell lacks direct AMD/radeonsi evidence.\n'
+  fi
+
+  if printf '%s\n%s\n%s\n' "$glx_output" "$egl_output" "$vk_output" | grep -Eiq 'llvmpipe|softpipe|software rasterizer'; then
+    print_kv "generic probe software" "detected"
+    printf 'WARNING: a generic probe exposed a software device; active shell evidence decides bare-metal acceptance.\n'
+  elif [[ -n "$glx_output$egl_output$vk_output" ]]; then
+    print_kv "generic probe software" "not detected"
+  else
+    print_kv "generic probe software" "unknown; probes unavailable"
   fi
 
   if [[ -n "$vk_output" ]]; then
