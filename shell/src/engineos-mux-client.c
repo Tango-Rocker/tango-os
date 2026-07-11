@@ -194,6 +194,130 @@ static bool parse_pane_prefixes(struct engineos_mux_client *client,
 	return true;
 }
 
+static bool parse_pane_models(struct engineos_mux_client *client,
+		struct json_object *snapshot, char *error, size_t error_size) {
+	struct json_object *panes = NULL;
+	if (!json_object_object_get_ex(snapshot, "panes", &panes) ||
+			!json_object_is_type(panes, json_type_array)) {
+		snprintf(error, error_size, "snapshot pane list is invalid");
+		return false;
+	}
+	size_t count = json_object_array_length(panes);
+	if (count == 0 || count > UINT32_MAX) {
+		snprintf(error, error_size, "snapshot pane count is invalid");
+		return false;
+	}
+	struct engineos_mux_pane_model *models = calloc(count, sizeof(*models));
+	if (models == NULL) {
+		snprintf(error, error_size, "out of memory");
+		return false;
+	}
+	for (size_t index = 0; index < count; index++) {
+		struct json_object *pane = json_object_array_get_idx(panes, index);
+		struct json_object *id = NULL, *generation = NULL, *left = NULL;
+		struct json_object *top = NULL, *columns = NULL, *rows = NULL;
+		struct json_object *active = NULL, *window_active = NULL;
+		struct json_object *presentation = NULL, *view_mode = NULL;
+		struct json_object *mapped = NULL, *tabs = NULL, *active_surface = NULL;
+		if (!json_object_is_type(pane, json_type_object) ||
+				!json_object_object_get_ex(pane, "pane_id", &id) ||
+				!json_object_object_get_ex(pane, "generation", &generation) ||
+				!json_object_object_get_ex(pane, "left", &left) ||
+				!json_object_object_get_ex(pane, "top", &top) ||
+				!json_object_object_get_ex(pane, "columns", &columns) ||
+				!json_object_object_get_ex(pane, "rows", &rows) ||
+				!json_object_object_get_ex(pane, "active", &active) ||
+				!json_object_object_get_ex(pane, "window_active", &window_active) ||
+				!json_object_object_get_ex(pane, "presentation", &presentation) ||
+				!json_object_object_get_ex(pane, "view_mode", &view_mode) ||
+				!json_object_object_get_ex(pane, "mapped", &mapped) ||
+				!json_object_object_get_ex(pane, "surface_tabs", &tabs) ||
+				!json_object_object_get_ex(pane, "active_surface_id", &active_surface)) {
+			free(models);
+			snprintf(error, error_size, "snapshot pane model is incomplete");
+			return false;
+		}
+		if (!json_object_is_type(id, json_type_string) ||
+				!json_object_is_type(generation, json_type_int) ||
+				!json_object_is_type(left, json_type_int) ||
+				!json_object_is_type(top, json_type_int) ||
+				!json_object_is_type(columns, json_type_int) ||
+				!json_object_is_type(rows, json_type_int) ||
+				!json_object_is_type(active, json_type_boolean) ||
+				!json_object_is_type(window_active, json_type_boolean) ||
+				!json_object_is_type(presentation, json_type_string) ||
+				!json_object_is_type(view_mode, json_type_string) ||
+				!json_object_is_type(mapped, json_type_boolean) ||
+				!json_object_is_type(tabs, json_type_int) ||
+				!json_object_is_type(active_surface, json_type_int)) {
+			free(models);
+			snprintf(error, error_size, "snapshot pane model types are invalid");
+			return false;
+		}
+		const char *id_text = json_object_get_string(id);
+		if (id_text != NULL && id_text[0] == '%') id_text++;
+		char *end = NULL;
+		unsigned long parsed_id = id_text == NULL ? 0 : strtoul(id_text, &end, 10);
+		int64_t parsed_generation = json_object_get_int64(generation);
+		int64_t parsed_left = json_object_get_int64(left);
+		int64_t parsed_top = json_object_get_int64(top);
+		int64_t parsed_columns = json_object_get_int64(columns);
+		int64_t parsed_rows = json_object_get_int64(rows);
+		int64_t parsed_tabs = json_object_get_int64(tabs);
+		int64_t parsed_active_surface = json_object_get_int64(active_surface);
+		const char *presentation_text = json_object_get_string(presentation);
+		const char *view_mode_text = json_object_get_string(view_mode);
+		if (id_text == NULL || *id_text == '\0' || *end != '\0' ||
+				parsed_id > UINT32_MAX ||
+				parsed_generation <= 0 || parsed_generation > UINT32_MAX ||
+				parsed_left < 0 || parsed_left > UINT32_MAX ||
+				parsed_top < 0 || parsed_top > UINT32_MAX ||
+				parsed_columns <= 0 || parsed_columns > UINT32_MAX ||
+				parsed_rows <= 0 || parsed_rows > UINT32_MAX ||
+				parsed_tabs < 0 || parsed_tabs > UINT32_MAX ||
+				parsed_active_surface < 0 || parsed_active_surface > UINT32_MAX ||
+				(parsed_tabs == 0 && parsed_active_surface != 0) ||
+				(parsed_tabs > 0 && parsed_active_surface == 0) ||
+				(strcmp(presentation_text, "terminal") != 0 &&
+				 strcmp(presentation_text, "wayland") != 0 &&
+				 strcmp(presentation_text, "game") != 0 &&
+				 strcmp(presentation_text, "stream") != 0) ||
+				(strcmp(view_mode_text, "console") != 0 &&
+				 strcmp(view_mode_text, "presentation") != 0) ||
+				strlen(presentation_text) >= sizeof(models[index].presentation) ||
+				strlen(view_mode_text) >= sizeof(models[index].view_mode)) {
+			free(models);
+			snprintf(error, error_size, "snapshot pane model is invalid");
+			return false;
+		}
+		for (size_t previous = 0; previous < index; previous++) {
+			if (models[previous].pane_id == parsed_id) {
+				free(models);
+				snprintf(error, error_size,
+					"snapshot contains duplicate pane identity");
+				return false;
+			}
+		}
+		models[index].pane_id = (uint32_t)parsed_id;
+		models[index].generation = (uint32_t)parsed_generation;
+		models[index].left = (uint32_t)parsed_left;
+		models[index].top = (uint32_t)parsed_top;
+		models[index].columns = (uint32_t)parsed_columns;
+		models[index].rows = (uint32_t)parsed_rows;
+		models[index].active = json_object_get_boolean(active);
+		models[index].window_active = json_object_get_boolean(window_active);
+		strcpy(models[index].presentation, presentation_text);
+		strcpy(models[index].view_mode, view_mode_text);
+		models[index].presentation_mapped = json_object_get_boolean(mapped);
+		models[index].surface_tabs = (uint32_t)parsed_tabs;
+		models[index].active_surface_id = (uint32_t)parsed_active_surface;
+	}
+	free(client->panes);
+	client->panes = models;
+	client->pane_count = count;
+	return true;
+}
+
 static bool request_grid(struct engineos_mux_client *client, char *error,
 		size_t error_size) {
 	struct engine_mux_grid_request request = {
@@ -490,6 +614,11 @@ bool engineos_mux_client_connect(struct engineos_mux_client *client,
 	}
 	struct json_object *panes = NULL;
 	struct json_object *selected = NULL;
+	if (!parse_pane_models(client, snapshot, error, error_size)) {
+		json_object_put(snapshot);
+		engineos_mux_client_destroy(client);
+		return false;
+	}
 	json_object_object_get_ex(snapshot, "panes", &panes);
 	for (size_t index = 0; panes != NULL &&
 			index < json_object_array_length(panes); index++) {
@@ -563,6 +692,10 @@ bool engineos_mux_client_refresh_presentation(struct engineos_mux_client *client
 			&grid_changed, error, error_size))
 		return false;
 	struct json_object *panes = NULL;
+	if (!parse_pane_models(client, snapshot, error, error_size)) {
+		json_object_put(snapshot);
+		return false;
+	}
 	json_object_object_get_ex(snapshot, "panes", &panes);
 	struct json_object *matched = NULL;
 	for (size_t index = 0; panes != NULL &&
@@ -1355,10 +1488,13 @@ void engineos_mux_client_destroy(struct engineos_mux_client *client) {
 	free(client->socket_path);
 	free(client->session_id);
 	free(client->grid_cells);
+	free(client->panes);
 	free(client->grid_damage_cells);
 	free_ui_rows(client->ui_status_rows, client->ui_status_row_count);
 	free_ui_rows(client->ui_menu_rows, client->ui_menu_row_count);
 	client->grid_cells = NULL;
+	client->panes = NULL;
+	client->pane_count = 0;
 	client->grid_damage_cells = NULL;
 	client->grid_damage_count = 0;
 	client->ui_status_rows = NULL;

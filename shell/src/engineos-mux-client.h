@@ -26,6 +26,22 @@ struct engineos_mux_damage_cell {
 	uint32_t y;
 };
 
+struct engineos_mux_pane_model {
+	uint32_t pane_id;
+	uint32_t generation;
+	uint32_t left;
+	uint32_t top;
+	uint32_t columns;
+	uint32_t rows;
+	bool active;
+	bool window_active;
+	char presentation[16];
+	char view_mode[16];
+	bool presentation_mapped;
+	uint32_t surface_tabs;
+	uint32_t active_surface_id;
+};
+
 struct engineos_mux_presentation_target {
 	uint32_t pane_id;
 	uint32_t generation;
@@ -46,6 +62,8 @@ struct engineos_mux_client {
 	bool pane_presentation_mapped;
 	uint32_t pane_surface_tabs;
 	uint32_t pane_active_surface_id;
+	struct engineos_mux_pane_model *panes;
+	size_t pane_count;
 	char *session_id;
 	uint32_t primary_view_id;
 	uint32_t grid_columns;

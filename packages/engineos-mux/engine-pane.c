@@ -6,6 +6,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <systemd/sd-bus.h>
 #include <systemd/sd-login.h>
 
 #include "tmux.h"
@@ -119,6 +120,28 @@ static void
 engine_pane_console_message(struct window_pane *wp, const char *message)
 {
 	input_parse_buffer(wp, (u_char *)message, strlen(message));
+}
+
+static int
+engine_pane_signal_scope(struct window_pane *wp, int signal_number)
+{
+	sd_bus_error error = SD_BUS_ERROR_NULL;
+	sd_bus *bus = NULL;
+	int result;
+
+	if (wp->engine_scope == NULL || *wp->engine_scope == '\0')
+		return (-1);
+	result = sd_bus_open_user(&bus);
+	if (result < 0)
+		goto out;
+	result = sd_bus_call_method(bus, "org.freedesktop.systemd1",
+	    "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager",
+	    "KillUnit", &error, NULL, "ssi", wp->engine_scope, "all",
+	    signal_number);
+out:
+	sd_bus_error_free(&error);
+	sd_bus_unref(bus);
+	return (result < 0 ? -1 : 0);
 }
 
 void
@@ -411,8 +434,10 @@ cmd_pane_presentation_exec(struct cmd *self, struct cmdq_item *item)
 			cmdq_error(item, "pane has no graphical presentation");
 			return (CMD_RETURN_ERROR);
 		}
-		if (wp->engine_app_pgrp > 0)
-			kill(-wp->engine_app_pgrp, SIGTERM);
+		if (engine_pane_signal_scope(wp, SIGTERM) != 0) {
+			cmdq_error(item, "pane graphical launch scope is unavailable");
+			return (CMD_RETURN_ERROR);
+		}
 		engine_pane_reset_runtime(wp, 0);
 		return (CMD_RETURN_NORMAL);
 	} else {
@@ -500,12 +525,10 @@ cmd_signal_pane_app_exec(struct cmd *self, struct cmdq_item *item)
 		cmdq_error(item, "unsupported signal: %s", name);
 		return (CMD_RETURN_ERROR);
 	}
-	if (wp->engine_app_pgrp <= 0 ||
-	    kill(-wp->engine_app_pgrp, signal_number) != 0) {
-		cmdq_error(item, "pane graphical process group is unavailable");
-		return (CMD_RETURN_ERROR);
-	}
-	return (CMD_RETURN_NORMAL);
+	if (engine_pane_signal_scope(wp, signal_number) == 0)
+		return (CMD_RETURN_NORMAL);
+	cmdq_error(item, "pane graphical launch scope is unavailable");
+	return (CMD_RETURN_ERROR);
 }
 
 static enum cmd_retval
@@ -627,8 +650,7 @@ engine_pane_sync_all(void)
 		}
 		if (!wp->engine_mapped && wp->engine_launch_deadline != 0 &&
 		    now >= wp->engine_launch_deadline) {
-			if (wp->engine_app_pgrp > 0)
-				kill(-wp->engine_app_pgrp, SIGTERM);
+			engine_pane_signal_scope(wp, SIGTERM);
 			engine_pane_console_message(wp,
 			    "\r\nengineos: graphical launch mapped no surface within 15 seconds\r\n");
 			engine_pane_reset_runtime(wp, 1);

@@ -162,7 +162,7 @@ These are historical proof artifacts only; they are not the active work path:
   resizing, ranged status-window selection, status-menu opening, and menu-item
   command activation. The shell routes pointer motion, buttons, and vertical
   scroll through that same boundary. The contract passes against the exact
-  `engineos-mux 3.6b-21` and `engineos-shell 0.1.0-33` package binaries. The
+  `engineos-mux 3.6b-22` and `engineos-shell 0.1.0-34` package binaries. The
   native renderer now keeps FreeType-rasterized, colour-keyed glyphs in a GPU
   texture atlas and draws them into double-buffered per-pane GPU targets.
   Sparse tmux cell damage is retained through the mux client, expanded only
@@ -215,7 +215,16 @@ These are historical proof artifacts only; they are not the active work path:
   popup/transient IDs, and invalidates graphical clients. The shell renders
   the selected toplevel and its transient group. The installed contract proves forward,
   backward, explicit rejection, compositor activation, and active-tab exit
-  promotion. Complete multi-pane scene construction and graphical presentation
+  promotion. The mux snapshot now exports authoritative `left`, `top`,
+  `columns`, and `rows` for every pane. The shell rejects malformed or duplicate
+  pane models, retains the complete set, and records each stable identity,
+  generation, geometry, active state, and presentation state under
+  `shell-state.json`'s mux pane list. The installed contract compares split
+  geometry with tmux's own pane formats and proves the shell retains both
+  nonoverlapping panes. Graphical signals, close, and the unmapped-launch
+  timeout now signal the authoritative transient systemd scope through the user
+  manager, eliminating the fast-map race and avoiding stale process-group
+  guesses. Complete per-pane scene construction and graphical presentation
   leases are the next acceptance boundary.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).

@@ -3492,13 +3492,34 @@ static void write_shell_state(struct engineos_shell_server *server,
 	json_write_string(file, server->mux_client.pane_presentation);
 	fprintf(file, ", \"view_mode\": ");
 	json_write_string(file, server->mux_client.pane_view_mode);
-	fprintf(file, ", \"mapped\": %s, \"surface_tabs\": %u, \"active_surface_id\": %u, \"popups\": %u, \"terminal_visible\": %s}}",
+	fprintf(file, ", \"mapped\": %s, \"surface_tabs\": %u, \"active_surface_id\": %u, \"popups\": %u, \"terminal_visible\": %s}",
 		server->mux_client.pane_presentation_mapped ? "true" : "false",
 		server->mux_client.pane_surface_tabs,
 		server->mux_client.pane_active_surface_id,
 		server->mux_popup_count,
 		strcmp(server->mux_client.pane_view_mode, "presentation") == 0 &&
 			server->mux_client.pane_presentation_mapped ? "false" : "true");
+	fprintf(file, ", \"panes\": [");
+	for (size_t index = 0; index < server->mux_client.pane_count; index++) {
+		const struct engineos_mux_pane_model *pane =
+			&server->mux_client.panes[index];
+		if (index != 0) {
+			fprintf(file, ",");
+		}
+		fprintf(file,
+			"{\"pane_id\": \"%%%u\", \"generation\": %u, \"left\": %u, \"top\": %u, \"columns\": %u, \"rows\": %u, \"active\": %s, \"window_active\": %s, \"presentation\": ",
+			pane->pane_id, pane->generation, pane->left, pane->top,
+			pane->columns, pane->rows, pane->active ? "true" : "false",
+			pane->window_active ? "true" : "false");
+		json_write_string(file, pane->presentation);
+		fprintf(file, ", \"view_mode\": ");
+		json_write_string(file, pane->view_mode);
+		fprintf(file,
+			", \"mapped\": %s, \"surface_tabs\": %u, \"active_surface_id\": %u}",
+			pane->presentation_mapped ? "true" : "false",
+			pane->surface_tabs, pane->active_surface_id);
+	}
+	fprintf(file, "]}");
 	fprintf(file, ",\n  \"active_slot\": ");
 	json_write_string(file, surface_role_name(server->active_slot));
 	fprintf(file, ",\n  \"pending_slot\": ");

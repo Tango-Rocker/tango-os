@@ -912,8 +912,8 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 				    (long long)pane->pid);
 				engine_mux_json_string(buffer, pane->tty);
 				evbuffer_add_printf(buffer,
-				    ",\"columns\":%u,\"rows\":%u,\"history_rows\":%u,\"history_scrolled\":%u,\"copy_mode\":%s,\"active\":%s,\"command\":",
-				    pane->sx, pane->sy,
+				    ",\"left\":%u,\"top\":%u,\"columns\":%u,\"rows\":%u,\"history_rows\":%u,\"history_scrolled\":%u,\"copy_mode\":%s,\"active\":%s,\"command\":",
+				    pane->xoff, pane->yoff, pane->sx, pane->sy,
 				    pane->base.grid->hsize, pane->base.grid->hscrolled,
 				    copy_mode ? "true" : "false",
 				    pane_active ? "true" : "false");
@@ -960,6 +960,10 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 				    sizeof pane->sx);
 				engine_mux_hash_bytes(&hash, &pane->sy,
 				    sizeof pane->sy);
+				engine_mux_hash_bytes(&hash, &pane->xoff,
+				    sizeof pane->xoff);
+				engine_mux_hash_bytes(&hash, &pane->yoff,
+				    sizeof pane->yoff);
 				engine_mux_hash_bytes(&hash, &pane->base.grid->hsize,
 				    sizeof pane->base.grid->hsize);
 				engine_mux_hash_bytes(&hash, &pane->base.grid->hscrolled,

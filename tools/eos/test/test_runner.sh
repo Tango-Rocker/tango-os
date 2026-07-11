@@ -277,6 +277,10 @@ run_mux() {
 	[[ "$first_revision" -ge 1 ]] || die "initial mux revision was not positive"
 	[[ "$(jq -er '.panes | length' "$fixture/first.json")" == 1 ]] ||
 		die "initial mux snapshot did not contain one pane"
+	jq -e '.panes[0] |
+		.left == 0 and .top == 0 and .columns > 0 and .rows > 0' \
+		"$fixture/first.json" >/dev/null ||
+		die "initial mux snapshot did not expose authoritative pane geometry"
 	jq -e '.panes[0].command | contains("/") | not' "$fixture/first.json" >/dev/null ||
 		die "mux snapshot did not normalize pane_current_command metadata"
 	jq -e '.panes[0].prefix == "C-b" and .panes[0].prefix2 == "None"' \
@@ -729,6 +733,30 @@ run_mux() {
 	pane_count="$(jq -er '.panes | length' "$fixture/second.json")"
 	[[ "$second_revision" -gt "$first_revision" && "$pane_count" == 2 ]] ||
 		die "mux snapshot was not atomically revised after split"
+	jq -e '
+		([.panes[].pane_id] | unique | length) == 2 and
+		([.panes[].generation] | all(. > 0)) and
+		([.panes[] | select(.left < 0 or .top < 0 or
+			.columns <= 0 or .rows <= 0)] | length) == 0 and
+		(.panes[0] as $a | .panes[1] as $b |
+			($a.left + $a.columns <= $b.left) or
+			($b.left + $b.columns <= $a.left) or
+			($a.top + $a.rows <= $b.top) or
+			($b.top + $b.rows <= $a.top))' "$fixture/second.json" >/dev/null ||
+		die "split panes did not expose distinct nonoverlapping cell geometry"
+	while IFS='|' read -r expected_pane expected_left expected_top \
+			expected_columns expected_rows; do
+		jq -e --arg pane "$expected_pane" \
+			--argjson left "$expected_left" --argjson top "$expected_top" \
+			--argjson columns "$expected_columns" --argjson rows "$expected_rows" \
+			'.panes[] | select(.pane_id == $pane) |
+			 .left == $left and .top == $top and
+			 .columns == $columns and .rows == $rows' \
+			"$fixture/second.json" >/dev/null ||
+			die "mux snapshot geometry diverged from authoritative tmux layout for $expected_pane"
+	done < <(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		list-panes -t contract:0 -F \
+		'#{pane_id}|#{pane_left}|#{pane_top}|#{pane_width}|#{pane_height}')
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		select-pane -t contract:0.1
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot >"$fixture/focus.json"
@@ -773,14 +801,28 @@ run_mux() {
 				"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
 		sleep 0.02
 	done
-	[[ -f "$fixture/engineos/shell-state.json" ]] ||
+	[[ -f "$fixture/engineos/shell-state.json" ]] || {
+		tail -80 "$fixture/shell-native.log" >&2 || true
 		die "engineos-shell did not publish native grid state"
+	}
 	jq -e '.mux.session_id | startswith("$")' \
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "shell state did not identify the attached mux session"
 	jq -e '.mux.client_view_id == 1' \
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "shell state did not identify its graphical mux client view"
+	jq -e '
+		.mux.panes | length == 2 and
+		([.[].pane_id] | unique | length) == 2 and
+		([.[] | select(.generation <= 0 or .left < 0 or .top < 0 or
+			.columns <= 0 or .rows <= 0)] | length) == 0' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "shell did not retain every authoritative mux pane model"
+	jq -e --arg pane "$(jq -er '.mux.pane_id' \
+			"$fixture/engineos/shell-state.json")" \
+		'.mux.panes[] | select(.pane_id == $pane and .window_active and .active)' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "shell all-pane model did not contain its selected active pane"
 	if [[ "$shell_renderer" == gles2 ]]; then
 		if [[ "${ENGINEOS_MUX_REQUIRE_RADEONSI:-false}" == true ]]; then
 			grep -F 'EGL driver name: radeonsi' "$fixture/shell-native.log" \

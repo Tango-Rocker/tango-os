@@ -60,7 +60,14 @@ deterministic contract proves selection, invalid-role rejection, the full
 surface-set lifecycle, and pending launch scopes across the systemd-run PTY
 handoff. Multi-pane scene construction, leases, games/images, direct-KMS
 clipping/resize/zoom, final hardware acceptance, and legacy cutover remain
-open.
+open. The server now exports every pane's authoritative cell origin and size,
+and the shell validates and retains the complete pane set instead of discarding
+every pane except the selected one. `shell-state.json` exposes those stable
+pane identities, generations, layouts, and presentation states. The installed
+split contract compares protocol geometry directly with tmux's pane formats
+and proves shell observability retains both nonoverlapping panes. Application
+signals, close, and launch timeout now target the registered transient systemd
+scope through the user manager rather than trusting a sampled process group.
 
 ## Workstream 1: Integrate The Protocol Into Engine Mux
 
