@@ -6,8 +6,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "$SCRIPT_DIR/common.sh"
 
 ROOT="$(engineos_root)"
-LOG_DIR="${ENGINEOS_LOG_DIR:-$(engineos_default_log_dir "$ROOT")}"
-STATE_DIR="${ENGINEOS_STATE_DIR:-$(engineos_default_state_dir "$ROOT")}"
+if [[ -n "${ENGINEOS_STATE_DIR:-}" ]]; then
+  STATE_DIR="$ENGINEOS_STATE_DIR"
+elif [[ -r "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/engineos/shell-state.json" ]]; then
+  STATE_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/engineos"
+else
+  STATE_DIR="$(engineos_default_state_dir "$ROOT")"
+fi
+if [[ -n "${ENGINEOS_LOG_DIR:-}" ]]; then
+  LOG_DIR="$ENGINEOS_LOG_DIR"
+elif [[ "$STATE_DIR" == "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/engineos" &&
+    -d /var/log/engineos ]]; then
+  LOG_DIR=/var/log/engineos
+else
+  LOG_DIR="$(engineos_default_log_dir "$ROOT")"
+fi
 APP_STATE_DIR="$STATE_DIR/apps"
 SHELL_STATE_FILE="$STATE_DIR/shell-state.json"
 LAUNCH_BOUNDS_DIR="$STATE_DIR/launch-bounds"
@@ -926,6 +939,29 @@ native_muxctl_bin() {
   printf '%s\n' "$candidate"
 }
 
+native_focused_pane() {
+  local mux_bin clients focused_session pane
+  mux_bin="$(native_mux_bin)"
+  clients="$("$mux_bin" list-clients \
+    -F '#{client_name}|#{client_flags}|#{session_id}')" ||
+    die "native game launch could not list graphical mux clients"
+  focused_session="$(awk -F '|' '
+    $1 ~ /^engineos-view-[0-9]+$/ && $2 ~ /(^|,)focused(,|$)/ {
+      print $3
+      count++
+    }
+    END { if (count != 1) exit 1 }
+  ' <<<"$clients")" ||
+    die "native game launch requires exactly one focused graphical mux view"
+  [[ "$focused_session" == \$* ]] ||
+    die "focused graphical mux view has an invalid session identity"
+  pane="$("$mux_bin" display-message -p -t "$focused_session:" '#{pane_id}')" ||
+    die "native game launch could not resolve the focused mux pane"
+  [[ "$pane" =~ ^%[0-9]+$ ]] ||
+    die "focused graphical mux view has an invalid pane identity"
+  printf '%s\n' "$pane"
+}
+
 require_native_pane_mode() {
   native_pane_mode ||
     die "pane $1 requires the EngineOS shell to run in native mux mode"
@@ -975,8 +1011,6 @@ run_pane_launch() {
         ;;
     esac
   done
-  [[ -n "${TMUX:-}" && -n "$pane_id" ]] ||
-    die "pane launch requires TMUX and TMUX_PANE or --pane"
   [[ $# -gt 0 ]] || die "pane launch requires a command"
   adapt_pane_command "$@"
   set -- "${PANE_COMMAND[@]}"
@@ -985,12 +1019,17 @@ run_pane_launch() {
     local mux_bin
     local mux_args=(launch-pane-app)
     mux_bin="$(native_mux_bin)"
+    if [[ -z "$pane_id" ]]; then
+      pane_id="$(native_focused_pane)"
+    fi
     [[ "$game" == false ]] || mux_args+=(-g)
     mux_args+=(-t "$pane_id" --)
     log_line "pane launch mode=native pane=$pane_id presentation=$([[ "$game" == true ]] && printf game || printf wayland) command=$(quote_cmd "$@")"
     "$mux_bin" "${mux_args[@]}" "$@"
     return
   fi
+  [[ -n "${TMUX:-}" && -n "$pane_id" ]] ||
+    die "legacy pane launch requires TMUX and TMUX_PANE"
   [[ "$game" == false ]] ||
     die "pane launch --game requires native mux mode"
   [[ "$pane_id" == "${TMUX_PANE:-}" ]] ||
@@ -1540,11 +1579,16 @@ run_launch() {
     quake)
       require_shell_display "$app"
       prepare_client_env
-		if native_pane_mode && [[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]]; then
+		if native_pane_mode; then
+			local pane_id="${TMUX_PANE:-}"
+			if [[ -z "$pane_id" ]]; then
+				pane_id="$(native_focused_pane)"
+			fi
 			prepare_native_quake_args "$@"
 			write_app_state "$app" "launch-requested" "" "${QUAKE_LAUNCH_ARGS[@]}"
-			log_line "launch app=quake owner=native-mux pane=$TMUX_PANE display=${WAYLAND_DISPLAY:-missing} sdl=${SDL_VIDEODRIVER:-unset} args=${QUAKE_LAUNCH_ARGS[*]}"
-			run_pane_launch --game -- "$(game_cmd_string)" quake play --foreground \
+			log_line "launch app=quake owner=native-mux pane=$pane_id display=${WAYLAND_DISPLAY:-missing} sdl=${SDL_VIDEODRIVER:-unset} args=${QUAKE_LAUNCH_ARGS[*]}"
+			run_pane_launch --game --pane "$pane_id" -- \
+				"$(game_cmd_string)" quake play --foreground \
 				"${QUAKE_LAUNCH_ARGS[@]}"
 			return
 		fi

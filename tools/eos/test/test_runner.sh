@@ -143,6 +143,7 @@ run_compositor() {
   case "$mode" in
     --headless)
       ENGINEOS_MUX_MODE=legacy ENGINEOS_SHELL_SMOKE=true \
+        ENGINEOS_SHELL_BOOTSTRAP=none \
         exec "$SCRIPT_DIR/shell_runner.sh" --headless
       ;;
     --nested)
@@ -3427,6 +3428,7 @@ FAKE
 		ENGINEOS_GAME_STATE_DIR="$tmp_dir/state" \
 		ENGINEOS_QUAKE_LAUNCH_REQUEST="$request" \
 		ENGINEOS_QUAKE_ID1="$tmp_dir/id1" \
+		ENGINEOS_MUX_MODE=legacy \
 		ENGINEOS_SYSTEMCTL_CMD="$tmp_dir/systemctl" \
 		ENGINEOS_FAKE_SYSTEMCTL_LOG="$systemctl_log" \
 		WAYLAND_DISPLAY=engineos-test-wayland \
@@ -3446,6 +3448,28 @@ PY
 		die "game workflow did not import the Wayland environment"
 	grep -F -- '--user restart engineos-quake.service' "$systemctl_log" >/dev/null ||
 		die "game workflow did not restart the per-user Quake unit"
+
+	mkdir -p "$tmp_dir/tools/engineos"
+	cat >"$tmp_dir/tools/engineos/eos-app" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >"$ENGINEOS_FAKE_APP_LAUNCH"
+FAKE
+	chmod +x "$tmp_dir/tools/engineos/eos-app"
+	local native_systemctl_lines
+	native_systemctl_lines="$(wc -l <"$systemctl_log")"
+	ENGINEOS_ROOT="$tmp_dir" \
+		ENGINEOS_GAME_RUNTIME_DIR="$tmp_dir/run" \
+		ENGINEOS_GAME_STATE_DIR="$tmp_dir/state" \
+		ENGINEOS_QUAKE_ID1="$tmp_dir/id1" \
+		ENGINEOS_MUX_MODE=native \
+		ENGINEOS_FAKE_APP_LAUNCH="$tmp_dir/native-app-launch.txt" \
+		WAYLAND_DISPLAY=engineos-test-wayland \
+		"$SCRIPT_DIR/game.sh" quake play --map native_map --game rpg --window
+	grep -Fx 'launch quake --map native_map --game rpg --window' \
+		"$tmp_dir/native-app-launch.txt" >/dev/null ||
+		die "native game workflow did not delegate to the scoped app launcher"
+	[[ "$(wc -l <"$systemctl_log")" == "$native_systemctl_lines" ]] ||
+		die "native game workflow restarted the incompatible user service"
 
 	mkdir -p "$tmp_dir/engines/quakespasm/engineos"
 	cat >"$tmp_dir/engines/quakespasm/engineos/run.sh" <<'FAKE'
@@ -3909,6 +3933,14 @@ printf 'libdecor=%s\n' "${SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR:-unset}"
 FAKE
 	cat >"$fake_bin/engine-mux" <<'FAKE'
 #!/usr/bin/env bash
+if [[ "${1:-}" == list-clients ]]; then
+	printf '%s\n' 'engineos-view-1|attached,focused,UTF-8|$7'
+	exit 0
+fi
+if [[ "${1:-}" == display-message && "${*: -1}" == '#{pane_id}' ]]; then
+	printf '%s\n' '%9'
+	exit 0
+fi
 printf '%s\n' "$*" >>"$ENGINEOS_FAKE_MUX_CALLS"
 FAKE
 	cat >"$fake_bin/engine-muxctl" <<'FAKE'
@@ -4435,6 +4467,11 @@ PY
 	PATH="$fake_bin:$PATH" ENGINEOS_LOG_DIR="$log_dir" \
 		ENGINEOS_STATE_DIR="$tmp_dir/run" \
 		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
+		env -u TMUX -u TMUX_PANE \
+		"$SCRIPT_DIR/app.sh" pane launch --game -- quake -window >"$out"
+	PATH="$fake_bin:$PATH" ENGINEOS_LOG_DIR="$log_dir" \
+		ENGINEOS_STATE_DIR="$tmp_dir/run" \
+		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
 		TMUX="/tmp/engine-mux,1,0" TMUX_PANE="%9" \
 		"$SCRIPT_DIR/app.sh" pane launch -- falkon about:blank >"$out"
 	PATH="$fake_bin:$PATH" ENGINEOS_LOG_DIR="$log_dir" \
@@ -4463,6 +4500,13 @@ PY
 		TMUX="/tmp/engine-mux,1,0" TMUX_PANE="%9" \
 		WAYLAND_DISPLAY="engineos-test-wayland" \
 		"$SCRIPT_DIR/app.sh" launch quake --map native_proof >"$out"
+	PATH="$fake_bin:$PATH" ENGINEOS_LOG_DIR="$log_dir" \
+		ENGINEOS_STATE_DIR="$tmp_dir/run" \
+		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
+		ENGINEOS_GAME_CMD="$fake_bin/eos-runtime" \
+		WAYLAND_DISPLAY="engineos-test-wayland" \
+		env -u TMUX -u TMUX_PANE \
+		"$SCRIPT_DIR/app.sh" launch quake --map launchpad_proof >"$out"
 	PATH="$fake_bin:$PATH" ENGINEOS_STATE_DIR="$tmp_dir/run" \
 		"$SCRIPT_DIR/app.sh" pane list --json >"$out"
 	grep -Fx 'launch-pane-app -g -t %9 -- quake -window' \
@@ -4488,11 +4532,24 @@ PY
 	grep -Fx "launch-pane-app -g -t %9 -- $fake_bin/eos-runtime quake play --foreground --map native_proof --window" \
 		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
 		die "native Quake launch did not route through a game pane"
+	grep -Fx "launch-pane-app -g -t %9 -- $fake_bin/eos-runtime quake play --foreground --map launchpad_proof --window" \
+		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
+		die "launchpad-style Quake launch did not resolve the focused graphical pane"
 	grep -F 'launch app=quake owner=native-mux pane=%9' "$log_dir/app.log" >/dev/null ||
 		die "native Quake launch did not record mux ownership"
 	grep -F '"revision":42' "$out" >/dev/null &&
 		grep -F '"presentation":"game"' "$out" >/dev/null ||
 		die "native app pane list did not return authoritative mux state"
+
+	mkdir -p "$tmp_dir/live-runtime/engineos"
+	cp "$tmp_dir/run/shell-state.json" \
+		"$tmp_dir/live-runtime/engineos/shell-state.json"
+	XDG_RUNTIME_DIR="$tmp_dir/live-runtime" ENGINEOS_LOG_DIR="$log_dir" \
+		"$SCRIPT_DIR/app.sh" status --json >"$out"
+	jq -e --arg state "$tmp_dir/live-runtime/engineos" \
+		'.state_dir == $state and .shell_state == ($state + "/shell-state.json")' \
+		"$out" >/dev/null ||
+		die "source app status did not prefer the live runtime shell state"
 
   "$SCRIPT_DIR/app.sh" manifest validate >"$out"
   grep -F 'App manifest validation summary: 0 failure(s)' "$out" >/dev/null ||

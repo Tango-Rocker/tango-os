@@ -58,6 +58,19 @@ import_graphical_environment() {
   [[ ${#names[@]} -eq 0 ]] || systemctl_user import-environment "${names[@]}"
 }
 
+native_mux_active() {
+  case "${ENGINEOS_MUX_MODE:-}" in
+    native) return 0 ;;
+    legacy) return 1 ;;
+    "") ;;
+    *) die "ENGINEOS_MUX_MODE must be legacy or native" ;;
+  esac
+  local state="${ENGINEOS_STATE_DIR:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/engineos}/shell-state.json"
+  [[ -r "$state" ]] || return 1
+  jq -e '.mux.mode == "native" and .mux.connected == true' "$state" \
+    >/dev/null 2>&1
+}
+
 resolve_id1() {
   if [[ -n "${ENGINEOS_QUAKE_ID1:-}" ]]; then
     printf '%s\n' "$ENGINEOS_QUAKE_ID1"
@@ -115,6 +128,15 @@ play_quake() {
   id1="$(resolve_id1)" || die "Quake assets are not ready; run eos-assets prepare/check quake"
 	[[ "$window" != true || "$fullscreen" != true ]] ||
 		die "quake play cannot combine --window and --fullscreen"
+	if [[ "$foreground" == false ]] && native_mux_active; then
+		local app_args=(launch quake)
+		[[ -z "$map" ]] || app_args+=(--map "$map")
+		[[ "$game" == id1 ]] || app_args+=(--game "$game")
+		[[ "$smoke" == false ]] || app_args+=(--smoke)
+		[[ "$window" == false ]] || app_args+=(--window)
+		[[ "$fullscreen" == false ]] || app_args+=(--fullscreen)
+		exec "$(eos_command eos-app)" "${app_args[@]}"
+	fi
 	if [[ "$foreground" == true ]]; then
 		local runner_args=(--game "$game")
 		[[ -z "$map" ]] || runner_args+=(--map "$map")
