@@ -898,7 +898,11 @@ PY
 		   .selected_renderer_frame > 0 and .selected_renderer != null and
 		   .ui.ready and .ui.columns > 0 and .ui.rows > 0 and
 		   .ui.status_rows > 0 and .ui.status_text != null and
-		   .ui.rendered and .ui.renderer != null and .ui.frame > 0)' \
+		   .ui.rendered and .ui.renderer != null and .ui.frame > 0) and
+		 ((.output_views[] | select(.focused)) as $focused |
+		  .input.view_id == $focused.view_id and
+		  .input.pane_id == $focused.pane_id and
+		  .input.pane_generation == $focused.pane_generation)' \
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "shell did not retain an authoritative model for every output view"
 	jq -e '
@@ -1734,8 +1738,18 @@ PY
 		sleep 0.02
 	done
 	jq -e '.mux.ui.menu_active == true and .mux.ui.menu_width > 0 and
-		.mux.ui.menu_height > 0' "$fixture/engineos/shell-state.json" >/dev/null ||
+		.mux.ui.menu_height > 0' "$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '{mux:{ui:.mux.ui,client_view_id:.mux.client_view_id,
+			ui_invalidation_count:.mux.ui_invalidation_count,
+			last_ui_invalidated_view_id:.mux.last_ui_invalidated_view_id},
+			output_views,last_reason}' \
+			"$fixture/engineos/shell-state.json" >&2 || true
+		sed -n '1,80p' "$fixture/menu.log" >&2 || true
+		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			list-clients -F '#{client_name}|#{client_tty}|#{client_flags}' >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
 		die "native shell did not consume and render menu UI invalidation"
+	}
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		command-prompt -t "$shell_client_name" \
 		>"$fixture/prompt.log" 2>&1 &
@@ -1856,7 +1870,11 @@ PY
 		   .console_scene_count == 1 and .selected_renderer_frame > 0 and
 		   .ui.ready and .ui.rendered and .ui.frame > 0) and
 		 any(.output_views[]; .focused and .session_id == $focused_session and
-		   .ui.ready and .ui.rendered and .ui.frame > 0)' \
+		   .ui.ready and .ui.rendered and .ui.frame > 0) and
+		 ((.output_views[] | select(.focused)) as $focused |
+		  .input.view_id == $focused.view_id and
+		  .input.pane_id == $focused.pane_id and
+		  .input.pane_generation == $focused.pane_generation)' \
 		"$fixture/engineos/shell-state.json" >/dev/null || {
 		jq '{mux:{session_id:.mux.session_id,client_view_id:.mux.client_view_id},output_views}' \
 			"$fixture/engineos/shell-state.json" >&2 || true
@@ -1891,8 +1909,100 @@ PY
 			"$fixture/engineos/shell-state.json" >/dev/null; then
 		jq '{output_views,last_reason}' "$fixture/engineos/shell-state.json" >&2 || true
 		tail -100 "$fixture/shell-native.log" >&2 || true
-		die "nonfocused output UI did not retain and render its own status model"
+		 die "nonfocused output UI did not retain and render its own status model"
 	fi
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		launch-pane-app -t "$output_session_pane" -- env \
+		WAYLAND_DISPLAY="$fixture/$wayland_display" \
+		"$fixture/bin/engineos-wayland-presentation-client"
+	for _ in {1..150}; do
+		jq -e --arg output "$nonfocused_output" --arg pane "$output_session_pane" \
+			'any(.output_views[]; .output == $output and
+			  .pane_id == $pane and .owns_selected_presentation and
+			  .bound_presentation_surface_count == 1 and
+			  .presentation_surface_count == 1) and
+			 all(.output_views[]; .output == $output or
+			  .presentation_surface_count == 0) and
+			 ((.output_views[] | select(.focused)) as $focused |
+			  .input.mode == "terminal" and .input.view_id == $focused.view_id and
+			  .input.pane_id == $focused.pane_id and
+			  .input.view_id != (.output_views[] | select(.output == $output) | .view_id))' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg output "$nonfocused_output" --arg pane "$output_session_pane" \
+		'any(.output_views[]; .output == $output and .pane_id == $pane and
+		  .owns_selected_presentation and .presentation_surface_count == 1) and
+		 all(.output_views[]; .output == $output or
+		  .presentation_surface_count == 0) and
+		 .input.mode == "terminal" and
+		 .input.view_id != (.output_views[] | select(.output == $output) | .view_id)' \
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '{input,output_views,windows,last_reason}' \
+			"$fixture/engineos/shell-state.json" >&2 || true
+		tail -120 "$fixture/shell-native.log" >&2 || true
+		die "nonfocused presentation was not routed to its retained output model"
+	}
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		signal-pane-app -t "$output_session_pane" TERM
+	for _ in {1..150}; do
+		jq -e '[.output_views[].presentation_surface_count] | add == 0' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '[.output_views[].presentation_surface_count] | add == 0' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "nonfocused presentation exit did not restore its output console"
+	python - "$fixture/engineos/preview.sock" "$preview_png" \
+		"$output_session_pane" <<'PY'
+import json
+import socket
+import sys
+request = {
+    "op": "show",
+    "path": sys.argv[2],
+    "owner": "nonfocused-output-preview",
+    "pane": {"pane_id": sys.argv[3]},
+}
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+    client.settimeout(3.0)
+    client.connect(sys.argv[1])
+    client.sendall((json.dumps(request) + "\n").encode())
+    response = json.loads(client.recv(4096))
+if response.get("status") != "ok":
+    raise SystemExit(f"preview request failed: {response}")
+PY
+	for _ in {1..100}; do
+		jq -e --arg output "$nonfocused_output" --arg pane "$output_session_pane" \
+			'(.previews | length) == 1 and .previews[0].pane_id == $pane and
+			 (.previews[0] as $preview |
+			  any(.output_views[]; .output == $output and .preview_count == 1 and
+			   .view_id == $preview.lease_view_id) and
+			  all(.output_views[]; .output == $output or .preview_count == 0))' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg output "$nonfocused_output" --arg pane "$output_session_pane" \
+		'(.previews | length) == 1 and .previews[0].pane_id == $pane and
+		 (.previews[0] as $preview |
+		  any(.output_views[]; .output == $output and .preview_count == 1 and
+		   .view_id == $preview.lease_view_id) and
+		  all(.output_views[]; .output == $output or .preview_count == 0))' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "nonfocused preview did not use its retained output lease"
+	python - "$fixture/engineos/preview.sock" "$output_session_pane" <<'PY'
+import json
+import socket
+import sys
+request = {"op": "hide", "pane": {"pane_id": sys.argv[2]}}
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+    client.settimeout(3.0)
+    client.connect(sys.argv[1])
+    client.sendall((json.dumps(request) + "\n").encode())
+    response = json.loads(client.recv(4096))
+if response.get("status") != "ok":
+    raise SystemExit(f"preview hide failed: {response}")
+PY
 	output_grid_revision="$(jq -er --arg output "$nonfocused_output" \
 		'.output_views[] | select(.output == $output) | .grid_revision' \
 		"$fixture/engineos/shell-state.json")"
@@ -1928,8 +2038,16 @@ PY
 	done
 	jq -e --arg session "$focused_session" \
 		'all(.output_views[]; .session_id == $session)' \
-		"$fixture/engineos/shell-state.json" >/dev/null ||
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq --arg session "$focused_session" \
+			'{expected_session:$session,mux_session:.mux.session_id,
+			  output_views:[.output_views[] | {view_id,output,session_id,focused}],
+			  input,last_reason}' "$fixture/engineos/shell-state.json" >&2 || true
+		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			list-clients -F '#{client_name}|#{client_tty}|#{session_id}|#{client_flags}' \
+			>&2 || true
 		die "shell output model did not follow its synthetic client reattachment"
+	}
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		kill-session -t "$output_session_id"
 	wait "$shell_pid" || die "engineos-shell native damage run failed"

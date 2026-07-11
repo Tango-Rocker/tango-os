@@ -1373,14 +1373,6 @@ bool engineos_mux_client_connect(struct engineos_mux_client *client,
 
 bool engineos_mux_client_refresh_presentation(struct engineos_mux_client *client,
 		char *error, size_t error_size) {
-	unsigned int attempts = 0;
-
-refresh_again:
-	if (++attempts > 8) {
-		snprintf(error, error_size,
-			"mux presentation state did not settle");
-		return false;
-	}
 	struct json_object *snapshot = NULL;
 	bool grid_changed = false;
 	char snapshot_request[128];
@@ -1513,8 +1505,11 @@ refresh_again:
 	json_object_put(snapshot);
 	if (!result)
 		return false;
-	if (grid_changed)
-		goto refresh_again;
+	/* The response is an atomic snapshot at its advertised revision. Grid or
+	 * UI invalidations received while waiting belong to later rendering work;
+	 * retrying this presentation read until the event stream becomes idle can
+	 * never converge under normal foreground output. Keep those invalidations
+	 * pending for the event loop instead. */
 	return true;
 }
 
@@ -1678,6 +1673,8 @@ bool engineos_mux_client_handle_event(struct engineos_mux_client *client,
 		}
 		memcpy(&invalidated, packet + sizeof(frame), sizeof(invalidated));
 		uint32_t view_id = ntohl(invalidated.view_id);
+		client->ui_invalidation_count++;
+		client->last_ui_invalidated_view_id = view_id;
 		struct engineos_mux_view_snapshot *snapshot =
 			find_view_snapshot(client, view_id);
 		if (snapshot == NULL) {
@@ -2073,8 +2070,11 @@ static bool exchange_json_request(struct engineos_mux_client *client,
 			}
 			struct engine_mux_ui_invalidation invalidated;
 			memcpy(&invalidated, packet + sizeof(frame), sizeof(invalidated));
+			uint32_t invalidated_view_id = ntohl(invalidated.view_id);
+			client->ui_invalidation_count++;
+			client->last_ui_invalidated_view_id = invalidated_view_id;
 			struct engineos_mux_view_snapshot *snapshot = find_view_snapshot(
-				client, ntohl(invalidated.view_id));
+				client, invalidated_view_id);
 			if (snapshot != NULL)
 				snapshot->ui.invalidated = true;
 			*grid_changed = true;
@@ -2236,14 +2236,16 @@ bool engineos_mux_client_focus_view(struct engineos_mux_client *client,
 }
 
 bool engineos_mux_client_send_key(struct engineos_mux_client *client,
-		uint32_t view_id, const char *key_name, bool *grid_changed,
+		uint32_t view_id, uint32_t pane_id, uint32_t generation,
+		const char *key_name, bool *grid_changed,
 		char *error, size_t error_size) {
-	if (view_id == 0 || key_name == NULL || *key_name == '\0') {
+	if (view_id == 0 || generation == 0 ||
+			key_name == NULL || *key_name == '\0') {
 		snprintf(error, error_size, "invalid graphical key request");
 		return false;
 	}
-	char pane_id[32];
-	snprintf(pane_id, sizeof(pane_id), "%%%u", client->pane_id);
+	char pane_name[32];
+	snprintf(pane_name, sizeof(pane_name), "%%%u", pane_id);
 	struct json_object *root = json_object_new_object();
 	if (root == NULL) {
 		snprintf(error, error_size, "out of memory");
@@ -2252,9 +2254,9 @@ bool engineos_mux_client_send_key(struct engineos_mux_client *client,
 	json_object_object_add(root, "schema",
 		json_object_new_string("engine-mux/key-v1"));
 	json_object_object_add(root, "view_id", json_object_new_int64(view_id));
-	json_object_object_add(root, "pane_id", json_object_new_string(pane_id));
+	json_object_object_add(root, "pane_id", json_object_new_string(pane_name));
 	json_object_object_add(root, "generation",
-		json_object_new_int64(client->pane_generation));
+		json_object_new_int64(generation));
 	json_object_object_add(root, "key", json_object_new_string(key_name));
 	const char *payload = json_object_to_json_string_ext(root,
 		JSON_C_TO_STRING_PLAIN);
@@ -2487,14 +2489,14 @@ static bool presentation_surface_request(struct engineos_mux_client *client,
 
 bool engineos_mux_client_map_presentation(struct engineos_mux_client *client,
 		const struct engineos_mux_presentation_target *target, int32_t pid,
-		uint32_t surface_id, const char *role, bool *grid_changed,
+		uint32_t surface_id, uint32_t view_id, const char *role, bool *grid_changed,
 		char *error, size_t error_size) {
 	if (target == NULL) {
 		snprintf(error, error_size, "presentation target is missing");
 		return false;
 	}
 	return presentation_surface_request(client, true, target->pane_id,
-		target->generation, pid, surface_id, client->primary_view_id, role, grid_changed,
+		target->generation, pid, surface_id, view_id, role, grid_changed,
 		error, error_size);
 }
 

@@ -84,8 +84,14 @@ another session without overwriting the focused model and that its cache
 follows reattachment. Each output also owns its view-addressed
 status/menu/prompt model and GPU renderer; a nonfocused session's status
 damage advances only that output and cannot overwrite the focused UI.
-Focused-output input promotion remains. Each output model already resolves retained, subscribed pane
-grids—including panes in a different nonfocused session—and reports grid
+The frontend retains subscriptions for every output's status/menu/prompt
+model. Keyboard frames use the focused output model's pane identity, pointer
+hit testing uses that output's UI geometry, and drags remain bound to their
+originating view. Presentation toplevels, transients, and explicit previews
+resolve the owning output model even when it is not focused. The contract
+maps a deterministic Wayland client and image only on a nonfocused output
+while focused input identity remains unchanged. Each output model also
+resolves retained, subscribed pane grids—including panes in a different nonfocused session—and reports grid
 readiness, subscription coverage, and selected-grid revision. State
 invalidations remain sticky across request servicing so output snapshots
 cannot silently miss a concurrent session or layout transition. Each

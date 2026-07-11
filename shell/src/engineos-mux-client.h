@@ -156,6 +156,8 @@ struct engineos_mux_client {
 	char *socket_path;
 	struct engineos_mux_view_snapshot **view_snapshots;
 	size_t view_snapshot_count;
+	uint64_t ui_invalidation_count;
+	uint32_t last_ui_invalidated_view_id;
 	bool state_invalidated_pending;
 	bool ready;
 };
@@ -185,7 +187,8 @@ bool engineos_mux_client_unregister_view(struct engineos_mux_client *client,
 bool engineos_mux_client_focus_view(struct engineos_mux_client *client,
 	uint32_t view_id, bool *grid_changed, char *error, size_t error_size);
 bool engineos_mux_client_send_key(struct engineos_mux_client *client,
-	uint32_t view_id, const char *key_name, bool *grid_changed,
+	uint32_t view_id, uint32_t pane_id, uint32_t generation,
+	const char *key_name, bool *grid_changed,
 	char *error, size_t error_size);
 bool engineos_mux_client_send_mouse(struct engineos_mux_client *client,
 	uint32_t view_id, uint32_t x, uint32_t y, const char *event,
@@ -201,7 +204,7 @@ bool engineos_mux_client_resolve_presentation(struct engineos_mux_client *client
 	bool *grid_changed, char *error, size_t error_size);
 bool engineos_mux_client_map_presentation(struct engineos_mux_client *client,
 	const struct engineos_mux_presentation_target *target, int32_t pid,
-	uint32_t surface_id, const char *role, bool *grid_changed,
+	uint32_t surface_id, uint32_t view_id, const char *role, bool *grid_changed,
 	char *error, size_t error_size);
 bool engineos_mux_client_unmap_presentation(struct engineos_mux_client *client,
 	uint32_t pane_id, uint32_t generation, int32_t pid, uint32_t surface_id,

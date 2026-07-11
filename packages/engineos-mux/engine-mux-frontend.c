@@ -19,6 +19,7 @@ struct engine_mux_view {
 	struct client *tmux_client;
 	struct engine_mux_view *previous_focused;
 	char *output_name;
+	uint64_t state_hash;
 	uint64_t ui_hash;
 	int ui_subscribed;
 	TAILQ_ENTRY(engine_mux_view) entry;
@@ -1560,16 +1561,41 @@ engine_mux_frontend_sync(void)
 	char *candidate;
 	size_t candidate_size;
 	uint64_t content_hash;
+	struct engine_mux_client *client;
+	struct engine_mux_view *view;
+	int view_state_changed = 0;
 
 	if (engine_mux_listener == -1)
 		return;
 	engine_pane_sync_all();
 	engine_mux_reconcile_leases();
+	TAILQ_FOREACH(client, &engine_mux_clients, entry) {
+		TAILQ_FOREACH(view, &client->views, entry) {
+			if (view->tmux_client == NULL ||
+			    (view->tmux_client->flags & CLIENT_DEAD) ||
+			    view->tmux_client->session == NULL)
+				continue;
+			candidate = engine_mux_build_snapshot(engine_mux_revision,
+			    &content_hash, &candidate_size,
+			    view->tmux_client->session, 1, view);
+			free(candidate);
+			if (view->state_hash == content_hash)
+				continue;
+			/* Do not acknowledge a per-view transition while this frontend
+			 * still has an older coalesced invalidation in flight. Once its
+			 * snapshot request clears the pending flag, the next sync observes
+			 * this hash again and emits the required follow-up invalidation. */
+			if (client->state_invalidation_pending)
+				continue;
+			view_state_changed = 1;
+			view->state_hash = content_hash;
+		}
+	}
 
 	candidate = engine_mux_build_snapshot(engine_mux_revision,
 	    &content_hash, &candidate_size, NULL, 0, NULL);
 	if (engine_mux_snapshot != NULL &&
-	    content_hash == engine_mux_snapshot_hash) {
+	    content_hash == engine_mux_snapshot_hash && !view_state_changed) {
 		free(candidate);
 		engine_mux_notify_grid_clients();
 		engine_mux_notify_ui_clients();
@@ -2019,7 +2045,7 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	}
 	if (type == ENGINE_MUX_UI_REQUEST) {
 		struct json_object *root, *model;
-		struct engine_mux_view *view, *other_view;
+		struct engine_mux_view *view;
 		const char *schema, *model_text;
 		u_int view_id;
 		size_t model_size;
@@ -2061,8 +2087,6 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 			engine_mux_client_free(client);
 			return;
 		}
-		TAILQ_FOREACH(other_view, &client->views, entry)
-			other_view->ui_subscribed = 0;
 		view->ui_subscribed = 1;
 		view->ui_hash = engine_mux_ui_model_hash(model);
 		json_object_put(model);

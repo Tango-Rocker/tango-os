@@ -117,8 +117,16 @@ output renderer. Each output now also owns a validated view-addressed UI model
 and renderer for status rows, menus, messages, and prompts. UI invalidations
 are retained per view, revision races settle before state publication, and a
 nonfocused session-specific status update advances only its output renderer.
-Focused-output input promotion, terminal image transport, direct-KMS clipping,
-final hardware acceptance, and legacy cutover remain open. Native
+The frontend retains UI subscriptions for every registered output instead of
+replacing the previous subscriber. Keyboard frames carry the focused output
+model's pane ID and generation; pointer hit testing uses that output's UI
+geometry, and a drag remains bound to its originating view. Focus changes
+settle every affected output model before input resumes. Presentations,
+transients, and explicit pane previews resolve the pane's owning output even
+when it is not focused. The deterministic two-session contract maps a Wayland
+client and an image only on the nonfocused output while proving focused input
+identity is unchanged. Terminal image transport, direct-KMS clipping, final
+hardware acceptance, and legacy cutover remain open. Native
 `game` is now an
 authoritative launch/split presentation that survives respawn.
 `eos-app pane launch|split|view|signal|respawn|list` routes directly to
