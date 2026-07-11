@@ -64,7 +64,7 @@ These are historical proof artifacts only; they are not the active work path:
   `engineos-dev-shell-start` creates or reuses the authoritative `engineos`
   session, requires its frontend socket, disables launchpad bootstrap for that
   run, and fails closed if native mux preparation fails. The active package set
-  is `engineos-mux 3.6b-41`, `engineos-shell 0.1.0-68`,
+  is `engineos-mux 3.6b-41`, `engineos-shell 0.1.0-69`,
   `engineos-tools 0.1.0-51`, and `engineos-config 0.1.0-6`. The live tty1 shell
   has two registered graphical output clients, uses the DRM/libinput backend
   and radeonsi GPU glyph atlas, and starts no shell-owned foot client. The
@@ -104,6 +104,13 @@ These are historical proof artifacts only; they are not the active work path:
   retained zero frame failures and zero service restarts, used the radeonsi GPU
   glyph renderer, and produced no coredump. Cold-boot physical confirmation
   with tmux-continuum restore active remains required.
+  Native tmux menus now use a compositor overlay instead of an opaque terminal
+  target: GPU UI buffers prefer alpha-capable formats, clear unused cells
+  transparent, and are explicitly raised above pane scene nodes after layout
+  changes. The full GLES2/radeonsi mux contract passes its menu model, render,
+  and click paths; the live package exposes the active 24x6 menu model with
+  zero output frame failures and zero service restarts. Physical confirmation
+  of the corrected right-click appearance remains required.
   Ctrl-modified keys now use tmux names such as `C-b` and `C-c`
   instead of embedded control bytes, rejected keys no longer terminate the
   compositor, and input-device teardown no longer detaches a pointer already
@@ -139,7 +146,7 @@ These are historical proof artifacts only; they are not the active work path:
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
   `engineos-mux 3.6b-41` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-68`, and native mode is the live EngineDev desktop
+  `engineos-shell 0.1.0-69`, and native mode is the live EngineDev desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The

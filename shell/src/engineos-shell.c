@@ -2899,6 +2899,7 @@ static bool create_mux_output_scene(struct engineos_shell_output *output,
 		return false;
 	}
 	set_terminal_scene_buffer(output->mux_ui_scene, output->mux_ui_renderer);
+	wlr_scene_node_raise_to_top(&output->mux_ui_scene->node);
 	output->mux_snapshot.ui.changed = false;
 	if (output->mux_view_id == server->mux_client.primary_view_id) {
 		server->mux_ui_scene = output->mux_ui_scene;
@@ -3136,6 +3137,10 @@ static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
 			server->mux_terminal_width = output->mux_ui_stats.width;
 			server->mux_terminal_height = output->mux_ui_stats.height;
 		}
+		/* Pane scene nodes may be added after the UI node during layout
+		 * changes. Menus and prompts are compositor overlays and must remain
+		 * above every pane on their owning output. */
+		wlr_scene_node_raise_to_top(&output->mux_ui_scene->node);
 		if (!output->mux_snapshot.ui.changed)
 			continue;
 		struct engineos_mux_client output_ui_client;

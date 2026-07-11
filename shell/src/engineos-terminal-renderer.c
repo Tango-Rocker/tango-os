@@ -659,8 +659,12 @@ static const struct wlr_drm_format *terminal_buffer_format(
 		terminal->renderer, terminal->allocator->buffer_caps);
 	if (formats == NULL) return NULL;
 	const uint32_t preferred[] = {
-		DRM_FORMAT_XRGB8888, DRM_FORMAT_XBGR8888,
+		/* UI renderers share this allocator path with pane renderers. Prefer
+		 * alpha-capable targets so status, prompt, and menu cells can overlay
+		 * pane scenes without an opaque full-output background. Pane cells are
+		 * still explicitly rendered opaque. */
 		DRM_FORMAT_ARGB8888, DRM_FORMAT_ABGR8888,
+		DRM_FORMAT_XRGB8888, DRM_FORMAT_XBGR8888,
 	};
 	for (size_t index = 0; index < sizeof(preferred) / sizeof(preferred[0]); index++) {
 		const struct wlr_drm_format *format =
@@ -853,9 +857,12 @@ static bool gpu_update(struct engineos_terminal_renderer *terminal,
 		snprintf(error, error_size, "failed to begin GPU terminal render pass");
 		return false;
 	}
-	if (full)
+	if (full) {
+		bool ui_overlay = client->grid_columns == 0 && client->grid_rows == 0;
 		pass_rect(pass, 0, 0, width, height,
-			palette_colour(9, false), 1.0f, NULL);
+			ui_overlay ? 0 : palette_colour(9, false),
+			ui_overlay ? 0.0f : 1.0f, NULL);
+	}
 	else
 		pass_copy_target(terminal, pass, source, width, height);
 	for (uint32_t y = 0; y < client->grid_rows; y++) {
