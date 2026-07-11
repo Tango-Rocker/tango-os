@@ -3695,8 +3695,15 @@ static bool create_mux_image_preview(struct engineos_shell_server *server,
 	size_t encoded_size = 0;
 	if (!engineos_mux_client_request_image(&server->mux_client, pane->pane_id,
 			pane->generation, pane->image_id, pane->image_bytes,
-			&encoded, &encoded_size, error, error_size))
+			&encoded, &encoded_size, error, error_size)) {
+		if (server->mux_client.last_image_resync_required) {
+			wlr_log(WLR_INFO,
+				"mux image fetch superseded pane=%%%u generation=%u image_id=%u; snapshot resync deferred",
+				pane->pane_id, pane->generation, pane->image_id);
+			return true;
+		}
 		return false;
+	}
 	int image_width = 0, image_height = 0;
 	struct wlr_buffer *buffer = engineos_image_decode_memory(encoded,
 		encoded_size, pane->image_mime, &image_width, &image_height,
@@ -3779,7 +3786,7 @@ static bool sync_native_preview_leases(struct engineos_shell_server *server,
 	if (server->mux_mode != ENGINEOS_MUX_NATIVE)
 		return true;
 	struct engineos_preview_surface *preview, *tmp;
-	bool removed = false;
+	bool changed = false;
 	wl_list_for_each_safe(preview, tmp, &server->previews, link) {
 		if (!preview->native_pane)
 			continue;
@@ -3812,7 +3819,7 @@ static bool sync_native_preview_leases(struct engineos_shell_server *server,
 			wl_list_remove(&preview->link);
 			reset_image_surface(preview);
 			free(preview);
-			removed = true;
+			changed = true;
 			continue;
 		}
 		if (preview->scene_buffer->node.parent != output_scene->tree)
@@ -3867,9 +3874,16 @@ static bool sync_native_preview_leases(struct engineos_shell_server *server,
 					error[0] != '\0' ? error : "output scene unavailable");
 				return false;
 			}
+			if (server->mux_client.last_image_resync_required) {
+				if (server->mux_snapshot_retry_timer != NULL)
+					wl_event_source_timer_update(
+						server->mux_snapshot_retry_timer, 1);
+				continue;
+			}
+			changed = true;
 		}
 	}
-	if (removed) {
+	if (changed) {
 		write_shell_state(server,
 			reason != NULL ? reason : "native-preview-lease-lost");
 		schedule_outputs(server);

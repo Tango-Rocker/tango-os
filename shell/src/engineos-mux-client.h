@@ -166,6 +166,7 @@ struct engineos_mux_client {
 	uint32_t last_ui_invalidated_view_id;
 	bool state_invalidated_pending;
 	bool last_request_rejected;
+	bool last_image_resync_required;
 	bool ready;
 };
 

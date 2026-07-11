@@ -2447,6 +2447,7 @@ bool engineos_mux_client_request_image(struct engineos_mux_client *client,
 		uint32_t pane_id, uint32_t generation, uint32_t image_id,
 		uint32_t expected_bytes, uint8_t **data, size_t *size,
 		char *error, size_t error_size) {
+	client->last_image_resync_required = false;
 	if (generation == 0 || image_id == 0 || expected_bytes == 0 ||
 			expected_bytes > ENGINE_MUX_IMAGE_BYTES_MAX || data == NULL || size == NULL) {
 		snprintf(error, error_size, "invalid pane image request");
@@ -2544,11 +2545,20 @@ bool engineos_mux_client_request_image(struct engineos_mux_client *client,
 				json[length] = '\0';
 				struct json_object *root = json_tokener_parse(json);
 				free(json);
+				struct json_object *code_object = NULL;
 				struct json_object *message_object = NULL;
+				const char *code_text = "";
 				const char *message_text = "mux server rejected pane image request";
+				if (root != NULL && json_object_object_get_ex(root, "code",
+						&code_object))
+					code_text = json_object_get_string(code_object);
 				if (root != NULL && json_object_object_get_ex(root, "message",
 						&message_object))
 					message_text = json_object_get_string(message_object);
+				if (strcmp(code_text, "image-resync-required") == 0) {
+					client->last_image_resync_required = true;
+					client->state_invalidated_pending = true;
+				}
 				snprintf(error, error_size, "%s", message_text);
 				if (root != NULL)
 					json_object_put(root);

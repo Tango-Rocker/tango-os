@@ -1972,6 +1972,51 @@ PY
 		tail -100 "$fixture/shell-native.log" >&2 || true
 		die "simultaneous pane previews were not keyed to their panes and output lease"
 	}
+	for replacement in {1..12}; do
+		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			pane-image -t "$shell_pane_id" show "$preview_large_png" \
+			"rapid-preview-$replacement"
+	done
+	for _ in {1..200}; do
+		kill -0 "$shell_pid" >/dev/null 2>&1 &&
+			jq -e --arg pane "$shell_pane_id" \
+			'any(.previews[]; .pane_id == $pane and .mux_owned and
+			  .owner == "rapid-preview-12")' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	kill -0 "$shell_pid" >/dev/null 2>&1 || {
+		tail -120 "$fixture/shell-native.log" >&2 || true
+		die "rapid pane image replacement terminated the native shell"
+	}
+	jq -e --arg pane "$shell_pane_id" \
+		'any(.previews[]; .pane_id == $pane and .mux_owned and
+		  .owner == "rapid-preview-12")' \
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '{previews,mux:{panes:.mux.panes},last_reason}' \
+			"$fixture/engineos/shell-state.json" >&2 || true
+		tail -120 "$fixture/shell-native.log" >&2 || true
+		die "rapid pane image replacement did not converge on the latest image"
+	}
+	grep -F 'mux image fetch superseded' "$fixture/shell-native.log" >/dev/null ||
+		die "rapid pane image replacement did not exercise image resynchronization"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		ENGINEOS_MUX_MODE=native ENGINEOS_MUX_BIN="$mux_bin" \
+		ENGINEOS_PREVIEW_OWNER="native-mux-lease-proof" \
+		TMUX_PANE="$shell_pane_id" \
+		"$ROOT/tools/engineos/engine-image-preview" --view "$preview_large_png"
+	for _ in {1..100}; do
+		jq -e --arg pane "$shell_pane_id" \
+			'any(.previews[]; .pane_id == $pane and .mux_owned and
+			  .owner == "native-mux-lease-proof")' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg pane "$shell_pane_id" \
+		'any(.previews[]; .pane_id == $pane and .mux_owned and
+		  .owner == "native-mux-lease-proof")' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "rapid pane image regression did not restore the owner-scoped fixture"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		pane-presentation -t "$shell_pane_id" console
 	for _ in {1..100}; do
@@ -3499,6 +3544,8 @@ run_image_preview() {
   local shell_pid=""
   local gui_pid=""
   local pending_pid=""
+  local ENGINEOS_MUX_MODE=legacy
+  export ENGINEOS_MUX_MODE
 
   cleanup_image_preview() {
     if [[ -n "$shell_pid" ]]; then

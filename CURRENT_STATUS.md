@@ -64,7 +64,7 @@ These are historical proof artifacts only; they are not the active work path:
   `engineos-dev-shell-start` creates or reuses the authoritative `engineos`
   session, requires its frontend socket, disables launchpad bootstrap for that
   run, and fails closed if native mux preparation fails. The active package set
-  is `engineos-mux 3.6b-41`, `engineos-shell 0.1.0-74`,
+  is `engineos-mux 3.6b-41`, `engineos-shell 0.1.0-75`,
   `engineos-tools 0.1.0-52`, and `engineos-config 0.1.0-6`. The live tty1 shell
   has two registered graphical output clients, uses the DRM/libinput backend
   and radeonsi GPU glyph atlas, and starts no shell-owned foot client. The
@@ -185,6 +185,15 @@ These are historical proof artifacts only; they are not the active work path:
   Pane `%6` independently resolves through `/dev/pts/1` to
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
+  Repeated Quick View selection previously exposed an image transport race:
+  replacing a multi-chunk image during its fetch returned the correct
+  `image-resync-required` response, but the shell treated it as fatal and
+  terminated the graphical session. Shell `0.1.0-75` now defers that stale
+  fetch, schedules an authoritative snapshot retry, and renders the newest
+  image without requiring another input event. The native radeonsi/GLES2 mux
+  contract drives 12 rapid replacements, observes the superseded-fetch path,
+  requires convergence on the final image, and passes without terminating the
+  compositor.
 - Native graphical mux migration is installed side by side as
   `engineos-mux 3.6b-41` with the decoder/renderer/control boundary in
   `engineos-shell 0.1.0-73`, and native mode is the live EngineDev desktop
@@ -271,7 +280,7 @@ These are historical proof artifacts only; they are not the active work path:
   contract passes through the local AMD render node with GLES2, `radeonsi`, a
   nonblank target readback, and a later frame touching fewer cells than the
   full grid; pixman is explicitly labeled `cpu-pixman-smoke` rather than
-  silently accepted as hardware. Installed `engineos-shell 0.1.0-74` passes
+  silently accepted as hardware. Installed `engineos-shell 0.1.0-75` passes
   the full native mux contract on AMD/radeonsi as
   `gpu-fcft-atlas-gles2`. A live two-output proof retained 192 canonical
   columns, rendered box drawing, Greek, Cyrillic, CJK, color emoji, combining

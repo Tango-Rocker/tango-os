@@ -222,7 +222,10 @@ eos-proof mc-preview
 
 MC Quick View replaces the same owner-scoped preview as selection changes.
 Old watcher processes cannot hide a newer preview. Unmodified `F3` closes the
-visible shell-owned preview or wallpaper surface.
+visible shell-owned preview or wallpaper surface. If selection changes while a
+multi-chunk image is still transferring, the shell treats the superseded image
+identity as a snapshot resynchronization, fetches the latest image, and keeps
+the compositor session alive.
 
 ## Input And Focus
 
