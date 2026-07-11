@@ -11,6 +11,16 @@ This is the place for useful tangents. Add ideas here instead of expanding the c
 
 ## Later Ideas
 
+### Native Ctrl+C Teardown Safety
+
+Why: an unsupported graphical `Ctrl+C` key currently terminates the native
+shell, and teardown can then SIGSEGV in `wlr_cursor_detach_input_device` from
+`pointer_destroy`. Normal pane signals must not take down tty1, and recovery
+cleanup must be safe even after an input-routing error.
+
+Likely phase: current native-mux hardening, immediately after physical refresh
+acceptance and before legacy-path removal.
+
 ### Shell Screen Capture
 
 Why: live MC and GUI routing can be proven through shell geometry/state logs,

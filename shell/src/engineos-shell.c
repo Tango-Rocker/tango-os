@@ -2856,6 +2856,12 @@ static bool create_mux_output_scene(struct engineos_shell_output *output,
 		snprintf(error, error_size, "failed to create mux output UI scene");
 		return false;
 	}
+	output->mux_snapshot.ui.changed = false;
+	if (output->mux_view_id == server->mux_client.primary_view_id) {
+		server->mux_ui_scene = output->mux_ui_scene;
+		server->mux_terminal_width = output->mux_ui_stats.width;
+		server->mux_terminal_height = output->mux_ui_stats.height;
+	}
 	return true;
 }
 
@@ -3005,9 +3011,15 @@ static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
 				(int)render_client.grid_columns;
 			int cell_height = output_scene->stats.height /
 				(int)render_client.grid_rows;
+			/*
+			 * The terminal renderer alternates between two GPU buffers. Supplying
+			 * only cell damage here allowed the DRM scene output to retain the
+			 * previous backing buffer until unrelated whole-scene damage occurred.
+			 * GPU drawing remains cell-damaged; the scene buffer swap itself must be
+			 * treated as wholly changed so the new target reaches scanout.
+			 */
 			wlr_scene_buffer_set_buffer_with_damage(output_scene->terminal_scene,
-				output_scene->buffer,
-				engineos_terminal_renderer_damage(output_scene->renderer));
+				output_scene->buffer, NULL);
 			wlr_scene_node_set_position(&output_scene->tree->node,
 				(int)pane->left * cell_width, (int)pane->top * cell_height);
 			wlr_scene_node_set_enabled(&output_scene->tree->node, pane->visible);
@@ -3073,6 +3085,13 @@ static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
 				!output->mux_snapshot.ui.ready ||
 				output->mux_snapshot.ui.invalidated)
 			continue;
+		if (output->mux_view_id == server->mux_client.primary_view_id) {
+			server->mux_ui_scene = output->mux_ui_scene;
+			server->mux_terminal_width = output->mux_ui_stats.width;
+			server->mux_terminal_height = output->mux_ui_stats.height;
+		}
+		if (!output->mux_snapshot.ui.changed)
+			continue;
 		struct engineos_mux_client output_ui_client;
 		view_ui_render_client(server, &output->mux_snapshot.ui,
 			&output_ui_client);
@@ -3086,8 +3105,7 @@ static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
 		engineos_terminal_renderer_stats(output->mux_ui_renderer,
 			&output->mux_ui_stats);
 		wlr_scene_buffer_set_buffer_with_damage(output->mux_ui_scene,
-			engineos_terminal_renderer_buffer(output->mux_ui_renderer),
-			engineos_terminal_renderer_damage(output->mux_ui_renderer));
+			engineos_terminal_renderer_buffer(output->mux_ui_renderer), NULL);
 		output->mux_snapshot.ui.changed = false;
 		if (output->mux_view_id == server->mux_client.primary_view_id) {
 			server->mux_ui_scene = output->mux_ui_scene;
@@ -8824,7 +8842,9 @@ int main(int argc, char **argv) {
 	server.active_slot = ENGINEOS_SURFACE_TERMINAL;
 	server.pending_slot = ENGINEOS_SURFACE_UNKNOWN;
 	apply_mode_environment(mode);
-	wlr_log_init(WLR_DEBUG, NULL);
+	const char *wlr_debug = getenv("ENGINEOS_WLR_DEBUG");
+	wlr_log_init(wlr_debug != NULL && strcmp(wlr_debug, "1") == 0 ?
+		WLR_DEBUG : WLR_INFO, NULL);
 	if (!init_shell_state_path(&server)) {
 		fprintf(stderr, "engineos-shell: failed to allocate shell state paths\n");
 		destroy_server(&server);

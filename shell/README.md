@@ -45,9 +45,11 @@ renderer, so the target fills the output instead of inheriting a stale 80x24
 grid. CPU-rasterized FreeType glyphs are cached in a colour-keyed
 GPU atlas. Flow-controlled server invalidations retain sparse cell coordinates
 for every subscribed pane, update only affected glyph/cursor neighbours with
-clipped GPU draws, and pass matching pixel damage to the owning pane scene; no
-polling process is involved. Pixman is an explicit
-`cpu-pixman-smoke` path, while GLES2 and Vulkan use the atlas path. Every
+clipped GPU draws. Because the renderer alternates backing buffers, each buffer
+swap damages the complete owning pane scene so DRM cannot retain the previous
+target until an unrelated scene change; no polling process is involved. Pixman
+is an explicit `cpu-pixman-smoke` path, while GLES2 and Vulkan use the atlas
+path. Every
 native output registers as a real tmux client, with one focused size owner, and
 keyboard events use tmux key names so prefixes and key tables remain
 authoritative in the server. Pointer clicks transfer focused size ownership;
@@ -111,6 +113,10 @@ then restores the native default desktop. Real Falkon, Quake, emergency
 release, tty2 recovery, and bare-metal restart acceptance also pass. The
 remaining migration work is removal of rollback-only helpers followed by the
 final `/usr/bin/tmux` replacement.
+
+Wlroots logging defaults to `INFO` for the live shell. Set
+`ENGINEOS_WLR_DEBUG=1` only for a bounded diagnostic run; debug mode includes
+per-frame DRM and scene messages and can grow the shell log quickly.
 
 ## Surface Model
 

@@ -64,7 +64,7 @@ These are historical proof artifacts only; they are not the active work path:
   `engineos-dev-shell-start` creates or reuses the authoritative `engineos`
   session, requires its frontend socket, disables launchpad bootstrap for that
   run, and fails closed if native mux preparation fails. The active package set
-  is `engineos-mux 3.6b-38`, `engineos-shell 0.1.0-56`,
+  is `engineos-mux 3.6b-38`, `engineos-shell 0.1.0-60`,
   `engineos-tools 0.1.0-51`, and `engineos-config 0.1.0-6`. The live tty1 shell
   has two registered graphical output clients, uses the DRM/libinput backend
   and radeonsi GPU glyph atlas, and starts no shell-owned foot client. The
@@ -73,9 +73,18 @@ These are historical proof artifacts only; they are not the active work path:
   fixed command clients hanging behind hook subprocesses. Graphical view
   registration now derives its canonical grid from the output and actual font
   metrics: each live 1920x1080 output owns a 192x51 view with a 1920x1050 pane
-  target instead of the stale 80x24, 800x504 target. A no-pointer-input proof
-  requires grid damage to advance the renderer and DRM commits. Legacy helpers and
-  rollback code still exist in the packages and are the next deletion phase.
+  target instead of the stale 80x24, 800x504 target. Native GPU refresh now
+  damages the complete wlroots scene node whenever its double-buffered terminal
+  target changes, while retaining sparse cell damage inside the GPU draw. The
+  output-sized UI target redraws only when tmux UI state changes instead of on
+  every terminal update. Wlroots debug tracing is opt-in through
+  `ENGINEOS_WLR_DEBUG=1`; the prior always-debug path grew the live shell log to
+  2.6 GB and coincided with libinput lag warnings. Live `0.1.0-60` measurements
+  show two 1920x1050 pane targets, advancing renderer and DRM commits, idle UI
+  frame counts, zero commit failures, no new debug-log growth, and about 3% shell
+  CPU. Physical immediate-refresh and pointer-smoothness confirmation remains
+  required. Legacy helpers and rollback code still exist in the packages and
+  are the next deletion phase.
 - MC Quick View now routes through an exact tmux client identity instead of a
   stale terminal-role environment variable. The live `eos-proof mc-preview`
   run from pane `%3` passed its installed image contract, IPC ping, and real
@@ -87,7 +96,7 @@ These are historical proof artifacts only; they are not the active work path:
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
   `engineos-mux 3.6b-38` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-56`, and native mode is the live EngineDev desktop
+  `engineos-shell 0.1.0-60`, and native mode is the live EngineDev desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
@@ -391,6 +400,9 @@ These are historical proof artifacts only; they are not the active work path:
 
 ## Not Yet Proven
 
+- Manual physical confirmation that native terminal output appears immediately
+  without switching monitor or tmux window, and that pointer motion is smooth,
+  with `engineos-shell 0.1.0-60` on both live DRM outputs.
 - Runtime launchpad with user-provided Quake assets, including a mapped live
   Quake surface in Runtime.
 - Interactive Quake keyboard, mouse, and audible audio in a live Runtime
