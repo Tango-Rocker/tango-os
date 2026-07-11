@@ -172,6 +172,7 @@ run_mux() {
 	local pane_scope="" pane_app_pid="" pane_state="" split_pane_id=""
 	local pane_shell_pid="" pane_foreground_pid=""
 	local wayland_display="" unscoped_pid="" scoped_client_pid=""
+	local primary_surface_id="" secondary_surface_id=""
 	local user_runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 	local user_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$user_runtime/bus}"
 
@@ -267,7 +268,8 @@ run_mux() {
 		(.capabilities | index("ui-invalidate-v1")) and
 		(.capabilities | index("tmux-mouse-v1")) and
 		(.capabilities | index("pane-presentation-v1")) and
-		(.capabilities | index("presentation-resolve-v1"))' \
+		(.capabilities | index("presentation-resolve-v1")) and
+		(.capabilities | index("pane-surface-select-v1"))' \
 		"$fixture/hello.json" >/dev/null ||
 		die "mux protocol was not served by engine-mux"
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot >"$fixture/first.json"
@@ -355,9 +357,26 @@ run_mux() {
 		presentation-map "$pane_id" 1 "$pane_app_pid" 1003 toplevel >/dev/null
 	[[ "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		display-message -p -t "$pane_id" \
-		'#{pane_presentation}|#{pane_view_mode}|#{pane_presentation_mapped}|#{pane_surface_count}')" == \
-		'wayland|presentation|1|2' ]] ||
+		'#{pane_presentation}|#{pane_view_mode}|#{pane_presentation_mapped}|#{pane_surface_count}|#{pane_active_surface}')" == \
+		'wayland|presentation|1|2|1003' ]] ||
 		die "mapped presentation did not expose two pane-local toplevel tabs"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		select-pane-surface -t "$pane_id" previous
+	[[ "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		display-message -p -t "$pane_id" '#{pane_active_surface}')" == 1001 ]] ||
+		die "previous pane-local surface tab was not selected"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		select-pane-surface -t "$pane_id" next
+	[[ "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		display-message -p -t "$pane_id" '#{pane_active_surface}')" == 1003 ]] ||
+		die "next pane-local surface tab was not selected"
+	if XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		select-pane-surface -t "$pane_id" 1002 \
+		>"$fixture/non-tab-select.out" 2>&1; then
+		die "pane-local tab selection accepted a popup surface"
+	fi
+	grep -F 'surface tab is not mapped' "$fixture/non-tab-select.out" >/dev/null ||
+		die "non-tab surface selection rejection was not explicit"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		pane-presentation -t "$pane_id" toggle
 	[[ "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
@@ -849,6 +868,49 @@ run_mux() {
 		tail -100 "$fixture/shell-native.log" >&2 || true
 		die "scoped Wayland client did not bind to its native mux pane"
 	}
+	primary_surface_id="$(jq -er '.windows[] | select(.bound == true and
+		.app_id == "engineos.presentation-proof") | .surface_id' \
+		"$fixture/engineos/shell-state.json")"
+	secondary_surface_id="$(jq -er '.windows[] | select(.bound == true and
+		.app_id == "engineos.presentation-tab-proof") | .surface_id' \
+		"$fixture/engineos/shell-state.json")"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		select-pane-surface -t "$shell_pane_id" previous
+	for _ in {1..100}; do
+		jq -e --argjson surface "$primary_surface_id" \
+			'.mux.presentation.active_surface_id == $surface and
+			 any(.windows[]; .bound == true and .app_id ==
+			   "engineos.presentation-proof" and .visible == true) and
+			 any(.windows[]; .bound == true and .surface_role == "transient" and
+			   .visible == true) and
+			 all(.windows[]; .bound == false or .app_id !=
+			   "engineos.presentation-tab-proof" or .visible == false)' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --argjson surface "$primary_surface_id" \
+		'.mux.presentation.active_surface_id == $surface and
+		 any(.windows[]; .bound == true and .surface_role == "transient" and
+		   .visible == true)' "$fixture/engineos/shell-state.json" >/dev/null ||
+		die "authoritative previous-tab selection did not activate its surface group"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		select-pane-surface -t "$shell_pane_id" next
+	for _ in {1..100}; do
+		jq -e --argjson surface "$secondary_surface_id" \
+			'.mux.presentation.active_surface_id == $surface and
+			 any(.windows[]; .bound == true and .app_id ==
+			   "engineos.presentation-tab-proof" and .visible == true) and
+			 all(.windows[]; .bound == false or .surface_role != "transient" or
+			   .visible == false)' "$fixture/engineos/shell-state.json" \
+			>/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --argjson surface "$secondary_surface_id" \
+		'.mux.presentation.active_surface_id == $surface and
+		 any(.windows[]; .bound == true and .app_id ==
+		   "engineos.presentation-tab-proof" and .visible == true)' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "authoritative next-tab selection did not activate its surface group"
 	scoped_client_pid="$(jq -er '.windows[] | select(.bound == true and
 		.app_id == "engineos.presentation-tab-proof") | .client_pid' \
 		"$fixture/engineos/shell-state.json")"

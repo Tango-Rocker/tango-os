@@ -45,6 +45,7 @@ struct engineos_mux_client {
 	char prefix2[32];
 	bool pane_presentation_mapped;
 	uint32_t pane_surface_tabs;
+	uint32_t pane_active_surface_id;
 	char *session_id;
 	uint32_t primary_view_id;
 	uint32_t grid_columns;

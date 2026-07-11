@@ -137,6 +137,7 @@ static bool parse_pane_presentation(struct engineos_mux_client *client,
 		struct json_object *pane, char *error, size_t error_size) {
 	struct json_object *presentation = NULL, *view_mode = NULL;
 	struct json_object *mapped = NULL, *surface_tabs = NULL;
+	struct json_object *active_surface_id = NULL;
 	if (!json_object_object_get_ex(pane, "presentation", &presentation) ||
 			!json_object_is_type(presentation, json_type_string) ||
 			!json_object_object_get_ex(pane, "view_mode", &view_mode) ||
@@ -144,16 +145,22 @@ static bool parse_pane_presentation(struct engineos_mux_client *client,
 			!json_object_object_get_ex(pane, "mapped", &mapped) ||
 			!json_object_is_type(mapped, json_type_boolean) ||
 			!json_object_object_get_ex(pane, "surface_tabs", &surface_tabs) ||
-			!json_object_is_type(surface_tabs, json_type_int)) {
+			!json_object_is_type(surface_tabs, json_type_int) ||
+			!json_object_object_get_ex(pane, "active_surface_id",
+				&active_surface_id) ||
+			!json_object_is_type(active_surface_id, json_type_int)) {
 		snprintf(error, error_size, "snapshot presentation contract is invalid");
 		return false;
 	}
 	const char *presentation_text = json_object_get_string(presentation);
 	const char *view_mode_text = json_object_get_string(view_mode);
 	int64_t tabs = json_object_get_int64(surface_tabs);
+	int64_t active_id = json_object_get_int64(active_surface_id);
 	if (strlen(presentation_text) >= sizeof(client->pane_presentation) ||
 			strlen(view_mode_text) >= sizeof(client->pane_view_mode) ||
-			tabs < 0 || tabs > UINT32_MAX) {
+			tabs < 0 || tabs > UINT32_MAX ||
+			active_id < 0 || active_id > UINT32_MAX ||
+			(tabs == 0 && active_id != 0) || (tabs > 0 && active_id == 0)) {
 		snprintf(error, error_size, "snapshot presentation state is invalid");
 		return false;
 	}
@@ -161,6 +168,7 @@ static bool parse_pane_presentation(struct engineos_mux_client *client,
 	strcpy(client->pane_view_mode, view_mode_text);
 	client->pane_presentation_mapped = json_object_get_boolean(mapped);
 	client->pane_surface_tabs = (uint32_t)tabs;
+	client->pane_active_surface_id = (uint32_t)active_id;
 	return true;
 }
 

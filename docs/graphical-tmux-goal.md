@@ -53,11 +53,14 @@ toplevels now inherit the owning pane and registered scope, remain clipped to
 that pane, and do not inflate its tab count. Extra independent toplevels become
 pane-local tab groups; the shell exposes their roles and visibility, keeps one
 group active, and promotes the primary plus its transient when the active tab
-closes. The installed deterministic contract proves this full surface-set
-lifecycle and protects pending launch scopes across the systemd-run PTY
-handoff. An explicit tab-selection command, multi-pane scene construction,
-leases, games/images, direct-KMS clipping/resize/zoom, final hardware
-acceptance, and legacy cutover remain open.
+closes. Tmux now stores the active surface ID and owns
+`select-pane-surface next|previous|ID`; snapshot invalidations drive the shell
+to activate only that toplevel and its transient group. The installed
+deterministic contract proves selection, invalid-role rejection, the full
+surface-set lifecycle, and pending launch scopes across the systemd-run PTY
+handoff. Multi-pane scene construction, leases, games/images, direct-KMS
+clipping/resize/zoom, final hardware acceptance, and legacy cutover remain
+open.
 
 ## Workstream 1: Integrate The Protocol Into Engine Mux
 
@@ -207,6 +210,10 @@ Provide these wrappers:
 - `eos-app pane view app|console|toggle`
 - `eos-app pane signal SIGNAL`
 - `eos-app pane list --json`
+
+The native `select-pane-surface [-t pane] next|previous|ID` command selects an
+authoritative pane-local toplevel tab and is available to graphical and text
+clients.
 
 Also:
 

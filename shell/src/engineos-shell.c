@@ -418,6 +418,8 @@ static void launch_or_activate_slot(struct engineos_shell_server *server,
 	enum engineos_surface_role role, const char *reason);
 static void write_shell_state(struct engineos_shell_server *server,
 	const char *reason);
+static struct engineos_shell_view *native_presentation_root(
+	struct engineos_shell_view *view);
 static bool init_preview_ipc(struct engineos_shell_server *server);
 static void close_preview_ipc(struct engineos_shell_server *server,
 	bool unlink_socket, bool free_path);
@@ -2485,8 +2487,10 @@ static void sync_native_presentation_visibility(
 		if (!view->mapped || !view->mux_bound ||
 				view->mux_pane_id != server->mux_client.pane_id)
 			continue;
-		bool enabled = presentation_visible &&
-			view->mux_presentation_visible;
+		struct engineos_shell_view *root = native_presentation_root(view);
+		view->mux_presentation_visible = root != NULL &&
+			root->view_id == server->mux_client.pane_active_surface_id;
+		bool enabled = presentation_visible && view->mux_presentation_visible;
 		wlr_scene_node_set_enabled(&view->scene_tree->node, enabled);
 		if (enabled)
 			active = view;
@@ -3488,9 +3492,10 @@ static void write_shell_state(struct engineos_shell_server *server,
 	json_write_string(file, server->mux_client.pane_presentation);
 	fprintf(file, ", \"view_mode\": ");
 	json_write_string(file, server->mux_client.pane_view_mode);
-	fprintf(file, ", \"mapped\": %s, \"surface_tabs\": %u, \"popups\": %u, \"terminal_visible\": %s}}",
+	fprintf(file, ", \"mapped\": %s, \"surface_tabs\": %u, \"active_surface_id\": %u, \"popups\": %u, \"terminal_visible\": %s}}",
 		server->mux_client.pane_presentation_mapped ? "true" : "false",
 		server->mux_client.pane_surface_tabs,
+		server->mux_client.pane_active_surface_id,
 		server->mux_popup_count,
 		strcmp(server->mux_client.pane_view_mode, "presentation") == 0 &&
 			server->mux_client.pane_presentation_mapped ? "false" : "true");

@@ -20,6 +20,8 @@ static enum cmd_retval cmd_respawn_pane_app_exec(struct cmd *,
     struct cmdq_item *);
 static enum cmd_retval cmd_split_pane_app_exec(struct cmd *,
     struct cmdq_item *);
+static enum cmd_retval cmd_select_pane_surface_exec(struct cmd *,
+    struct cmdq_item *);
 
 static u_int engine_split_serial;
 
@@ -71,6 +73,16 @@ const struct cmd_entry cmd_split_pane_app_entry = {
 	.target = { 't', CMD_FIND_PANE, 0 },
 	.flags = CMD_AFTERHOOK,
 	.exec = cmd_split_pane_app_exec
+};
+
+const struct cmd_entry cmd_select_pane_surface_entry = {
+	.name = "select-pane-surface",
+	.alias = NULL,
+	.args = { "t:", 1, 1, NULL },
+	.usage = CMD_TARGET_PANE_USAGE " next|previous|surface-id",
+	.target = { 't', CMD_FIND_PANE, 0 },
+	.flags = CMD_AFTERHOOK,
+	.exec = cmd_select_pane_surface_exec
 };
 
 const char *
@@ -130,6 +142,30 @@ engine_pane_surface_find(struct window_pane *wp, u_int id)
 			return (surface);
 	}
 	return (NULL);
+}
+
+static struct engine_pane_surface *
+engine_pane_surface_first_toplevel(struct window_pane *wp)
+{
+	struct engine_pane_surface *surface;
+
+	TAILQ_FOREACH(surface, &wp->engine_surfaces, entry) {
+		if (surface->role == ENGINE_PANE_SURFACE_TOPLEVEL)
+			return (surface);
+	}
+	return (NULL);
+}
+
+static struct engine_pane_surface *
+engine_pane_surface_last_toplevel(struct window_pane *wp)
+{
+	struct engine_pane_surface *surface, *last = NULL;
+
+	TAILQ_FOREACH(surface, &wp->engine_surfaces, entry) {
+		if (surface->role == ENGINE_PANE_SURFACE_TOPLEVEL)
+			last = surface;
+	}
+	return (last);
 }
 
 struct window_pane *
@@ -201,6 +237,7 @@ engine_pane_surface_map(struct window_pane *wp, pid_t pid, u_int id,
 	TAILQ_INSERT_TAIL(&wp->engine_surfaces, surface, entry);
 	if (role == ENGINE_PANE_SURFACE_TOPLEVEL) {
 		wp->engine_surface_count++;
+		wp->engine_active_surface_id = id;
 		wp->engine_mapped = 1;
 		wp->engine_launch_deadline = 0;
 		wp->engine_view_mode = ENGINE_PANE_VIEW_PRESENTATION;
@@ -221,10 +258,18 @@ engine_pane_surface_unmap(struct window_pane *wp, pid_t pid, u_int id,
 		return (-1);
 	}
 	if (surface->role == ENGINE_PANE_SURFACE_TOPLEVEL &&
-	    wp->engine_surface_count > 0)
+	    wp->engine_surface_count > 0) {
 		wp->engine_surface_count--;
+		if (wp->engine_active_surface_id == id)
+			wp->engine_active_surface_id = 0;
+	}
 	TAILQ_REMOVE(&wp->engine_surfaces, surface, entry);
 	free(surface);
+	if (wp->engine_active_surface_id == 0) {
+		surface = engine_pane_surface_first_toplevel(wp);
+		if (surface != NULL)
+			wp->engine_active_surface_id = surface->id;
+	}
 	if (wp->engine_surface_count == 0) {
 		wp->engine_mapped = 0;
 		wp->engine_view_mode = ENGINE_PANE_VIEW_CONSOLE;
@@ -242,6 +287,7 @@ engine_pane_reset_runtime(struct window_pane *wp, int preserve_command)
 	wp->engine_app_pgrp = 0;
 	wp->engine_launch_deadline = 0;
 	wp->engine_surface_count = 0;
+	wp->engine_active_surface_id = 0;
 	wp->engine_mapped = 0;
 	free(wp->engine_scope);
 	wp->engine_scope = NULL;
@@ -302,6 +348,7 @@ engine_pane_inject_launch(struct window_pane *wp, const char *command,
 	wp->engine_app_pgrp = 0;
 	wp->engine_launch_deadline = time(NULL) + 15;
 	wp->engine_surface_count = 0;
+	wp->engine_active_surface_id = 0;
 	wp->engine_mapped = 0;
 	engine_pane_changed(wp);
 	return (0);
@@ -372,6 +419,65 @@ cmd_pane_presentation_exec(struct cmd *self, struct cmdq_item *item)
 		cmdq_error(item, "unknown presentation mode: %s", mode);
 		return (CMD_RETURN_ERROR);
 	}
+	engine_pane_changed(wp);
+	return (CMD_RETURN_NORMAL);
+}
+
+static enum cmd_retval
+cmd_select_pane_surface_exec(struct cmd *self, struct cmdq_item *item)
+{
+	struct args *args = cmd_get_args(self);
+	struct window_pane *wp = cmdq_get_target(item)->wp;
+	const char *selector = args_string(args, 0), *errstr = NULL;
+	struct engine_pane_surface *surface, *current, *target = NULL;
+	struct engine_pane_surface *previous = NULL;
+	long long id;
+
+	if (wp->engine_presentation == ENGINE_PANE_TERMINAL ||
+	    wp->engine_surface_count == 0) {
+		cmdq_error(item, "pane has no graphical surface tabs");
+		return (CMD_RETURN_ERROR);
+	}
+	current = engine_pane_surface_find(wp, wp->engine_active_surface_id);
+	if (strcmp(selector, "next") == 0) {
+		if (current != NULL) {
+			for (surface = TAILQ_NEXT(current, entry); surface != NULL;
+			    surface = TAILQ_NEXT(surface, entry)) {
+				if (surface->role == ENGINE_PANE_SURFACE_TOPLEVEL) {
+					target = surface;
+					break;
+				}
+			}
+		}
+		if (target == NULL)
+			target = engine_pane_surface_first_toplevel(wp);
+	} else if (strcmp(selector, "previous") == 0) {
+		TAILQ_FOREACH(surface, &wp->engine_surfaces, entry) {
+			if (surface->role != ENGINE_PANE_SURFACE_TOPLEVEL)
+				continue;
+			if (surface == current) {
+				target = previous;
+				break;
+			}
+			previous = surface;
+		}
+		if (target == NULL)
+			target = engine_pane_surface_last_toplevel(wp);
+	} else {
+		id = strtonum(selector, 1, UINT_MAX, &errstr);
+		if (errstr == NULL)
+			target = engine_pane_surface_find(wp, (u_int)id);
+		if (target == NULL ||
+		    target->role != ENGINE_PANE_SURFACE_TOPLEVEL) {
+			cmdq_error(item, "surface tab is not mapped: %s", selector);
+			return (CMD_RETURN_ERROR);
+		}
+	}
+	if (target == NULL) {
+		cmdq_error(item, "pane has no graphical surface tabs");
+		return (CMD_RETURN_ERROR);
+	}
+	wp->engine_active_surface_id = target->id;
 	engine_pane_changed(wp);
 	return (CMD_RETURN_NORMAL);
 }

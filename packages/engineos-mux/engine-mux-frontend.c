@@ -931,10 +931,11 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 				evbuffer_add(buffer, ",\"app_command\":", 15);
 				engine_mux_json_string(buffer, pane->engine_command);
 				evbuffer_add_printf(buffer,
-				    ",\"app_pid\":%lld,\"mapped\":%s,\"surface_tabs\":%u}",
+				    ",\"app_pid\":%lld,\"mapped\":%s,\"surface_tabs\":%u,\"active_surface_id\":%u}",
 				    (long long)pane->engine_app_pgrp,
 				    pane->engine_mapped ? "true" : "false",
-				    pane->engine_surface_count);
+				    pane->engine_surface_count,
+				    pane->engine_active_surface_id);
 
 				engine_mux_hash_bytes(&hash, &session->id,
 				    sizeof session->id);
@@ -981,6 +982,8 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 				    sizeof pane->engine_mapped);
 				engine_mux_hash_bytes(&hash, &pane->engine_surface_count,
 				    sizeof pane->engine_surface_count);
+				engine_mux_hash_bytes(&hash, &pane->engine_active_surface_id,
+				    sizeof pane->engine_active_surface_id);
 				free(command);
 			}
 			free(layout);
@@ -1429,7 +1432,7 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 	size_t scrollback_size;
 	const char *hello =
 	    "{\"schema\":\"engine-mux/hello-v1\",\"server\":\"engine-mux\","
-	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\",\"ui-model-v1\",\"ui-invalidate-v1\",\"tmux-mouse-v1\",\"pane-presentation-v1\",\"presentation-resolve-v1\"]}";
+	    "\"tmux_baseline\":\"3.6b\",\"capabilities\":[\"layout-snapshot\",\"terminal-grid-v1\",\"grid-subscribe-v1\",\"pane-input-v1\",\"graphical-view-v1\",\"tmux-key-v1\",\"view-focus-v1\",\"ui-model-v1\",\"ui-invalidate-v1\",\"tmux-mouse-v1\",\"pane-presentation-v1\",\"presentation-resolve-v1\",\"pane-surface-select-v1\"]}";
 	const char *subscribe_ack =
 	    "{\"schema\":\"engine-mux/grid-subscribe-v1\",\"subscribed\":true}";
 	const char *input_ack =
