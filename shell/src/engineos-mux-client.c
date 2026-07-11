@@ -655,6 +655,35 @@ receive_again:
 	if (type == ENGINE_MUX_UI_INVALIDATED &&
 			payload_length == sizeof(struct engine_mux_ui_invalidation))
 		goto receive_again;
+	if (type == ENGINE_MUX_ERROR) {
+		char *json_text = malloc((size_t)payload_length + 1);
+		if (json_text == NULL) {
+			free(packet);
+			snprintf(error, error_size, "out of memory");
+			return false;
+		}
+		memcpy(json_text, packet + sizeof(frame), payload_length);
+		json_text[payload_length] = '\0';
+		struct json_object *root = json_tokener_parse(json_text);
+		free(json_text);
+		free(packet);
+		if (root == NULL) {
+			snprintf(error, error_size,
+				"terminal grid error payload is not JSON");
+			return false;
+		}
+		struct json_object *code = NULL, *message_object = NULL;
+		const char *server_code = "unknown";
+		const char *server_message = "mux server rejected terminal grid request";
+		if (json_object_object_get_ex(root, "code", &code))
+			server_code = json_object_get_string(code);
+		if (json_object_object_get_ex(root, "message", &message_object))
+			server_message = json_object_get_string(message_object);
+		snprintf(error, error_size, "terminal grid rejected (%s): %s",
+			server_code, server_message);
+		json_object_put(root);
+		return false;
+	}
 	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
 			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
 			type != ENGINE_MUX_GRID_SNAPSHOT ||
@@ -1048,10 +1077,51 @@ receive_again:
 		goto receive_again;
 	}
 	if (type == ENGINE_MUX_ERROR) {
+		char *json_text = malloc((size_t)length + 1);
+		if (json_text == NULL) {
+			free(packet);
+			snprintf(error, error_size, "out of memory");
+			return false;
+		}
+		memcpy(json_text, packet + sizeof(frame), length);
+		json_text[length] = '\0';
 		free(packet);
-		if (!request_grid(client, error, error_size)) return false;
-		*grid_changed = true;
-		return true;
+		struct json_object *root = json_tokener_parse(json_text);
+		free(json_text);
+		if (root == NULL) {
+			snprintf(error, error_size,
+				"grid damage error payload is not JSON");
+			return false;
+		}
+		struct json_object *code = NULL, *message_object = NULL;
+		const char *server_code = "unknown";
+		const char *server_message = "mux server rejected grid damage request";
+		if (json_object_object_get_ex(root, "code", &code))
+			server_code = json_object_get_string(code);
+		if (json_object_object_get_ex(root, "message", &message_object))
+			server_message = json_object_get_string(message_object);
+		if (strcmp(server_code, "pane-not-found") == 0 ||
+				strcmp(server_code, "stale-generation") == 0) {
+			/* A state invalidation can race a pending grid invalidation. The
+			 * selected pane identity is no longer authoritative, so a full
+			 * state snapshot must choose its replacement. Re-requesting the
+			 * same dead pane turns normal tmux restore into a compositor exit. */
+			client->selected_grid_damage_pending = false;
+			client->state_invalidated_pending = true;
+			*grid_changed = true;
+			json_object_put(root);
+			return true;
+		}
+		if (strcmp(server_code, "grid-resync-required") == 0) {
+			json_object_put(root);
+			if (!request_grid(client, error, error_size)) return false;
+			*grid_changed = true;
+			return true;
+		}
+		snprintf(error, error_size, "grid damage rejected (%s): %s",
+			server_code, server_message);
+		json_object_put(root);
+		return false;
 	}
 	if (type == ENGINE_MUX_STATE_INVALIDATED && length == 0) {
 		free(packet);

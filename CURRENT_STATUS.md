@@ -64,7 +64,7 @@ These are historical proof artifacts only; they are not the active work path:
   `engineos-dev-shell-start` creates or reuses the authoritative `engineos`
   session, requires its frontend socket, disables launchpad bootstrap for that
   run, and fails closed if native mux preparation fails. The active package set
-  is `engineos-mux 3.6b-41`, `engineos-shell 0.1.0-67`,
+  is `engineos-mux 3.6b-41`, `engineos-shell 0.1.0-68`,
   `engineos-tools 0.1.0-51`, and `engineos-config 0.1.0-6`. The live tty1 shell
   has two registered graphical output clients, uses the DRM/libinput backend
   and radeonsi GPU glyph atlas, and starts no shell-owned foot client. The
@@ -88,7 +88,23 @@ These are historical proof artifacts only; they are not the active work path:
   the AMD/radeonsi two-output contract also passes. Pointer smoothness and pane
   refresh after the initial view transition are physically confirmed. Physical
   confirmation that the startup frame refreshes without one view switch is
-  still required. Ctrl-modified keys now use tmux names such as `C-b` and `C-c`
+  still required. The current boot also isolated the apparent first-boot shell
+  crash: the initial process exited with code 1 while tmux-continuum was
+  replacing pane `%0`, and its pending grid-damage request received the
+  expected `pane-not-found` response. The client incorrectly retried that dead
+  identity and reported it as an invalid grid frame; systemd's second process
+  then attached successfully. Shell `0.1.0-68` treats only
+  `pane-not-found`/`stale-generation` damage responses as a request for a fresh
+  authoritative snapshot, retains full-grid resync for stale grid revisions,
+  and still fails malformed or unknown protocol errors. A deterministic real
+  mux regression now connects, removes a disposable selected pane before view
+  registration, and proves recovery; the full native mux contract passes. The
+  installed package also passed a controlled DRM/libinput restart on its first
+  process: both 1920x1080 outputs registered, converged on one mux revision,
+  retained zero frame failures and zero service restarts, used the radeonsi GPU
+  glyph renderer, and produced no coredump. Cold-boot physical confirmation
+  with tmux-continuum restore active remains required.
+  Ctrl-modified keys now use tmux names such as `C-b` and `C-c`
   instead of embedded control bytes, rejected keys no longer terminate the
   compositor, and input-device teardown no longer detaches a pointer already
   being destroyed by wlroots. The installed mux server also acknowledges keys
@@ -123,7 +139,7 @@ These are historical proof artifacts only; they are not the active work path:
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
   `engineos-mux 3.6b-41` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-67`, and native mode is the live EngineDev desktop
+  `engineos-shell 0.1.0-68`, and native mode is the live EngineDev desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The

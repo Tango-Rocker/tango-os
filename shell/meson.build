@@ -88,3 +88,13 @@ tmux_key_test = executable(
   dependencies: [wlroots_dep, xkbcommon_dep],
 )
 test('tmux-key-name', tmux_key_test)
+
+mux_client_pane_race_test = executable(
+  'engineos-mux-client-pane-race-test',
+  [
+    'tests/mux-client-pane-race.c',
+    'src/engineos-mux-client.c',
+  ],
+  include_directories: [include_directories('src'), mux_inc],
+  dependencies: [json_c_dep],
+)

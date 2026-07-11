@@ -992,6 +992,42 @@ PY
 	grep -F 'native mux handshake failed' "$fixture/shell-fail.log" >/dev/null ||
 		die "engineos-shell native mux failure was not explicit"
 
+	local pane_race_ready="$fixture/pane-race.ready"
+	local pane_race_go="$fixture/pane-race.go"
+	local pane_race_pid=""
+	local pane_race_target
+	pane_race_target="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" split-window -t contract:0 -P -F '#{pane_id}' \
+		'/bin/bash --noprofile --norc')"
+	XDG_RUNTIME_DIR="$fixture" \
+		"$shell_build_dir/engineos-mux-client-pane-race-test" \
+		"$fixture/engineos/mux.sock" "$pane_race_ready" "$pane_race_go" \
+		>"$fixture/pane-race.log" 2>&1 &
+	pane_race_pid=$!
+	for _ in {1..100}; do
+		[[ -s "$pane_race_ready" ]] && break
+		sleep 0.02
+	done
+	[[ -s "$pane_race_ready" ]] || {
+		cat "$fixture/pane-race.log" >&2 || true
+		die "pane lifecycle race client did not connect"
+	}
+	local stale_pane
+	stale_pane="$(<"$pane_race_ready")"
+	[[ "$stale_pane" == "$pane_race_target" ]] ||
+		die "pane lifecycle race client selected an unexpected pane"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -t "$stale_pane" 'printf STARTUP-PANE-RACE' Enter
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		kill-pane -t "$stale_pane"
+	: >"$pane_race_go"
+	wait "$pane_race_pid" || {
+		cat "$fixture/pane-race.log" >&2 || true
+		die "graphical view registration did not recover a removed startup pane"
+	}
+	grep -F 'pane-race-recovered' "$fixture/pane-race.log" >/dev/null ||
+		die "pane lifecycle race client did not report recovery"
+
 	XDG_RUNTIME_DIR="$fixture" ENGINEOS_STATE_DIR="$fixture/engineos" \
 		ENGINEOS_MUX_SOCKET="$fixture/engineos/mux.sock" \
 		WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=2 WLR_RENDERER="$shell_renderer" \
