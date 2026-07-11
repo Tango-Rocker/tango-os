@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <json-c/json.h>
+#include <poll.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -228,6 +229,136 @@ static int request_grid(int fd, uint32_t pane_id) {
 	printf("%s\n", json_object_to_json_string_ext(root, JSON_C_TO_STRING_PRETTY));
 	json_object_put(root);
 	free(packet);
+	return 0;
+}
+
+static int request_grid_revision(int fd, uint32_t pane_id, uint64_t request_id,
+		uint64_t *revision) {
+	struct engine_mux_grid_request request = {
+		.pane_id = htonl(pane_id), .generation = htonl(1),
+	};
+	struct engine_mux_frame_header frame = {
+		.magic = htonl(ENGINE_MUX_MAGIC),
+		.version = htons(ENGINE_MUX_PROTOCOL_VERSION),
+		.type = htons(ENGINE_MUX_GRID_REQUEST),
+		.request_id = host_to_be64(request_id),
+		.payload_length = htonl(sizeof(request)),
+	};
+	struct iovec parts[] = {
+		{.iov_base = &frame, .iov_len = sizeof(frame)},
+		{.iov_base = &request, .iov_len = sizeof(request)},
+	};
+	struct msghdr message = {.msg_iov = parts, .msg_iovlen = 2};
+	if (sendmsg(fd, &message, MSG_NOSIGNAL) < 0) return -1;
+	size_t capacity = sizeof(frame) + ENGINE_MUX_MAX_PAYLOAD;
+	unsigned char *packet = malloc(capacity);
+	if (packet == NULL) return -1;
+	ssize_t count = recv(fd, packet, capacity, 0);
+	if (count < (ssize_t)(sizeof(frame) + sizeof(struct engine_mux_grid_header))) {
+		free(packet); errno = EPROTO; return -1;
+	}
+	memcpy(&frame, packet, sizeof(frame));
+	struct engine_mux_grid_header header;
+	memcpy(&header, packet + sizeof(frame), sizeof(header));
+	uint32_t length = ntohl(frame.payload_length);
+	uint32_t columns = ntohl(header.columns), rows = ntohl(header.rows);
+	uint32_t cells = ntohl(header.cell_count);
+	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
+			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
+			ntohs(frame.type) != ENGINE_MUX_GRID_SNAPSHOT ||
+			ntohl(header.pane_id) != pane_id || ntohl(header.generation) != 1 ||
+			(columns != 0 && rows > UINT32_MAX / columns) ||
+			cells != columns * rows ||
+			length != sizeof(header) +
+				(size_t)cells * sizeof(struct engine_mux_grid_cell) ||
+			sizeof(frame) + length != (size_t)count) {
+		free(packet); errno = EPROTO; return -1;
+	}
+	*revision = be64_to_host(header.grid_revision);
+	free(packet);
+	return 0;
+}
+
+static int subscribe_grid_once(int fd, uint32_t pane_id, uint64_t revision,
+		uint64_t request_id) {
+	struct engine_mux_grid_damage_request request = {
+		.pane_id = htonl(pane_id), .generation = htonl(1),
+		.grid_revision = host_to_be64(revision),
+	};
+	struct engine_mux_frame_header frame = {
+		.magic = htonl(ENGINE_MUX_MAGIC),
+		.version = htons(ENGINE_MUX_PROTOCOL_VERSION),
+		.type = htons(ENGINE_MUX_GRID_SUBSCRIBE_REQUEST),
+		.request_id = host_to_be64(request_id),
+		.payload_length = htonl(sizeof(request)),
+	};
+	struct iovec parts[] = {
+		{.iov_base = &frame, .iov_len = sizeof(frame)},
+		{.iov_base = &request, .iov_len = sizeof(request)},
+	};
+	struct msghdr message = {.msg_iov = parts, .msg_iovlen = 2};
+	if (sendmsg(fd, &message, MSG_NOSIGNAL) < 0) return -1;
+	unsigned char packet[sizeof(frame) + 512];
+	ssize_t count = recv(fd, packet, sizeof(packet), 0);
+	if (count < (ssize_t)sizeof(frame)) { errno = EPROTO; return -1; }
+	memcpy(&frame, packet, sizeof(frame));
+	uint32_t length = ntohl(frame.payload_length);
+	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
+			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
+			ntohs(frame.type) != ENGINE_MUX_GRID_SUBSCRIBE_ACK ||
+			sizeof(frame) + length != (size_t)count) {
+		errno = EPROTO; return -1;
+	}
+	return 0;
+}
+
+static int request_multi_grid_proof(int fd, uint32_t first, uint32_t second) {
+	uint64_t first_revision, second_revision;
+	if (first == second ||
+			request_grid_revision(fd, first, 30, &first_revision) != 0 ||
+			request_grid_revision(fd, second, 31, &second_revision) != 0 ||
+			subscribe_grid_once(fd, first, first_revision, 32) != 0 ||
+			subscribe_grid_once(fd, second, second_revision, 33) != 0)
+		return -1;
+	fprintf(stderr, "multi-grid-ready\n");
+	fflush(stderr);
+	bool first_seen = false, second_seen = false;
+	for (int attempts = 0; attempts < 10 && (!first_seen || !second_seen);
+			attempts++) {
+		struct pollfd descriptor = {.fd = fd, .events = POLLIN};
+		if (poll(&descriptor, 1, 500) <= 0) continue;
+		unsigned char packet[sizeof(struct engine_mux_frame_header) +
+			sizeof(struct engine_mux_grid_request)];
+		ssize_t count = recv(fd, packet, sizeof(packet), 0);
+		if (count != (ssize_t)sizeof(packet)) { errno = EPROTO; return -1; }
+		struct engine_mux_frame_header frame;
+		struct engine_mux_grid_request invalidated;
+		memcpy(&frame, packet, sizeof(frame));
+		memcpy(&invalidated, packet + sizeof(frame), sizeof(invalidated));
+		if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
+				ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
+				ntohs(frame.type) != ENGINE_MUX_GRID_INVALIDATED ||
+				ntohl(frame.payload_length) != sizeof(invalidated) ||
+				ntohl(invalidated.generation) != 1) {
+			errno = EPROTO; return -1;
+		}
+		uint32_t pane_id = ntohl(invalidated.pane_id);
+		if (pane_id == first) first_seen = true;
+		else if (pane_id == second) second_seen = true;
+		else { errno = EPROTO; return -1; }
+	}
+	if (!first_seen || !second_seen) { errno = ETIMEDOUT; return -1; }
+	struct json_object *root = json_object_new_object();
+	json_object_object_add(root, "schema",
+		json_object_new_string("engine-mux/multi-grid-proof-v1"));
+	json_object_object_add(root, "subscriptions", json_object_new_int(2));
+	json_object_object_add(root, "first_pane", json_object_new_int64(first));
+	json_object_object_add(root, "second_pane", json_object_new_int64(second));
+	json_object_object_add(root, "first_invalidated", json_object_new_boolean(true));
+	json_object_object_add(root, "second_invalidated", json_object_new_boolean(true));
+	printf("%s\n", json_object_to_json_string_ext(root,
+		JSON_C_TO_STRING_PRETTY));
+	json_object_put(root);
 	return 0;
 }
 
@@ -1000,7 +1131,7 @@ static int request_presentation_resolve(int fd, pid_t pid) {
 }
 
 static void usage(FILE *stream, const char *program) {
-	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT|input PANE_ID BYTES|keys PANE_ID KEY...|focus-proof PANE_ID|ui PANE_ID [KEY...]|mouse PANE_ID EVENT BUTTON X Y MODIFIERS|mouse-sequence PANE_ID (EVENT BUTTON X Y MODIFIERS)...|mouse-ui PANE_ID (EVENT BUTTON X Y MODIFIERS)...|presentation-resolve PID|presentation-map PANE_ID GENERATION PID SURFACE_ID ROLE|presentation-unmap PANE_ID GENERATION PID SURFACE_ID\n", program);
+	fprintf(stream, "Usage: %s [--socket PATH] hello|snapshot|stale-command|grid PANE_ID|multi-grid-proof FIRST_PANE SECOND_PANE|damage PANE_ID REVISION|stale-grid PANE_ID|scrollback PANE_ID START COUNT|input PANE_ID BYTES|keys PANE_ID KEY...|focus-proof PANE_ID|ui PANE_ID [KEY...]|mouse PANE_ID EVENT BUTTON X Y MODIFIERS|mouse-sequence PANE_ID (EVENT BUTTON X Y MODIFIERS)...|mouse-ui PANE_ID (EVENT BUTTON X Y MODIFIERS)...|presentation-resolve PID|presentation-map PANE_ID GENERATION PID SURFACE_ID ROLE|presentation-unmap PANE_ID GENERATION PID SURFACE_ID\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -1025,6 +1156,7 @@ int main(int argc, char **argv) {
 	}
 	const char *command = argv[optind];
 	bool is_grid = strcmp(command, "grid") == 0;
+	bool is_multi_grid_proof = strcmp(command, "multi-grid-proof") == 0;
 	bool is_damage = strcmp(command, "damage") == 0;
 	bool is_stale_grid = strcmp(command, "stale-grid") == 0;
 	bool is_scrollback = strcmp(command, "scrollback") == 0;
@@ -1041,6 +1173,7 @@ int main(int argc, char **argv) {
 	size_t mouse_action_arguments = argc > optind + 2 ?
 		(size_t)(argc - optind - 2) : 0;
 	if ((is_grid && optind + 2 != argc) ||
+			(is_multi_grid_proof && optind + 3 != argc) ||
 			(is_damage && optind + 3 != argc) ||
 			(is_stale_grid && optind + 2 != argc) ||
 			(is_scrollback && optind + 4 != argc) ||
@@ -1054,7 +1187,7 @@ int main(int argc, char **argv) {
 			(is_presentation_resolve && optind + 2 != argc) ||
 			((is_mouse_sequence || is_mouse_ui) &&
 				(mouse_action_arguments == 0 || mouse_action_arguments % 5 != 0)) ||
-			(!is_grid && !is_damage && !is_stale_grid && !is_scrollback && !is_input && !is_keys && !is_focus_proof && !is_ui && !is_mouse && !is_mouse_sequence && !is_mouse_ui && !is_presentation_map && !is_presentation_unmap && !is_presentation_resolve &&
+			(!is_grid && !is_multi_grid_proof && !is_damage && !is_stale_grid && !is_scrollback && !is_input && !is_keys && !is_focus_proof && !is_ui && !is_mouse && !is_mouse_sequence && !is_mouse_ui && !is_presentation_map && !is_presentation_unmap && !is_presentation_resolve &&
 			 optind + 1 != argc)) {
 		usage(stderr, argv[0]);
 		return 2;
@@ -1072,6 +1205,26 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "engine-muxctl: connect %s: %s\n", socket_path, strerror(errno));
 		free(owned_socket);
 		return 1;
+	}
+	if (is_multi_grid_proof) {
+		uint32_t panes[2];
+		for (size_t index = 0; index < 2; index++) {
+			const char *text = argv[optind + 1 + (int)index];
+			if (*text == '%') text++;
+			char *end = NULL;
+			unsigned long parsed = strtoul(text, &end, 10);
+			if (*text == '\0' || *end != '\0' || parsed > UINT32_MAX) {
+				close(fd); free(owned_socket); return 2;
+			}
+			panes[index] = (uint32_t)parsed;
+		}
+		int result = request_multi_grid_proof(fd, panes[0], panes[1]);
+		if (result != 0)
+			fprintf(stderr, "engine-muxctl: multi-grid proof failed: %s\n",
+				strerror(errno));
+		close(fd);
+		free(owned_socket);
+		return result == 0 ? 0 : 1;
 	}
 	if (is_presentation_resolve) {
 		char *pid_end = NULL;

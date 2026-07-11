@@ -98,9 +98,9 @@ These are historical proof artifacts only; they are not the active work path:
   Pane `%6` independently resolves through `/dev/pts/1` to
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
-- Native graphical mux migration stage 1 is installed side by side as
-  `engineos-mux 3.6b-18` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-31`, but native mode is not yet the live desktop
+- Native graphical mux migration is installed side by side as
+  `engineos-mux 3.6b-23` with the decoder/renderer/control boundary in
+  `engineos-shell 0.1.0-35`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
@@ -162,7 +162,7 @@ These are historical proof artifacts only; they are not the active work path:
   resizing, ranged status-window selection, status-menu opening, and menu-item
   command activation. The shell routes pointer motion, buttons, and vertical
   scroll through that same boundary. The contract passes against the exact
-  `engineos-mux 3.6b-22` and `engineos-shell 0.1.0-34` package binaries. The
+  `engineos-mux 3.6b-23` and `engineos-shell 0.1.0-35` package binaries. The
   native renderer now keeps FreeType-rasterized, colour-keyed glyphs in a GPU
   texture atlas and draws them into double-buffered per-pane GPU targets.
   Sparse tmux cell damage is retained through the mux client, expanded only
@@ -175,6 +175,18 @@ These are historical proof artifacts only; they are not the active work path:
   full grid; pixman is explicitly labeled `cpu-pixman-smoke` rather than
   silently accepted as hardware. Direct-KMS native-mode clipping across
   multiple panes, resize, and zoom remains part of final hardware acceptance.
+  One frontend connection now subscribes to every active pane grid. The shell
+  retains those grids across authoritative snapshot refreshes, forces a full
+  resynchronization when canonical pane dimensions change, and renders each
+  pane under its own clipped wlroots scene subtree with a separate mux UI
+  overlay. Per-pane state evidence includes subscription readiness, grid
+  revision, pixel bounds, renderer, damage, and frame. The installed contract
+  proves two nonoverlapping pane scenes and independently advances a
+  nonselected pane's revision and render frame under both pixman smoke and the
+  local AMD/radeonsi GLES2 renderer. A pane application PID is no longer
+  exposed until systemd confirms it belongs to the registered transient scope,
+  closing the split-pane signal race without falling back to process-group
+  identity.
   The mux server now also owns compound pane presentation and view state,
   stable pane generations, globally unique transient user scopes, mapped
   surface roles, and pane-local toplevel counts. The installed native commands
@@ -224,8 +236,9 @@ These are historical proof artifacts only; they are not the active work path:
   nonoverlapping panes. Graphical signals, close, and the unmapped-launch
   timeout now signal the authoritative transient systemd scope through the user
   manager, eliminating the fast-map race and avoiding stale process-group
-  guesses. Complete per-pane scene construction and graphical presentation
-  leases are the next acceptance boundary.
+  guesses. Per-pane scene construction is now complete in headless contracts;
+  topology operations, direct-KMS clipping, and graphical presentation leases
+  are the next acceptance boundary.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).
 

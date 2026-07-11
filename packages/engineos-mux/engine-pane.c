@@ -144,6 +144,22 @@ out:
 	return (result < 0 ? -1 : 0);
 }
 
+static int
+engine_pane_pid_in_scope(struct window_pane *wp, pid_t pid)
+{
+	char *unit = NULL;
+	int matched;
+
+	if (pid <= 0 || wp->engine_scope == NULL ||
+	    sd_pid_get_user_unit(pid, &unit) < 0 || unit == NULL) {
+		free(unit);
+		return (0);
+	}
+	matched = strcmp(unit, wp->engine_scope) == 0;
+	free(unit);
+	return (matched);
+}
+
 void
 engine_pane_surface_clear(struct window_pane *wp)
 {
@@ -644,7 +660,8 @@ engine_pane_sync_all(void)
 			continue;
 		foreground = wp->fd == -1 ? -1 : tcgetpgrp(wp->fd);
 		if (wp->engine_app_pgrp == 0 && foreground > 0 &&
-		    foreground != wp->pid) {
+		    foreground != wp->pid &&
+		    engine_pane_pid_in_scope(wp, foreground)) {
 			wp->engine_app_pgrp = foreground;
 			engine_pane_changed(wp);
 		}

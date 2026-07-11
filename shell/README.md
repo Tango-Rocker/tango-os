@@ -34,14 +34,15 @@ receive a valid versioned snapshot before compositor setup. The default remains
 `legacy` until the terminal-grid renderer reaches live acceptance. See
 [`docs/graphical-tmux.md`](../docs/graphical-tmux.md).
 
-Native mode also selects the active tmux pane, validates and retains its full
-binary terminal grid, and records pane identity, grid revision, dimensions,
-cursor, and nonblank-cell evidence in `shell-state.json`. CPU-rasterized
-FreeType glyphs are cached in a colour-keyed GPU atlas and drawn into a
-double-buffered pane target. Flow-controlled server invalidations retain sparse
-cell coordinates through the mux client, update only affected glyph/cursor
-neighbours with clipped GPU draws, and pass matching pixel damage to the
-wlroots scene; no polling process is involved. Pixman is an explicit
+Native mode validates and retains every active tmux pane's full binary terminal
+grid and records pane identity, grid revision, dimensions, cursor, and
+nonblank-cell evidence in `shell-state.json`. Each pane has its own clipped
+wlroots scene subtree, renderer, and double-buffered target; tmux UI uses a
+separate overlay. CPU-rasterized FreeType glyphs are cached in a colour-keyed
+GPU atlas. Flow-controlled server invalidations retain sparse cell coordinates
+for every subscribed pane, update only affected glyph/cursor neighbours with
+clipped GPU draws, and pass matching pixel damage to the owning pane scene; no
+polling process is involved. Pixman is an explicit
 `cpu-pixman-smoke` path, while GLES2 and Vulkan use the atlas path. Every
 native output registers as a real tmux client, with one focused size owner, and
 keyboard events use tmux key names so prefixes and key tables remain
@@ -54,9 +55,10 @@ buttons, modifiers, and vertical scroll are mapped to focused-view terminal
 cells and sent to tmux for authoritative hit-testing; wheel input uses tmux's
 copy-mode bindings. Drag selection, border/status/menu click proofs,
 status/menu command activation, AMD radeonsi atlas rendering, sparse cell
-damage, and nonblank GPU readback have contract coverage. Direct-KMS multi-pane
-clipping, resize/zoom, compound presentations, and final live hardware
-acceptance remain before native mode becomes the default.
+damage, nonblank GPU readback, multi-pane scene bounds, independent nonselected
+damage, and scoped compound presentations have contract coverage. Direct-KMS
+clipping during resize/zoom, output leases, and final live hardware acceptance
+remain before native mode becomes the default.
 
 ## Surface Model
 

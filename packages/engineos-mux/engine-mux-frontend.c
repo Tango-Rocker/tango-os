@@ -23,16 +23,21 @@ struct engine_mux_view {
 };
 TAILQ_HEAD(engine_mux_view_list, engine_mux_view);
 
+struct engine_mux_subscription {
+	u_int pane_id;
+	u_int generation;
+	uint64_t hash;
+	int invalidation_pending;
+	TAILQ_ENTRY(engine_mux_subscription) entry;
+};
+TAILQ_HEAD(engine_mux_subscription_list, engine_mux_subscription);
+
 struct engine_mux_client {
 	int fd;
 	struct event event;
-	u_int subscribed_pane_id;
-	u_int subscribed_generation;
-	uint64_t subscribed_hash;
-	int subscribed;
-	int invalidation_pending;
 	int state_invalidation_pending;
 	struct engine_mux_view_list views;
+	struct engine_mux_subscription_list subscriptions;
 	TAILQ_ENTRY(engine_mux_client) entry;
 };
 
@@ -60,6 +65,18 @@ static uint64_t engine_mux_snapshot_hash;
 static int engine_mux_send_frame(int, uint16_t, uint64_t, uint64_t,
     const char *, size_t);
 static void engine_mux_client_free(struct engine_mux_client *);
+
+static struct engine_mux_subscription *
+engine_mux_subscription_find(struct engine_mux_client *client, u_int pane_id)
+{
+	struct engine_mux_subscription *subscription;
+
+	TAILQ_FOREACH(subscription, &client->subscriptions, entry) {
+		if (subscription->pane_id == pane_id)
+			return (subscription);
+	}
+	return (NULL);
+}
 static void engine_mux_hash_bytes(uint64_t *, const void *, size_t);
 static struct json_object *engine_mux_build_ui_model(struct engine_mux_view *);
 
@@ -1126,6 +1143,7 @@ static void
 engine_mux_notify_grid_clients(void)
 {
 	struct engine_mux_client *client, *next;
+	struct engine_mux_subscription *subscription, *subscription_next;
 	struct engine_mux_grid_request invalidated;
 	struct window_pane *pane;
 	u_char *payload;
@@ -1133,32 +1151,38 @@ engine_mux_notify_grid_clients(void)
 	uint64_t hash;
 
 	TAILQ_FOREACH_SAFE(client, &engine_mux_clients, entry, next) {
-		if (!client->subscribed || client->invalidation_pending)
-			continue;
-		pane = window_pane_find_by_id(client->subscribed_pane_id);
-		if (pane == NULL) {
-			engine_mux_client_free(client);
-			continue;
+		TAILQ_FOREACH_SAFE(subscription, &client->subscriptions, entry,
+		    subscription_next) {
+			if (subscription->invalidation_pending)
+				continue;
+			pane = window_pane_find_by_id(subscription->pane_id);
+			if (pane == NULL) {
+				TAILQ_REMOVE(&client->subscriptions, subscription, entry);
+				free(subscription);
+				continue;
+			}
+			payload = engine_mux_build_grid(pane, &payload_size);
+			if (payload == NULL)
+				continue;
+			hash = UINT64_C(1469598103934665603);
+			engine_mux_hash_bytes(&hash, payload, payload_size);
+			free(payload);
+			if (hash == subscription->hash)
+				continue;
+			invalidated.pane_id = htonl(subscription->pane_id);
+			invalidated.generation = htonl(subscription->generation);
+			if (engine_mux_send_frame(client->fd,
+			    ENGINE_MUX_GRID_INVALIDATED, 0, engine_mux_revision,
+			    (char *)&invalidated, sizeof invalidated) != 0) {
+				if (errno != EAGAIN && errno != EWOULDBLOCK) {
+					engine_mux_client_free(client);
+					break;
+				}
+				continue;
+			}
+			subscription->hash = hash;
+			subscription->invalidation_pending = 1;
 		}
-		payload = engine_mux_build_grid(pane, &payload_size);
-		if (payload == NULL)
-			continue;
-		hash = UINT64_C(1469598103934665603);
-		engine_mux_hash_bytes(&hash, payload, payload_size);
-		free(payload);
-		if (hash == client->subscribed_hash)
-			continue;
-		invalidated.pane_id = htonl(client->subscribed_pane_id);
-		invalidated.generation = htonl(client->subscribed_generation);
-		if (engine_mux_send_frame(client->fd, ENGINE_MUX_GRID_INVALIDATED,
-		    0, engine_mux_revision, (char *)&invalidated,
-		    sizeof invalidated) != 0) {
-			if (errno != EAGAIN && errno != EWOULDBLOCK)
-				engine_mux_client_free(client);
-			continue;
-		}
-		client->subscribed_hash = hash;
-		client->invalidation_pending = 1;
 	}
 }
 
@@ -1407,9 +1431,15 @@ static void
 engine_mux_client_free(struct engine_mux_client *client)
 {
 	struct engine_mux_view *view, *next;
+	struct engine_mux_subscription *subscription, *subscription_next;
 
 	TAILQ_FOREACH_SAFE(view, &client->views, entry, next)
 		engine_mux_view_free(client, view);
+	TAILQ_FOREACH_SAFE(subscription, &client->subscriptions, entry,
+	    subscription_next) {
+		TAILQ_REMOVE(&client->subscriptions, subscription, entry);
+		free(subscription);
+	}
 	event_del(&client->event);
 	TAILQ_REMOVE(&engine_mux_clients, client, entry);
 	close(client->fd);
@@ -1779,14 +1809,17 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 			if (engine_mux_send_error(client->fd, request_id,
 			    "grid-too-large", "pane grid exceeds the protocol payload limit") != 0)
 				engine_mux_client_free(client);
-		} else if (client->subscribed &&
-		    client->subscribed_pane_id == pane->id) {
+		} else {
 			struct engine_mux_grid_state *state =
 			    engine_mux_grid_find(pane->id);
-			client->subscribed_hash = UINT64_C(1469598103934665603);
-			engine_mux_hash_bytes(&client->subscribed_hash, state->payload,
-			    state->payload_size);
-			client->invalidation_pending = 0;
+			struct engine_mux_subscription *subscription =
+			    engine_mux_subscription_find(client, pane->id);
+			if (subscription != NULL) {
+				subscription->hash = UINT64_C(1469598103934665603);
+				engine_mux_hash_bytes(&subscription->hash, state->payload,
+				    state->payload_size);
+				subscription->invalidation_pending = 0;
+			}
 		}
 		return;
 	}
@@ -1823,19 +1856,23 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 			if (engine_mux_send_error(client->fd, request_id,
 			    "grid-resync-required", "grid revision is stale; request a full grid") != 0)
 				engine_mux_client_free(client);
-		} else if (client->subscribed &&
-		    client->subscribed_pane_id == pane->id) {
+		} else {
 			struct engine_mux_grid_state *state =
 			    engine_mux_grid_find(pane->id);
-			client->subscribed_hash = UINT64_C(1469598103934665603);
-			engine_mux_hash_bytes(&client->subscribed_hash, state->payload,
-			    state->payload_size);
-			client->invalidation_pending = 0;
+			struct engine_mux_subscription *subscription =
+			    engine_mux_subscription_find(client, pane->id);
+			if (subscription != NULL) {
+				subscription->hash = UINT64_C(1469598103934665603);
+				engine_mux_hash_bytes(&subscription->hash, state->payload,
+				    state->payload_size);
+				subscription->invalidation_pending = 0;
+			}
 		}
 		return;
 	}
 	if (type == ENGINE_MUX_GRID_SUBSCRIBE_REQUEST) {
 		struct engine_mux_grid_state *state;
+		struct engine_mux_subscription *subscription;
 
 		if (payload_size != sizeof damage_request) {
 			free(packet);
@@ -1862,13 +1899,17 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 				engine_mux_client_free(client);
 			return;
 		}
-		client->subscribed_pane_id = pane->id;
-		client->subscribed_generation = 1;
-		client->subscribed_hash = UINT64_C(1469598103934665603);
-		engine_mux_hash_bytes(&client->subscribed_hash, state->payload,
+		subscription = engine_mux_subscription_find(client, pane->id);
+		if (subscription == NULL) {
+			subscription = xcalloc(1, sizeof *subscription);
+			subscription->pane_id = pane->id;
+			TAILQ_INSERT_TAIL(&client->subscriptions, subscription, entry);
+		}
+		subscription->generation = 1;
+		subscription->hash = UINT64_C(1469598103934665603);
+		engine_mux_hash_bytes(&subscription->hash, state->payload,
 		    state->payload_size);
-		client->subscribed = 1;
-		client->invalidation_pending = 0;
+		subscription->invalidation_pending = 0;
 		if (engine_mux_send_frame(client->fd, ENGINE_MUX_GRID_SUBSCRIBE_ACK,
 		    request_id, engine_mux_revision, subscribe_ack,
 		    strlen(subscribe_ack)) != 0)
@@ -2000,6 +2041,7 @@ engine_mux_accept(__unused int fd, __unused short events, __unused void *data)
 	client = xcalloc(1, sizeof *client);
 	client->fd = client_fd;
 	TAILQ_INIT(&client->views);
+	TAILQ_INIT(&client->subscriptions);
 	TAILQ_INSERT_TAIL(&engine_mux_clients, client, entry);
 	event_set(&client->event, client_fd, EV_READ|EV_PERSIST,
 	    engine_mux_client_event, client);

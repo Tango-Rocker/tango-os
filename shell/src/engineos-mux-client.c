@@ -19,6 +19,8 @@ static bool exchange_json_request(struct engineos_mux_client *client,
 	uint16_t request_type, uint16_t expected_type, const char *payload,
 	const char *expected_schema, struct json_object **response,
 	bool *grid_changed, char *error, size_t error_size);
+static bool service_pending_grid_damage(struct engineos_mux_client *client,
+	bool *grid_changed, char *error, size_t error_size);
 
 static uint64_t host_to_be64(uint64_t value) {
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -46,6 +48,62 @@ static void update_nonblank_count(struct engineos_mux_client *client) {
 		}
 	}
 	client->grid_nonblank_cells = nonblank;
+}
+
+static uint32_t grid_nonblank_count(const struct engine_mux_grid_cell *cells,
+		uint32_t columns, uint32_t rows) {
+	uint32_t nonblank = 0;
+	for (uint32_t index = 0; index < columns * rows; index++) {
+		const struct engine_mux_grid_cell *cell = &cells[index];
+		if ((cell->flags & ENGINE_MUX_GRID_CELL_PADDING) == 0 &&
+				cell->text_length != 0 &&
+				!(cell->text_length == 1 &&
+				  (cell->text[0] == 0 || cell->text[0] == ' ')))
+			nonblank++;
+	}
+	return nonblank;
+}
+
+static void free_grid_model(struct engineos_mux_grid_model *grid) {
+	free(grid->cells);
+	free(grid->damage_cells);
+	memset(grid, 0, sizeof(*grid));
+}
+
+static void free_pane_models(struct engineos_mux_pane_model *panes,
+		size_t count) {
+	for (size_t index = 0; index < count; index++)
+		free_grid_model(&panes[index].grid);
+	free(panes);
+}
+
+static struct engineos_mux_pane_model *find_pane_model(
+		struct engineos_mux_client *client, uint32_t pane_id,
+		uint32_t generation) {
+	for (size_t index = 0; index < client->pane_count; index++) {
+		if (client->panes[index].pane_id == pane_id &&
+				client->panes[index].generation == generation)
+			return &client->panes[index];
+	}
+	return NULL;
+}
+
+static bool mark_grid_invalidation(struct engineos_mux_client *client,
+		uint32_t pane_id, uint32_t generation, char *error,
+		size_t error_size) {
+	if (pane_id == client->pane_id && generation == client->pane_generation) {
+		client->selected_grid_damage_pending = true;
+		return true;
+	}
+	struct engineos_mux_pane_model *pane = find_pane_model(client, pane_id,
+		generation);
+	if (pane == NULL || !pane->grid.ready || !pane->grid.subscribed) {
+		snprintf(error, error_size,
+			"grid invalidation has no retained pane model");
+		return false;
+	}
+	pane->grid.damage_pending = true;
+	return true;
 }
 
 static bool exchange(int fd, uint16_t request_type, uint64_t request_id,
@@ -312,7 +370,18 @@ static bool parse_pane_models(struct engineos_mux_client *client,
 		models[index].surface_tabs = (uint32_t)parsed_tabs;
 		models[index].active_surface_id = (uint32_t)parsed_active_surface;
 	}
-	free(client->panes);
+	for (size_t index = 0; index < count; index++) {
+		for (size_t previous = 0; previous < client->pane_count; previous++) {
+			if (models[index].pane_id == client->panes[previous].pane_id &&
+					models[index].generation == client->panes[previous].generation) {
+				models[index].grid = client->panes[previous].grid;
+				memset(&client->panes[previous].grid, 0,
+					sizeof(client->panes[previous].grid));
+				break;
+			}
+		}
+	}
+	free_pane_models(client->panes, client->pane_count);
 	client->panes = models;
 	client->pane_count = count;
 	return true;
@@ -406,6 +475,121 @@ static bool request_grid(struct engineos_mux_client *client, char *error,
 	return true;
 }
 
+static bool request_pane_grid(struct engineos_mux_client *client,
+		struct engineos_mux_pane_model *pane, char *error, size_t error_size) {
+	struct engine_mux_grid_request request = {
+		.pane_id = htonl(pane->pane_id),
+		.generation = htonl(pane->generation),
+	};
+	struct engine_mux_frame_header frame = {
+		.magic = htonl(ENGINE_MUX_MAGIC),
+		.version = htons(ENGINE_MUX_PROTOCOL_VERSION),
+		.type = htons(ENGINE_MUX_GRID_REQUEST),
+		.request_id = host_to_be64(13),
+		.state_revision = host_to_be64(client->revision),
+		.payload_length = htonl(sizeof(request)),
+	};
+	struct iovec parts[] = {
+		{.iov_base = &frame, .iov_len = sizeof(frame)},
+		{.iov_base = &request, .iov_len = sizeof(request)},
+	};
+	struct msghdr message = {.msg_iov = parts, .msg_iovlen = 2};
+	if (sendmsg(client->fd, &message, MSG_NOSIGNAL) < 0) {
+		snprintf(error, error_size, "pane grid send: %s", strerror(errno));
+		return false;
+	}
+	size_t capacity = sizeof(frame) + ENGINE_MUX_MAX_PAYLOAD;
+	unsigned char *packet = malloc(capacity);
+	if (packet == NULL) {
+		snprintf(error, error_size, "out of memory");
+		return false;
+	}
+
+receive_again:
+	;
+	ssize_t count = recv(client->fd, packet, capacity, 0);
+	if (count < (ssize_t)sizeof(frame)) {
+		free(packet);
+		snprintf(error, error_size, "truncated pane terminal grid");
+		return false;
+	}
+	memcpy(&frame, packet, sizeof(frame));
+	uint32_t payload_length = ntohl(frame.payload_length);
+	uint16_t type = ntohs(frame.type);
+	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
+			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
+			payload_length > ENGINE_MUX_MAX_PAYLOAD ||
+			sizeof(frame) + payload_length != (size_t)count) {
+		free(packet);
+		snprintf(error, error_size, "invalid pane terminal grid frame");
+		return false;
+	}
+	if (type == ENGINE_MUX_GRID_INVALIDATED &&
+			payload_length == sizeof(struct engine_mux_grid_request)) {
+		struct engine_mux_grid_request notice;
+		memcpy(&notice, packet + sizeof(frame), sizeof(notice));
+		if (!mark_grid_invalidation(client, ntohl(notice.pane_id),
+				ntohl(notice.generation), error, error_size)) {
+			free(packet);
+			return false;
+		}
+		goto receive_again;
+	}
+	if (type == ENGINE_MUX_UI_INVALIDATED &&
+			payload_length == sizeof(struct engine_mux_ui_invalidation))
+		goto receive_again;
+	if (type == ENGINE_MUX_STATE_INVALIDATED && payload_length == 0)
+		goto receive_again;
+	if (type != ENGINE_MUX_GRID_SNAPSHOT ||
+			payload_length < sizeof(struct engine_mux_grid_header)) {
+		free(packet);
+		snprintf(error, error_size, "unexpected pane terminal grid type %u", type);
+		return false;
+	}
+	struct engine_mux_grid_header header;
+	memcpy(&header, packet + sizeof(frame), sizeof(header));
+	uint32_t columns = ntohl(header.columns), rows = ntohl(header.rows);
+	uint32_t cell_count = ntohl(header.cell_count);
+	if (ntohs(header.version) != ENGINE_MUX_GRID_VERSION ||
+			ntohl(header.pane_id) != pane->pane_id ||
+			ntohl(header.generation) != pane->generation ||
+			(columns != 0 && rows > UINT32_MAX / columns) ||
+			cell_count != columns * rows || payload_length != sizeof(header) +
+				(size_t)cell_count * sizeof(struct engine_mux_grid_cell) ||
+			sizeof(frame) + payload_length != (size_t)count) {
+		free(packet);
+		snprintf(error, error_size, "pane terminal grid contract is invalid");
+		return false;
+	}
+	struct engine_mux_grid_cell *cells = malloc(
+		(size_t)cell_count * sizeof(*cells));
+	if (cells == NULL && cell_count != 0) {
+		free(packet);
+		snprintf(error, error_size, "out of memory");
+		return false;
+	}
+	memcpy(cells, packet + sizeof(frame) + sizeof(header),
+		(size_t)cell_count * sizeof(*cells));
+	free(packet);
+	free(pane->grid.cells);
+	free(pane->grid.damage_cells);
+	pane->grid.cells = cells;
+	pane->grid.damage_cells = NULL;
+	pane->grid.damage_count = 0;
+	pane->grid.revision = be64_to_host(header.grid_revision);
+	pane->grid.columns = columns;
+	pane->grid.rows = rows;
+	pane->columns = columns;
+	pane->rows = rows;
+	pane->grid.cursor_x = ntohl(header.cursor_x);
+	pane->grid.cursor_y = ntohl(header.cursor_y);
+	pane->grid.flags = ntohs(header.flags);
+	pane->grid.nonblank_cells = grid_nonblank_count(cells, columns, rows);
+	pane->grid.full_damage = true;
+	pane->grid.ready = true;
+	return true;
+}
+
 static bool subscribe_grid(struct engineos_mux_client *client, char *error,
 		size_t error_size) {
 	struct engine_mux_grid_damage_request request = {
@@ -431,6 +615,9 @@ static bool subscribe_grid(struct engineos_mux_client *client, char *error,
 		return false;
 	}
 	unsigned char packet[sizeof(frame) + 512];
+
+receive_again:
+	;
 	ssize_t count = recv(client->fd, packet, sizeof(packet), 0);
 	if (count < (ssize_t)sizeof(frame)) {
 		snprintf(error, error_size, "truncated grid subscription response");
@@ -438,14 +625,126 @@ static bool subscribe_grid(struct engineos_mux_client *client, char *error,
 	}
 	memcpy(&frame, packet, sizeof(frame));
 	uint32_t length = ntohl(frame.payload_length);
+	uint16_t type = ntohs(frame.type);
 	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
 			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
-			ntohs(frame.type) != ENGINE_MUX_GRID_SUBSCRIBE_ACK ||
+			length > sizeof(packet) - sizeof(frame) ||
+			sizeof(frame) + length != (size_t)count) {
+		snprintf(error, error_size, "invalid pane grid subscription frame");
+		return false;
+	}
+	if (type == ENGINE_MUX_GRID_INVALIDATED &&
+			length == sizeof(struct engine_mux_grid_request)) {
+		struct engine_mux_grid_request notice;
+		memcpy(&notice, packet + sizeof(frame), sizeof(notice));
+		if (!mark_grid_invalidation(client, ntohl(notice.pane_id),
+				ntohl(notice.generation), error, error_size))
+			return false;
+		goto receive_again;
+	}
+	if (type == ENGINE_MUX_UI_INVALIDATED &&
+			length == sizeof(struct engine_mux_ui_invalidation))
+		goto receive_again;
+	if (type == ENGINE_MUX_STATE_INVALIDATED && length == 0)
+		goto receive_again;
+	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
+			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
+			type != ENGINE_MUX_GRID_SUBSCRIBE_ACK ||
 			sizeof(frame) + length != (size_t)count) {
 		snprintf(error, error_size, "invalid grid subscription response");
 		return false;
 	}
 	return true;
+}
+
+static bool subscribe_pane_grid(struct engineos_mux_client *client,
+		struct engineos_mux_pane_model *pane, char *error, size_t error_size) {
+	struct engine_mux_grid_damage_request request = {
+		.pane_id = htonl(pane->pane_id),
+		.generation = htonl(pane->generation),
+		.grid_revision = host_to_be64(pane->grid.revision),
+	};
+	struct engine_mux_frame_header frame = {
+		.magic = htonl(ENGINE_MUX_MAGIC),
+		.version = htons(ENGINE_MUX_PROTOCOL_VERSION),
+		.type = htons(ENGINE_MUX_GRID_SUBSCRIBE_REQUEST),
+		.request_id = host_to_be64(14),
+		.state_revision = host_to_be64(client->revision),
+		.payload_length = htonl(sizeof(request)),
+	};
+	struct iovec parts[] = {
+		{.iov_base = &frame, .iov_len = sizeof(frame)},
+		{.iov_base = &request, .iov_len = sizeof(request)},
+	};
+	struct msghdr message = {.msg_iov = parts, .msg_iovlen = 2};
+	if (sendmsg(client->fd, &message, MSG_NOSIGNAL) < 0) {
+		snprintf(error, error_size, "pane grid subscribe send: %s",
+			strerror(errno));
+		return false;
+	}
+	unsigned char packet[sizeof(frame) + 512];
+
+receive_again:
+	;
+	ssize_t count = recv(client->fd, packet, sizeof(packet), 0);
+	if (count < (ssize_t)sizeof(frame)) {
+		snprintf(error, error_size, "truncated pane grid subscription response");
+		return false;
+	}
+	memcpy(&frame, packet, sizeof(frame));
+	uint32_t length = ntohl(frame.payload_length);
+	uint16_t type = ntohs(frame.type);
+	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
+			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
+			length > sizeof(packet) - sizeof(frame) ||
+			sizeof(frame) + length != (size_t)count) {
+		snprintf(error, error_size, "invalid pane grid subscription frame");
+		return false;
+	}
+	if (type == ENGINE_MUX_GRID_INVALIDATED &&
+			length == sizeof(struct engine_mux_grid_request)) {
+		struct engine_mux_grid_request notice;
+		memcpy(&notice, packet + sizeof(frame), sizeof(notice));
+		if (!mark_grid_invalidation(client, ntohl(notice.pane_id),
+				ntohl(notice.generation), error, error_size))
+			return false;
+		goto receive_again;
+	}
+	if (type == ENGINE_MUX_UI_INVALIDATED &&
+			length == sizeof(struct engine_mux_ui_invalidation))
+		goto receive_again;
+	if (type == ENGINE_MUX_STATE_INVALIDATED && length == 0)
+		goto receive_again;
+	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
+			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
+			type != ENGINE_MUX_GRID_SUBSCRIBE_ACK ||
+			sizeof(frame) + length != (size_t)count) {
+		snprintf(error, error_size, "invalid pane grid subscription response");
+		return false;
+	}
+	pane->grid.subscribed = true;
+	return true;
+}
+
+static bool sync_pane_grids(struct engineos_mux_client *client, char *error,
+		size_t error_size) {
+	for (size_t index = 0; index < client->pane_count; index++) {
+		struct engineos_mux_pane_model *pane = &client->panes[index];
+		bool reloaded = false;
+		if (!pane->window_active)
+			continue;
+		if (!pane->grid.ready || pane->grid.columns != pane->columns ||
+				pane->grid.rows != pane->rows) {
+			if (!request_pane_grid(client, pane, error, error_size))
+				return false;
+			reloaded = true;
+		}
+		if ((!pane->grid.subscribed || reloaded) &&
+				!subscribe_pane_grid(client, pane, error, error_size))
+			return false;
+	}
+	bool changed = false;
+	return service_pending_grid_damage(client, &changed, error, error_size);
 }
 
 static bool receive_grid_damage(struct engineos_mux_client *client,
@@ -516,6 +815,16 @@ receive_again:
 		free(packet);
 		goto receive_again;
 	}
+	if (type == ENGINE_MUX_GRID_INVALIDATED &&
+			length == sizeof(struct engine_mux_grid_request)) {
+		struct engine_mux_grid_request notice;
+		memcpy(&notice, packet + sizeof(frame), sizeof(notice));
+		free(packet);
+		if (!mark_grid_invalidation(client, ntohl(notice.pane_id),
+				ntohl(notice.generation), error, error_size))
+			return false;
+		goto receive_again;
+	}
 	if (type != ENGINE_MUX_GRID_DAMAGE ||
 			length < sizeof(struct engine_mux_grid_damage_header)) {
 		free(packet);
@@ -569,9 +878,173 @@ receive_again:
 	client->grid_cursor_y = ntohl(header.grid.cursor_y);
 	client->revision = be64_to_host(frame.state_revision);
 	update_nonblank_count(client);
+	client->selected_grid_damage_pending = false;
 	*grid_changed = damage_count != 0 || client->grid_revision != old_revision;
 	free(packet);
 	return true;
+}
+
+static bool receive_pane_grid_damage(struct engineos_mux_client *client,
+		struct engineos_mux_pane_model *pane, bool *grid_changed,
+		char *error, size_t error_size) {
+	struct engine_mux_grid_damage_request request = {
+		.pane_id = htonl(pane->pane_id),
+		.generation = htonl(pane->generation),
+		.grid_revision = host_to_be64(pane->grid.revision),
+	};
+	struct engine_mux_frame_header frame = {
+		.magic = htonl(ENGINE_MUX_MAGIC),
+		.version = htons(ENGINE_MUX_PROTOCOL_VERSION),
+		.type = htons(ENGINE_MUX_GRID_DAMAGE_REQUEST),
+		.request_id = host_to_be64(15),
+		.state_revision = host_to_be64(client->revision),
+		.payload_length = htonl(sizeof(request)),
+	};
+	struct iovec parts[] = {
+		{.iov_base = &frame, .iov_len = sizeof(frame)},
+		{.iov_base = &request, .iov_len = sizeof(request)},
+	};
+	struct msghdr message = {.msg_iov = parts, .msg_iovlen = 2};
+	if (sendmsg(client->fd, &message, MSG_NOSIGNAL) < 0) {
+		snprintf(error, error_size, "pane grid damage send: %s", strerror(errno));
+		return false;
+	}
+	size_t capacity = sizeof(frame) + ENGINE_MUX_MAX_PAYLOAD;
+	unsigned char *packet = malloc(capacity);
+	if (packet == NULL) {
+		snprintf(error, error_size, "out of memory");
+		return false;
+	}
+receive_again:
+	;
+	ssize_t count = recv(client->fd, packet, capacity, 0);
+	if (count < (ssize_t)sizeof(frame)) {
+		free(packet);
+		snprintf(error, error_size, "truncated pane grid damage response");
+		return false;
+	}
+	memcpy(&frame, packet, sizeof(frame));
+	uint32_t length = ntohl(frame.payload_length);
+	uint16_t type = ntohs(frame.type);
+	if (ntohl(frame.magic) != ENGINE_MUX_MAGIC ||
+			ntohs(frame.version) != ENGINE_MUX_PROTOCOL_VERSION ||
+			length > ENGINE_MUX_MAX_PAYLOAD ||
+			sizeof(frame) + length != (size_t)count) {
+		free(packet);
+		snprintf(error, error_size, "invalid pane grid damage response");
+		return false;
+	}
+	if (type == ENGINE_MUX_GRID_INVALIDATED &&
+			length == sizeof(struct engine_mux_grid_request)) {
+		struct engine_mux_grid_request notice;
+		memcpy(&notice, packet + sizeof(frame), sizeof(notice));
+		if (!mark_grid_invalidation(client, ntohl(notice.pane_id),
+				ntohl(notice.generation), error, error_size)) {
+			free(packet);
+			return false;
+		}
+		goto receive_again;
+	}
+	if (type == ENGINE_MUX_UI_INVALIDATED ||
+			(type == ENGINE_MUX_STATE_INVALIDATED && length == 0))
+		goto receive_again;
+	if (type == ENGINE_MUX_ERROR) {
+		free(packet);
+		if (!request_pane_grid(client, pane, error, error_size))
+			return false;
+		*grid_changed = true;
+		return true;
+	}
+	if (type != ENGINE_MUX_GRID_DAMAGE ||
+			length < sizeof(struct engine_mux_grid_damage_header)) {
+		free(packet);
+		snprintf(error, error_size, "unexpected pane grid damage type %u", type);
+		return false;
+	}
+	struct engine_mux_grid_damage_header header;
+	memcpy(&header, packet + sizeof(frame), sizeof(header));
+	uint32_t columns = ntohl(header.grid.columns), rows = ntohl(header.grid.rows);
+	uint32_t damage_count = ntohl(header.damage_count);
+	if (ntohl(header.grid.pane_id) != pane->pane_id ||
+			ntohl(header.grid.generation) != pane->generation ||
+			columns != pane->grid.columns || rows != pane->grid.rows ||
+			length != sizeof(header) + (size_t)damage_count *
+				sizeof(struct engine_mux_grid_damage_cell)) {
+		free(packet);
+		snprintf(error, error_size, "pane grid damage contract is invalid");
+		return false;
+	}
+	struct engineos_mux_damage_cell *render_damage = realloc(
+		pane->grid.damage_cells,
+		(pane->grid.damage_count + damage_count) * sizeof(*render_damage));
+	if (render_damage == NULL && damage_count != 0) {
+		free(packet);
+		snprintf(error, error_size, "out of memory");
+		return false;
+	}
+	pane->grid.damage_cells = render_damage;
+	const unsigned char *cursor = packet + sizeof(frame) + sizeof(header);
+	for (uint32_t index = 0; index < damage_count; index++) {
+		struct engine_mux_grid_damage_cell damage;
+		memcpy(&damage, cursor, sizeof(damage));
+		cursor += sizeof(damage);
+		uint32_t x = ntohl(damage.x), y = ntohl(damage.y);
+		if (x >= columns || y >= rows ||
+				damage.cell.text_length > ENGINE_MUX_GRID_CELL_TEXT_MAX) {
+			free(packet);
+			snprintf(error, error_size, "pane grid damage cell is invalid");
+			return false;
+		}
+		pane->grid.cells[(size_t)y * columns + x] = damage.cell;
+		pane->grid.damage_cells[pane->grid.damage_count + index] =
+			(struct engineos_mux_damage_cell){.x = x, .y = y};
+	}
+	pane->grid.damage_count += damage_count;
+	uint64_t old_revision = pane->grid.revision;
+	pane->grid.revision = be64_to_host(header.grid.grid_revision);
+	pane->grid.flags = ntohs(header.grid.flags);
+	pane->grid.cursor_x = ntohl(header.grid.cursor_x);
+	pane->grid.cursor_y = ntohl(header.grid.cursor_y);
+	pane->grid.nonblank_cells = grid_nonblank_count(pane->grid.cells,
+		columns, rows);
+	pane->grid.damage_pending = false;
+	client->revision = be64_to_host(frame.state_revision);
+	*grid_changed = damage_count != 0 || pane->grid.revision != old_revision;
+	free(packet);
+	return true;
+}
+
+static bool service_pending_grid_damage(struct engineos_mux_client *client,
+		bool *grid_changed, char *error, size_t error_size) {
+	bool any_changed = false;
+	for (size_t pass = 0; pass < client->pane_count + 2; pass++) {
+		bool serviced = false, changed = false;
+		if (client->selected_grid_damage_pending) {
+			client->selected_grid_damage_pending = false;
+			if (!receive_grid_damage(client, &changed, error, error_size))
+				return false;
+			any_changed = any_changed || changed;
+			serviced = true;
+		}
+		for (size_t index = 0; index < client->pane_count; index++) {
+			struct engineos_mux_pane_model *pane = &client->panes[index];
+			if (!pane->grid.damage_pending)
+				continue;
+			pane->grid.damage_pending = false;
+			changed = false;
+			if (!receive_pane_grid_damage(client, pane, &changed, error,
+					error_size))
+				return false;
+			any_changed = any_changed || changed;
+			serviced = true;
+		}
+		if (!serviced) {
+			*grid_changed = *grid_changed || any_changed;
+			return true;
+		}
+	}
+	snprintf(error, error_size, "grid invalidations did not settle");
+	return false;
 }
 
 bool engineos_mux_client_connect(struct engineos_mux_client *client,
@@ -679,6 +1152,10 @@ bool engineos_mux_client_connect(struct engineos_mux_client *client,
 		engineos_mux_client_destroy(client);
 		return false;
 	}
+	if (!sync_pane_grids(client, error, error_size)) {
+		engineos_mux_client_destroy(client);
+		return false;
+	}
 	client->ready = true;
 	return true;
 }
@@ -693,6 +1170,10 @@ bool engineos_mux_client_refresh_presentation(struct engineos_mux_client *client
 		return false;
 	struct json_object *panes = NULL;
 	if (!parse_pane_models(client, snapshot, error, error_size)) {
+		json_object_put(snapshot);
+		return false;
+	}
+	if (!sync_pane_grids(client, error, error_size)) {
 		json_object_put(snapshot);
 		return false;
 	}
@@ -771,12 +1252,18 @@ bool engineos_mux_client_handle_event(struct engineos_mux_client *client,
 	}
 	struct engine_mux_grid_request invalidated;
 	memcpy(&invalidated, packet + sizeof(frame), sizeof(invalidated));
-	if (ntohl(invalidated.pane_id) != client->pane_id ||
-			ntohl(invalidated.generation) != client->pane_generation) {
-		snprintf(error, error_size, "invalid grid invalidation frame");
+	uint32_t pane_id = ntohl(invalidated.pane_id);
+	uint32_t generation = ntohl(invalidated.generation);
+	if (pane_id == client->pane_id && generation == client->pane_generation)
+		return receive_grid_damage(client, grid_changed, error, error_size);
+	struct engineos_mux_pane_model *pane = find_pane_model(client, pane_id,
+		generation);
+	if (pane == NULL || !pane->grid.ready || !pane->grid.subscribed) {
+		snprintf(error, error_size, "grid invalidation has no retained pane model");
 		return false;
 	}
-	return receive_grid_damage(client, grid_changed, error, error_size);
+	return receive_pane_grid_damage(client, pane, grid_changed, error,
+		error_size);
 }
 
 bool engineos_mux_client_send_input(struct engineos_mux_client *client,
@@ -811,7 +1298,6 @@ bool engineos_mux_client_send_input(struct engineos_mux_client *client,
 		snprintf(error, error_size, "pane input send: %s", strerror(errno));
 		return false;
 	}
-	bool invalidated = false;
 	for (;;) {
 		unsigned char packet[sizeof(frame) + 512];
 		ssize_t count = recv(client->fd, packet, sizeof(packet), 0);
@@ -836,12 +1322,10 @@ bool engineos_mux_client_send_input(struct engineos_mux_client *client,
 				return false;
 			}
 			memcpy(&notice, packet + sizeof(frame), sizeof(notice));
-			if (ntohl(notice.pane_id) != client->pane_id ||
-					ntohl(notice.generation) != client->pane_generation) {
-				snprintf(error, error_size, "grid invalidation pane mismatch");
+			if (!mark_grid_invalidation(client, ntohl(notice.pane_id),
+					ntohl(notice.generation), error, error_size)) {
 				return false;
 			}
-			invalidated = true;
 			continue;
 		}
 		if (type == ENGINE_MUX_UI_INVALIDATED) {
@@ -851,7 +1335,7 @@ bool engineos_mux_client_send_input(struct engineos_mux_client *client,
 			}
 			continue;
 		}
-		if (type == ENGINE_MUX_STATE_INVALIDATED && length == 0) {
+		if (type == ENGINE_MUX_STATE_INVALIDATED && payload_length == 0) {
 			continue;
 		}
 		if (type == ENGINE_MUX_ERROR) {
@@ -869,11 +1353,7 @@ bool engineos_mux_client_send_input(struct engineos_mux_client *client,
 		client->revision = be64_to_host(frame.state_revision);
 		break;
 	}
-	if (invalidated && !receive_grid_damage(client, grid_changed,
-			error, error_size)) {
-		return false;
-	}
-	return true;
+	return service_pending_grid_damage(client, grid_changed, error, error_size);
 }
 
 static void free_ui_rows(struct engineos_mux_ui_row *rows, size_t count) {
@@ -1075,7 +1555,6 @@ static bool exchange_json_request(struct engineos_mux_client *client,
 		snprintf(error, error_size, "mux JSON send: %s", strerror(errno));
 		return false;
 	}
-	bool invalidated = false;
 	for (;;) {
 		size_t capacity = sizeof(frame) + ENGINE_MUX_MAX_PAYLOAD;
 		unsigned char *packet = malloc(capacity);
@@ -1109,12 +1588,10 @@ static bool exchange_json_request(struct engineos_mux_client *client,
 			}
 			memcpy(&notice, packet + sizeof(frame), sizeof(notice));
 			free(packet);
-			if (ntohl(notice.pane_id) != client->pane_id ||
-					ntohl(notice.generation) != client->pane_generation) {
-				snprintf(error, error_size, "grid invalidation pane mismatch");
+			if (!mark_grid_invalidation(client, ntohl(notice.pane_id),
+					ntohl(notice.generation), error, error_size)) {
 				return false;
 			}
-			invalidated = true;
 			continue;
 		}
 		if (type == ENGINE_MUX_UI_INVALIDATED) {
@@ -1172,9 +1649,7 @@ static bool exchange_json_request(struct engineos_mux_client *client,
 		client->revision = be64_to_host(frame.state_revision);
 		break;
 	}
-	if (invalidated && !receive_grid_damage(client, grid_changed,
-			error, error_size)) return false;
-	return true;
+	return service_pending_grid_damage(client, grid_changed, error, error_size);
 }
 
 bool engineos_mux_client_register_view(struct engineos_mux_client *client,
@@ -1480,6 +1955,14 @@ void engineos_mux_client_clear_render_damage(struct engineos_mux_client *client)
 	client->ui_changed = false;
 }
 
+void engineos_mux_pane_model_clear_render_damage(
+		struct engineos_mux_pane_model *pane) {
+	free(pane->grid.damage_cells);
+	pane->grid.damage_cells = NULL;
+	pane->grid.damage_count = 0;
+	pane->grid.full_damage = false;
+}
+
 void engineos_mux_client_destroy(struct engineos_mux_client *client) {
 	if (client->fd >= 0) {
 		close(client->fd);
@@ -1488,7 +1971,7 @@ void engineos_mux_client_destroy(struct engineos_mux_client *client) {
 	free(client->socket_path);
 	free(client->session_id);
 	free(client->grid_cells);
-	free(client->panes);
+	free_pane_models(client->panes, client->pane_count);
 	free(client->grid_damage_cells);
 	free_ui_rows(client->ui_status_rows, client->ui_status_row_count);
 	free_ui_rows(client->ui_menu_rows, client->ui_menu_row_count);

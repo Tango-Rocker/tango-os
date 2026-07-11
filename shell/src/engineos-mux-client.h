@@ -26,6 +26,23 @@ struct engineos_mux_damage_cell {
 	uint32_t y;
 };
 
+struct engineos_mux_grid_model {
+	uint64_t revision;
+	uint32_t columns;
+	uint32_t rows;
+	uint32_t cursor_x;
+	uint32_t cursor_y;
+	uint32_t nonblank_cells;
+	uint16_t flags;
+	struct engine_mux_grid_cell *cells;
+	struct engineos_mux_damage_cell *damage_cells;
+	size_t damage_count;
+	bool full_damage;
+	bool ready;
+	bool subscribed;
+	bool damage_pending;
+};
+
 struct engineos_mux_pane_model {
 	uint32_t pane_id;
 	uint32_t generation;
@@ -40,6 +57,7 @@ struct engineos_mux_pane_model {
 	bool presentation_mapped;
 	uint32_t surface_tabs;
 	uint32_t active_surface_id;
+	struct engineos_mux_grid_model grid;
 };
 
 struct engineos_mux_presentation_target {
@@ -76,6 +94,7 @@ struct engineos_mux_client {
 	struct engineos_mux_damage_cell *grid_damage_cells;
 	size_t grid_damage_count;
 	bool grid_full_damage;
+	bool selected_grid_damage_pending;
 	bool ui_changed;
 	uint32_t ui_columns;
 	uint32_t ui_rows;
@@ -133,6 +152,8 @@ bool engineos_mux_client_unmap_presentation(struct engineos_mux_client *client,
 	uint32_t pane_id, uint32_t generation, int32_t pid, uint32_t surface_id,
 	bool *grid_changed, char *error, size_t error_size);
 void engineos_mux_client_clear_render_damage(struct engineos_mux_client *client);
+void engineos_mux_pane_model_clear_render_damage(
+	struct engineos_mux_pane_model *pane);
 void engineos_mux_client_destroy(struct engineos_mux_client *client);
 
 #endif

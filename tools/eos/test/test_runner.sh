@@ -173,6 +173,7 @@ run_mux() {
 	local pane_shell_pid="" pane_foreground_pid=""
 	local wayland_display="" unscoped_pid="" scoped_client_pid=""
 	local primary_surface_id="" secondary_surface_id=""
+	local multi_grid_pid="" first_split_pane="" second_split_pane=""
 	local user_runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 	local user_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$user_runtime/bus}"
 
@@ -209,6 +210,7 @@ run_mux() {
 	export PATH DBUS_SESSION_BUS_ADDRESS="$user_bus"
 	export ENGINEOS_USER_RUNTIME_DIR="$user_runtime"
 	cleanup_mux_test() {
+		[[ -z "${multi_grid_pid:-}" ]] || kill "$multi_grid_pid" >/dev/null 2>&1 || true
 		[[ -z "${unscoped_pid:-}" ]] || kill "$unscoped_pid" >/dev/null 2>&1 || true
 		[[ -z "${overlay_pid:-}" ]] || kill "$overlay_pid" >/dev/null 2>&1 || true
 		[[ -z "${prompt_pid:-}" ]] || kill "$prompt_pid" >/dev/null 2>&1 || true
@@ -760,6 +762,31 @@ run_mux() {
 	done < <(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		list-panes -t contract:0 -F \
 		'#{pane_id}|#{pane_left}|#{pane_top}|#{pane_width}|#{pane_height}')
+	first_split_pane="$(jq -er '.panes[0].pane_id' "$fixture/second.json")"
+	second_split_pane="$(jq -er '.panes[1].pane_id' "$fixture/second.json")"
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" multi-grid-proof \
+		"$first_split_pane" "$second_split_pane" \
+		>"$fixture/multi-grid.json" 2>"$fixture/multi-grid.ready" &
+	multi_grid_pid=$!
+	for _ in {1..100}; do
+		grep -Fx 'multi-grid-ready' "$fixture/multi-grid.ready" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	grep -Fx 'multi-grid-ready' "$fixture/multi-grid.ready" >/dev/null ||
+		die "multi-pane grid subscriber did not become ready"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -t "$first_split_pane" 'printf MULTI-GRID-FIRST' Enter
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -t "$second_split_pane" 'printf MULTI-GRID-SECOND' Enter
+	wait "$multi_grid_pid" || {
+		cat "$fixture/multi-grid.ready" >&2
+		die "one frontend connection did not retain both pane grid subscriptions"
+	}
+	multi_grid_pid=""
+	jq -e '.schema == "engine-mux/multi-grid-proof-v1" and
+		.subscriptions == 2 and .first_invalidated and .second_invalidated' \
+		"$fixture/multi-grid.json" >/dev/null ||
+		die "multi-pane grid invalidations were not independently delivered"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		select-pane -t contract:0.1
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot >"$fixture/focus.json"
@@ -799,7 +826,7 @@ run_mux() {
 	shell_pid=$!
 	for _ in {1..100}; do
 		[[ -f "$fixture/engineos/shell-state.json" ]] &&
-			jq -e '.mux.grid.rendered == true and
+			jq -e '.mux.client_view_id > 0 and .mux.grid.rendered == true and
 				.mux.ui.mode == "status" and .mux.ui.status_rows == 1' \
 				"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
 		sleep 0.02
@@ -811,21 +838,69 @@ run_mux() {
 	jq -e '.mux.session_id | startswith("$")' \
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "shell state did not identify the attached mux session"
-	jq -e '.mux.client_view_id == 1' \
-		"$fixture/engineos/shell-state.json" >/dev/null ||
+	jq -e '.mux.client_view_id > 0' \
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '{mux,counts,last_reason}' "$fixture/engineos/shell-state.json" >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
 		die "shell state did not identify its graphical mux client view"
+	}
 	jq -e '
 		.mux.panes | length == 2 and
 		([.[].pane_id] | unique | length) == 2 and
 		([.[] | select(.generation <= 0 or .left < 0 or .top < 0 or
-			.columns <= 0 or .rows <= 0)] | length) == 0' \
-		"$fixture/engineos/shell-state.json" >/dev/null ||
-		die "shell did not retain every authoritative mux pane model"
+			.columns <= 0 or .rows <= 0 or .grid.ready != true or
+			.grid.subscribed != true or .grid.revision <= 0 or
+			.scene.rendered != true or .scene.pixel_width <= 0 or
+			.scene.pixel_height <= 0 or .scene.frame < 1)] | length) == 0 and
+		(.[0] as $a | .[1] as $b |
+			($a.scene.pixel_x + $a.scene.pixel_width <= $b.scene.pixel_x) or
+			($b.scene.pixel_x + $b.scene.pixel_width <= $a.scene.pixel_x) or
+			($a.scene.pixel_y + $a.scene.pixel_height <= $b.scene.pixel_y) or
+			($b.scene.pixel_y + $b.scene.pixel_height <= $a.scene.pixel_y))' \
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		jq '.mux.panes' "$fixture/engineos/shell-state.json" >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
+		die "shell did not render every authoritative mux pane in a distinct scene"
+	}
 	jq -e --arg pane "$(jq -er '.mux.pane_id' \
 			"$fixture/engineos/shell-state.json")" \
 		'.mux.panes[] | select(.pane_id == $pane and .window_active and .active)' \
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "shell all-pane model did not contain its selected active pane"
+	shell_pane_id="$(jq -er '.mux.pane_id' \
+		"$fixture/engineos/shell-state.json")"
+	local other_shell_pane initial_other_revision initial_other_frame
+	local updated_other_revision updated_other_frame
+	other_shell_pane="$(jq -er --arg pane "$shell_pane_id" \
+		'.mux.panes[] | select(.pane_id != $pane) | .pane_id' \
+		"$fixture/engineos/shell-state.json")"
+	initial_other_revision="$(jq -er --arg pane "$other_shell_pane" \
+		'.mux.panes[] | select(.pane_id == $pane) | .grid.revision' \
+		"$fixture/engineos/shell-state.json")"
+	initial_other_frame="$(jq -er --arg pane "$other_shell_pane" \
+		'.mux.panes[] | select(.pane_id == $pane) | .scene.frame' \
+		"$fixture/engineos/shell-state.json")"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -t "$other_shell_pane" "printf NONSELECTED-SCENE-DAMAGE" Enter
+	for _ in {1..150}; do
+		updated_other_revision="$(jq -er --arg pane "$other_shell_pane" \
+			'.mux.panes[] | select(.pane_id == $pane) | .grid.revision' \
+			"$fixture/engineos/shell-state.json")"
+		updated_other_frame="$(jq -er --arg pane "$other_shell_pane" \
+			'.mux.panes[] | select(.pane_id == $pane) | .scene.frame' \
+			"$fixture/engineos/shell-state.json")"
+		[[ "$updated_other_revision" -gt "$initial_other_revision" &&
+			"$updated_other_frame" -gt "$initial_other_frame" ]] && break
+		sleep 0.02
+	done
+	[[ "$updated_other_revision" -gt "$initial_other_revision" &&
+		"$updated_other_frame" -gt "$initial_other_frame" ]] || {
+		jq --arg pane "$other_shell_pane" \
+			'.mux.panes[] | select(.pane_id == $pane)' \
+			"$fixture/engineos/shell-state.json" >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
+		die "nonselected mux pane damage did not update its own native scene"
+	}
 	if [[ "$shell_renderer" == gles2 ]]; then
 		if [[ "${ENGINEOS_MUX_REQUIRE_RADEONSI:-false}" == true ]]; then
 			grep -F 'EGL driver name: radeonsi' "$fixture/shell-native.log" \
@@ -855,7 +930,10 @@ run_mux() {
 		sleep 0.02
 	done
 	grep -F 'native presentation rejected' "$fixture/shell-native.log" \
-		>/dev/null || die "native shell did not reject an unscoped Wayland client"
+		>/dev/null || {
+		tail -100 "$fixture/shell-native.log" >&2 || true
+		die "native shell did not reject an unscoped Wayland client"
+	}
 	wait "$unscoped_pid" ||
 		die "unscoped Wayland client was not closed through the XDG protocol"
 	unscoped_pid=""
@@ -1111,7 +1189,13 @@ run_mux() {
 	[[ "$restore_proof" == accepted &&
 		"$(grep -c 'focused' "$fixture/restored-client-flags.txt")" == 1 &&
 		"$(grep -c 'ignore-size' "$fixture/restored-client-flags.txt")" == 1 ]] ||
+		{
+		cat "$fixture/restored-client-flags.txt" >&2
+		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			list-clients -F '#{client_name} #{client_flags}' >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
 		die "temporary graphical client did not restore focused size ownership"
+	}
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		set-option -g prefix C-b
 	initial_native_revision="$(jq -er '.mux.grid.revision' \
@@ -1144,7 +1228,7 @@ run_mux() {
 		die "graphical tmux clients survived shell output teardown"
 	fi
 	jq -e '.mux.mode == "native" and .mux.connected == true and
-		(.mux.session_id | startswith("$")) and .mux.client_view_id == 1 and
+		(.mux.session_id | startswith("$")) and .mux.client_view_id > 0 and
 		.mux.revision >= 1 and .mux.generation == 1 and
 		.mux.grid.revision >= 1 and .mux.grid.columns > 0 and
 		.mux.grid.rows > 0 and .mux.grid.nonblank_cells > 0 and

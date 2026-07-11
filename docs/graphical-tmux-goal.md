@@ -58,9 +58,16 @@ closes. Tmux now stores the active surface ID and owns
 to activate only that toplevel and its transient group. The installed
 deterministic contract proves selection, invalid-role rejection, the full
 surface-set lifecycle, and pending launch scopes across the systemd-run PTY
-handoff. Multi-pane scene construction, leases, games/images, direct-KMS
-clipping/resize/zoom, final hardware acceptance, and legacy cutover remain
-open. The server now exports every pane's authoritative cell origin and size,
+handoff. The server now retains simultaneous grid subscriptions for every
+active pane, while the shell owns one clipped renderer and scene subtree per
+pane plus a separate mux UI overlay. Grid resynchronization follows canonical
+resize, and nonselected pane damage advances that pane's retained grid and
+render frame. `shell-state.json` reports every pane's grid subscription,
+revision, scene bounds, renderer, and frame. Both pixman smoke and AMD/radeonsi
+GLES2 contracts prove two nonoverlapping panes and independent nonselected
+damage. Leases, games/images, direct-KMS clipping/resize/zoom, final hardware
+acceptance, and legacy cutover remain open. The server now exports every
+pane's authoritative cell origin and size,
 and the shell validates and retains the complete pane set instead of discarding
 every pane except the selected one. `shell-state.json` exposes those stable
 pane identities, generations, layouts, and presentation states. The installed
