@@ -821,7 +821,7 @@ run_mux() {
 	XDG_RUNTIME_DIR="$fixture" ENGINEOS_STATE_DIR="$fixture/engineos" \
 		ENGINEOS_MUX_SOCKET="$fixture/engineos/mux.sock" \
 		WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=2 WLR_RENDERER="$shell_renderer" \
-		"$shell_bin" --headless --smoke-ms 45000 \
+		"$shell_bin" --headless --smoke-ms 90000 \
 		--bootstrap none --mux native >"$fixture/shell-native.log" 2>&1 &
 	shell_pid=$!
 	for _ in {1..100}; do
@@ -999,6 +999,167 @@ run_mux() {
 		  .grid.rows == .rows and .scene.rendered)' \
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "one hundred native pane focus transitions left stale scene state"
+
+	local topology_pane topology_generation
+	local topology_left topology_top swapped_left swapped_top broken_window
+	local destination_session graphical_client
+	topology_pane="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" new-window -d -P -F '#{pane_id}' -t contract -n topology)"
+	for _ in {1..150}; do
+		jq -e '.mux.panes | length == 2' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg pane "$topology_pane" \
+		'.mux.panes | length == 2 and
+		 all(.[]; .pane_id != $pane and .window_active)' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "inactive tmux window leaked panes into the graphical client view"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		join-pane -h -s "$topology_pane" -t "$other_shell_pane"
+	for _ in {1..150}; do
+		jq -e --arg pane "$topology_pane" \
+			'.mux.panes | length == 3 and
+			 ([.[].pane_id] | unique | length) == 3 and
+			 any(.[]; .pane_id == $pane and .grid.ready and
+			  .grid.subscribed and .scene.rendered)' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg pane "$topology_pane" \
+		'.mux.panes | length == 3 and
+		 any(.[]; .pane_id == $pane and .grid.ready and .scene.rendered)' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "join-pane did not add its stable pane to the active graphical scene"
+	topology_generation="$(jq -er --arg pane "$topology_pane" \
+		'.mux.panes[] | select(.pane_id == $pane) | .generation' \
+		"$fixture/engineos/shell-state.json")"
+	topology_left="$(jq -er --arg pane "$topology_pane" \
+		'.mux.panes[] | select(.pane_id == $pane) | .left' \
+		"$fixture/engineos/shell-state.json")"
+	topology_top="$(jq -er --arg pane "$topology_pane" \
+		'.mux.panes[] | select(.pane_id == $pane) | .top' \
+		"$fixture/engineos/shell-state.json")"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		swap-pane -d -s "$topology_pane" -t "$shell_pane_id"
+	swapped_left="$topology_left"
+	swapped_top="$topology_top"
+	for _ in {1..150}; do
+		swapped_left="$(jq -er --arg pane "$topology_pane" \
+			'.mux.panes[] | select(.pane_id == $pane) | .left' \
+			"$fixture/engineos/shell-state.json")"
+		swapped_top="$(jq -er --arg pane "$topology_pane" \
+			'.mux.panes[] | select(.pane_id == $pane) | .top' \
+			"$fixture/engineos/shell-state.json")"
+		[[ "$swapped_left" != "$topology_left" ||
+			"$swapped_top" != "$topology_top" ]] && break
+		sleep 0.02
+	done
+	[[ "$swapped_left" != "$topology_left" ||
+		"$swapped_top" != "$topology_top" ]] ||
+		die "swap-pane did not transactionally move the retained pane scene"
+	jq -e --arg pane "$topology_pane" --argjson generation "$topology_generation" \
+		'any(.mux.panes[]; .pane_id == $pane and
+		 .generation == $generation and .grid.ready and .scene.rendered)' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "swap-pane changed pane identity or lost its retained grid"
+	broken_window="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" break-pane -d -P -F '#{window_id}' -s "$topology_pane")"
+	for _ in {1..150}; do
+		jq -e --arg pane "$topology_pane" \
+			'.mux.panes | length == 2 and all(.[]; .pane_id != $pane)' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg pane "$topology_pane" \
+		'.mux.panes | length == 2 and all(.[]; .pane_id != $pane)' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "break-pane did not remove the pane from the active graphical scene"
+	destination_session="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" new-session -d -s topology-destination -P -F '#{session_id}')"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		move-window -s "$broken_window" -t topology-destination:
+	graphical_client="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" list-clients -F '#{client_name}' | \
+		awk '/^engineos-view-/ { print; exit }')"
+	[[ -n "$graphical_client" ]] ||
+		die "native mux graphical tmux client was not discoverable"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		switch-client -c "$graphical_client" -t "$topology_pane"
+	for _ in {1..200}; do
+		jq -e --arg session "$destination_session" --arg pane "$topology_pane" \
+			--argjson generation "$topology_generation" \
+			'.mux.session_id == $session and .mux.pane_id == $pane and
+			 (.mux.panes | length) == 1 and
+			 (.mux.panes[0].pane_id == $pane) and
+			 (.mux.panes[0].generation == $generation) and
+			 .mux.panes[0].grid.ready and .mux.panes[0].scene.rendered' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg session "$destination_session" --arg pane "$topology_pane" \
+		--argjson generation "$topology_generation" \
+		'.mux.session_id == $session and .mux.pane_id == $pane and
+		 (.mux.panes | length) == 1 and
+		 (.mux.panes[0].generation == $generation) and
+		 .mux.panes[0].scene.rendered' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "moved window/session did not transfer the graphical client view with stable pane identity"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		link-window -s contract:0 -t topology-destination:
+	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot \
+		>"$fixture/linked-global-snapshot.json"
+	jq -e '([.panes[].pane_id] | unique | length) == (.panes | length)' \
+		"$fixture/linked-global-snapshot.json" >/dev/null ||
+		die "unscoped mux snapshot duplicated a linked canonical window"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		switch-client -c "$graphical_client" -t "$shell_pane_id"
+	for _ in {1..200}; do
+		jq -e --arg session "$destination_session" --arg pane "$shell_pane_id" \
+			'.mux.session_id == $session and .mux.pane_id == $pane and
+			 (.mux.panes | length) == 2 and
+			 ([.mux.panes[].pane_id] | unique | length) == 2 and
+			 all(.mux.panes[]; .grid.ready and .scene.rendered)' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg session "$destination_session" --arg pane "$shell_pane_id" \
+		'.mux.session_id == $session and .mux.pane_id == $pane and
+		 (.mux.panes | length) == 2 and
+		 ([.mux.panes[].pane_id] | unique | length) == 2 and
+		 all(.mux.panes[]; .grid.ready and .scene.rendered)' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "linked window duplicated pane identity or escaped the attached graphical view"
+
+	if ! kill "$shell_pid" 2>/dev/null; then
+		tail -120 "$fixture/shell-native.log" >&2 || true
+		die "graphical mux client exited before the detach/reattach proof"
+	fi
+	wait "$shell_pid" 2>/dev/null || true
+	rm -f "$fixture/engineos/shell-state.json"
+	XDG_RUNTIME_DIR="$fixture" ENGINEOS_STATE_DIR="$fixture/engineos" \
+		ENGINEOS_MUX_SOCKET="$fixture/engineos/mux.sock" \
+		WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=2 WLR_RENDERER="$shell_renderer" \
+		"$shell_bin" --headless --smoke-ms 90000 \
+		--bootstrap none --mux native >"$fixture/shell-native.log" 2>&1 &
+	shell_pid=$!
+	for _ in {1..250}; do
+		[[ -f "$fixture/engineos/shell-state.json" ]] &&
+			jq -e '(.mux.panes | length) == 2 and .mux.client_view_id > 0 and
+			 all(.mux.panes[]; .grid.ready and .grid.subscribed and
+			  .scene.rendered)' "$fixture/engineos/shell-state.json" \
+			>/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '(.mux.panes | length) == 2 and .mux.client_view_id > 0 and
+		 all(.mux.panes[]; .grid.ready and .scene.rendered)' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "graphical mux client did not detach and reattach with retained pane state"
+	shell_pane_id="$(jq -er '.mux.pane_id' \
+		"$fixture/engineos/shell-state.json")"
+	other_shell_pane="$(jq -er --arg pane "$shell_pane_id" \
+		'.mux.panes[] | select(.pane_id != $pane) | .pane_id' \
+		"$fixture/engineos/shell-state.json")"
 	if [[ "$shell_renderer" == gles2 ]]; then
 		if [[ "${ENGINEOS_MUX_REQUIRE_RADEONSI:-false}" == true ]]; then
 			grep -F 'EGL driver name: radeonsi' "$fixture/shell-native.log" \

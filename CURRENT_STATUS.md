@@ -99,8 +99,8 @@ These are historical proof artifacts only; they are not the active work path:
   `terminal-secondary`. The proof log is
   `/var/log/engineos/proof-mc-preview-20260710T002615Z.log`.
 - Native graphical mux migration is installed side by side as
-  `engineos-mux 3.6b-24` with the decoder/renderer/control boundary in
-  `engineos-shell 0.1.0-36`, but native mode is not yet the live desktop
+  `engineos-mux 3.6b-26` with the decoder/renderer/control boundary in
+  `engineos-shell 0.1.0-38`, but native mode is not yet the live desktop
   default.
   The package builds the pinned
   official tmux 3.6b baseline as `engine-mux` with an isolated namespace. The
@@ -162,7 +162,7 @@ These are historical proof artifacts only; they are not the active work path:
   resizing, ranged status-window selection, status-menu opening, and menu-item
   command activation. The shell routes pointer motion, buttons, and vertical
   scroll through that same boundary. The contract passes against the exact
-  `engineos-mux 3.6b-24` and `engineos-shell 0.1.0-36` package binaries. The
+  `engineos-mux 3.6b-26` and `engineos-shell 0.1.0-38` package binaries. The
   native renderer now keeps FreeType-rasterized, colour-keyed glyphs in a GPU
   texture atlas and draws them into double-buffered per-pane GPU targets.
   Sparse tmux cell damage is retained through the mux client, expanded only
@@ -197,6 +197,13 @@ These are historical proof artifacts only; they are not the active work path:
   fixes ordinary `select-pane` redraw handling without enabling tty output.
   Pane ID `%0` is accepted for graphical presentation mapping, and asynchronous
   invalidations are consumed safely while switching selected grids.
+  Graphical snapshots are now scoped to the focused mux client's attached
+  session and active window, while unscoped diagnostic snapshots deduplicate
+  linked canonical windows. The shell follows authoritative session switches
+  and refreshes its pane set after output registration. Headless pixman and
+  AMD/radeonsi contracts now cover inactive-window isolation, join, break,
+  swap, cross-session move-window, linked windows, session switching, and
+  compositor detach/reattach while preserving pane ID and generation.
   The mux server now also owns compound pane presentation and view state,
   stable pane generations, globally unique transient user scopes, mapped
   surface roles, and pane-local toplevel counts. The installed native commands
@@ -246,9 +253,9 @@ These are historical proof artifacts only; they are not the active work path:
   nonoverlapping panes. Graphical signals, close, and the unmapped-launch
   timeout now signal the authoritative transient systemd scope through the user
   manager, eliminating the fast-map race and avoiding stale process-group
-  guesses. Per-pane scenes, resize, zoom, and the required one hundred focus
-  transitions now pass in headless contracts; join/break/swap/session moves,
-  direct-KMS clipping, and graphical presentation leases are the next
+  guesses. Per-pane scenes and the complete terminal topology lifecycle now
+  pass in headless contracts. Direct-KMS clipping, simultaneous ordinary text
+  client acceptance, and graphical presentation leases are the next
   acceptance boundary.
   The canonical completion contract is
   [docs/graphical-tmux-goal.md](docs/graphical-tmux-goal.md).

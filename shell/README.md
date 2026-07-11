@@ -57,8 +57,12 @@ copy-mode bindings. Drag selection, border/status/menu click proofs,
 status/menu command activation, AMD radeonsi atlas rendering, sparse cell
 damage, nonblank GPU readback, multi-pane scene bounds, independent nonselected
 damage, dynamic active-pane adoption, resize, zoom/unzoom, one hundred focus
-transitions, and scoped compound presentations have contract coverage.
-Direct-KMS clipping, remaining topology moves, output leases, and final live
+transitions, inactive-window isolation, join/break/swap, cross-session window
+moves, linked windows, detach/reattach, and scoped compound presentations have
+contract coverage. Graphical snapshots follow only the attached session's
+active window, so linked or inactive windows cannot duplicate pane scenes.
+Direct-KMS clipping, ordinary simultaneous text-client acceptance, output
+leases, and final live
 hardware acceptance remain before native mode becomes the default.
 
 ## Surface Model

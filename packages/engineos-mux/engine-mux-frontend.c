@@ -872,9 +872,27 @@ engine_mux_current_command(struct window_pane *wp)
 	return (name);
 }
 
+static int
+engine_mux_window_seen_before(struct session *target_session,
+    struct winlink *target_winlink)
+{
+	struct session *session;
+	struct winlink *winlink;
+
+	RB_FOREACH(session, sessions, &sessions) {
+		RB_FOREACH(winlink, winlinks, &session->windows) {
+			if (session == target_session && winlink == target_winlink)
+				return (0);
+			if (winlink->window == target_winlink->window)
+				return (1);
+		}
+	}
+	return (0);
+}
+
 static char *
 engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
-    size_t *size)
+    size_t *size, struct session *session_filter, int active_window_only)
 {
 	struct evbuffer *buffer;
 	struct session *session;
@@ -896,11 +914,18 @@ engine_mux_build_snapshot(uint64_t revision, uint64_t *content_hash,
 	    (unsigned long long)revision);
 
 	RB_FOREACH(session, sessions, &sessions) {
+		if (session_filter != NULL && session != session_filter)
+			continue;
 		prefix_option = options_get(session->options, "prefix");
 		prefix2_option = options_get(session->options, "prefix2");
 		prefix_name = options_to_string(prefix_option, -1, 0);
 		prefix2_name = options_to_string(prefix2_option, -1, 0);
 		RB_FOREACH(winlink, winlinks, &session->windows) {
+			if (active_window_only && session->curw != winlink)
+				continue;
+			if (!active_window_only &&
+			    engine_mux_window_seen_before(session, winlink))
+				continue;
 			window = winlink->window;
 			window_active = session->curw == winlink;
 			layout = layout_dump(window->layout_root);
@@ -1352,7 +1377,7 @@ engine_mux_frontend_sync(void)
 	engine_pane_sync_all();
 
 	candidate = engine_mux_build_snapshot(engine_mux_revision,
-	    &content_hash, &candidate_size);
+	    &content_hash, &candidate_size, NULL, 0);
 	if (engine_mux_snapshot != NULL &&
 	    content_hash == engine_mux_snapshot_hash) {
 		free(candidate);
@@ -1366,7 +1391,7 @@ engine_mux_frontend_sync(void)
 		engine_mux_revision++;
 	free(candidate);
 	candidate = engine_mux_build_snapshot(engine_mux_revision,
-	    &content_hash, &candidate_size);
+	    &content_hash, &candidate_size, NULL, 0);
 	free(engine_mux_snapshot);
 	engine_mux_snapshot = candidate;
 	engine_mux_snapshot_size = candidate_size;
@@ -1541,13 +1566,50 @@ engine_mux_client_event(__unused int fd, __unused short events, void *data)
 		return;
 	}
 	if (type == ENGINE_MUX_SNAPSHOT_REQUEST) {
+		struct engine_mux_view *view;
+		struct session *snapshot_session = NULL;
+		struct json_object *root = NULL;
+		const char *scope = NULL;
+		char *snapshot = NULL;
+		size_t snapshot_size = 0;
+		uint64_t snapshot_hash;
+
+		TAILQ_FOREACH(view, &client->views, entry) {
+			if (view->tmux_client == NULL ||
+			    view->tmux_client->session == NULL ||
+			    (view->tmux_client->flags & CLIENT_DEAD))
+				continue;
+			if (snapshot_session == NULL)
+				snapshot_session = view->tmux_client->session;
+			if (view->tmux_client->flags & CLIENT_FOCUSED) {
+				snapshot_session = view->tmux_client->session;
+				break;
+			}
+		}
+		if (snapshot_session == NULL) {
+			root = engine_mux_parse_json(packet + sizeof header, payload_size);
+			if (root != NULL)
+				scope = engine_mux_json_string_value(root, "scope", 64);
+			if (scope != NULL && strcmp(scope, "initial-view") == 0) {
+				RB_FOREACH(snapshot_session, sessions, &sessions)
+					break;
+			}
+		}
 		free(packet);
+		if (root != NULL)
+			json_object_put(root);
 		client->state_invalidation_pending = 0;
 		engine_mux_frontend_sync();
+		if (snapshot_session != NULL) {
+			snapshot = engine_mux_build_snapshot(engine_mux_revision,
+			    &snapshot_hash, &snapshot_size, snapshot_session, 1);
+		}
 		if (engine_mux_send_frame(client->fd, ENGINE_MUX_SNAPSHOT,
-		    request_id, engine_mux_revision, engine_mux_snapshot,
-		    engine_mux_snapshot_size) != 0)
+		    request_id, engine_mux_revision,
+		    snapshot == NULL ? engine_mux_snapshot : snapshot,
+		    snapshot == NULL ? engine_mux_snapshot_size : snapshot_size) != 0)
 			engine_mux_client_free(client);
+		free(snapshot);
 		return;
 	}
 	if (type == ENGINE_MUX_PRESENTATION_RESOLVE_REQUEST) {

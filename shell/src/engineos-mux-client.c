@@ -1115,7 +1115,8 @@ bool engineos_mux_client_connect(struct engineos_mux_client *client,
 	}
 	struct json_object *snapshot = NULL;
 	if (!exchange(client->fd, ENGINE_MUX_SNAPSHOT_REQUEST, 2,
-			ENGINE_MUX_SNAPSHOT, &client->revision, "{}", &snapshot,
+			ENGINE_MUX_SNAPSHOT, &client->revision,
+			"{\"scope\":\"initial-view\"}", &snapshot,
 			error, error_size)) {
 		engineos_mux_client_destroy(client);
 		return false;
@@ -1210,6 +1211,7 @@ bool engineos_mux_client_refresh_presentation(struct engineos_mux_client *client
 	}
 	json_object_object_get_ex(snapshot, "panes", &panes);
 	struct json_object *matched = NULL;
+	struct json_object *active_any = NULL;
 	struct json_object *current = NULL;
 	for (size_t index = 0; panes != NULL &&
 			index < json_object_array_length(panes); index++) {
@@ -1232,18 +1234,24 @@ bool engineos_mux_client_refresh_presentation(struct engineos_mux_client *client
 				json_object_get_int64(generation) == client->pane_generation)
 			current = pane;
 		if (json_object_get_boolean(active) &&
-				json_object_get_boolean(window_active) &&
-				(client->session_id == NULL ||
-				 strcmp(json_object_get_string(session_id),
-				 client->session_id) == 0))
-			matched = pane;
+				json_object_get_boolean(window_active)) {
+			active_any = pane;
+			if (client->session_id == NULL ||
+					strcmp(json_object_get_string(session_id),
+					client->session_id) == 0)
+				matched = pane;
+		}
 	}
+	if (matched == NULL)
+		matched = active_any;
 	if (matched == NULL)
 		matched = current;
 	struct json_object *matched_id = NULL, *matched_generation = NULL;
+	struct json_object *matched_session = NULL;
 	if (matched == NULL ||
 			!json_object_object_get_ex(matched, "pane_id", &matched_id) ||
-			!json_object_object_get_ex(matched, "generation", &matched_generation)) {
+			!json_object_object_get_ex(matched, "generation", &matched_generation) ||
+			!json_object_object_get_ex(matched, "session_id", &matched_session)) {
 		json_object_put(snapshot);
 		snprintf(error, error_size, "active mux pane disappeared");
 		return false;
@@ -1259,6 +1267,23 @@ bool engineos_mux_client_refresh_presentation(struct engineos_mux_client *client
 		json_object_put(snapshot);
 		snprintf(error, error_size, "active mux pane identity is invalid");
 		return false;
+	}
+	const char *matched_session_text = json_object_get_string(matched_session);
+	if (matched_session_text == NULL || matched_session_text[0] != '$') {
+		json_object_put(snapshot);
+		snprintf(error, error_size, "active mux session identity is invalid");
+		return false;
+	}
+	if (client->session_id == NULL ||
+			strcmp(client->session_id, matched_session_text) != 0) {
+		char *updated_session = strdup(matched_session_text);
+		if (updated_session == NULL) {
+			json_object_put(snapshot);
+			snprintf(error, error_size, "out of memory");
+			return false;
+		}
+		free(client->session_id);
+		client->session_id = updated_session;
 	}
 	bool selection_changed = client->pane_id != (uint32_t)matched_pane ||
 		client->pane_generation != (uint32_t)matched_generation_value;
@@ -1761,7 +1786,14 @@ bool engineos_mux_client_register_view(struct engineos_mux_client *client,
 		payload, "engine-mux/view-register-v1", NULL, grid_changed,
 		error, error_size);
 	json_object_put(root);
-	if (result && focused) client->primary_view_id = view_id;
+	if (result && focused)
+		client->primary_view_id = view_id;
+	if (result) {
+		result = engineos_mux_client_refresh_presentation(client, error,
+			error_size);
+		if (result)
+			*grid_changed = true;
+	}
 	return result;
 }
 

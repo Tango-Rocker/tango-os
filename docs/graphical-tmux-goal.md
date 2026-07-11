@@ -71,14 +71,20 @@ hide nonactive zoom scenes. The contract exercises resize, zoom/unzoom, and
 one hundred focus transitions under both renderers. Synthetic graphical tmux
 clients satisfy upstream tty ownership invariants, so ordinary `select-pane`
 redraw logic remains safe while physical tty output stays disabled. Leases,
-games/images, direct-KMS clipping, remaining topology moves, final hardware
-acceptance, and legacy cutover remain open. The server now exports every
+games/images, direct-KMS clipping, final hardware acceptance, and legacy
+cutover remain open. The server now exports every
 pane's authoritative cell origin and size,
 and the shell validates and retains the complete pane set instead of discarding
 every pane except the selected one. `shell-state.json` exposes those stable
 pane identities, generations, layouts, and presentation states. The installed
 split contract compares protocol geometry directly with tmux's pane formats
-and proves shell observability retains both nonoverlapping panes. Application
+and proves shell observability retains both nonoverlapping panes. It now also
+exercises inactive-window isolation, join, break, swap, cross-session
+window moves, session switches, linked windows, and compositor detach/reattach.
+Graphical snapshots contain only the focused client's attached active window;
+unscoped diagnostic snapshots deduplicate linked canonical windows. Pane IDs
+and generations remain stable through the entire lifecycle under pixman and
+AMD/radeonsi GLES2. Application
 signals, close, and launch timeout now target the registered transient systemd
 scope through the user manager rather than trusting a sampled process group.
 
