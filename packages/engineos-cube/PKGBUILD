@@ -1,7 +1,7 @@
 pkgname=engineos-cube
 pkgver=0.1.0
-pkgrel=2
-pkgdesc="EngineOS rotating cube Wayland/OpenGL launchpad app"
+pkgrel=3
+pkgdesc="EngineOS rotating cube Wayland/OpenGL pane presentation"
 arch=('x86_64')
 url="https://example.invalid/engineos"
 license=('custom:EngineOS-TBD')

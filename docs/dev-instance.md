@@ -11,7 +11,7 @@ The development user should have:
 - current Codex CLI, installed through its detected managed install path
 - `codex-extractor` checkout and pinned `codex-insights 0.2.0` command
 - `opencode-autonomy`, `quake-generator`, and shared `skills` checkouts
-- tmux with the EngineOS pane bridge and restart-safe primary attachment
+- the EngineOS system tmux fork with restart-safe text and graphical clients
 - zsh and packaged shell plugins
 - Docker installed, active, and usable by the development user
 - EngineOS shell, tools, cube, Quake, dgen, level-agent, and editor packages

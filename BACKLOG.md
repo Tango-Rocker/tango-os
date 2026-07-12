@@ -21,21 +21,11 @@ cleanup must be safe even after an input-routing error.
 Likely phase: current native-mux hardening, immediately after physical refresh
 acceptance and before legacy-path removal.
 
-### Shell Screen Capture
-
-Why: live MC and GUI routing can be proven through shell geometry/state logs,
-but `eos-proof mc-preview --visual` cannot capture a real frame because the
-compositor does not expose the protocol required by `grim`.
-
-Likely phase: current MVP hardening after the boot/recovery gate; add a
-security-reviewed capture protocol and prove that metadata-only output remains
-insufficient.
-
 ### Falkon Pane Stress Proof
 
-Why: token binding and pane geometry are covered by tests, but the live
-terminal-to-Falkon focus path still needs a repeated switch test with a real
-mapped Qt surface and captured evidence.
+Why: process-scope binding and pane scene layout are covered by tests, but the
+live terminal-to-Falkon focus path still needs a repeated switch test with a
+real mapped Qt surface and captured evidence.
 
 Likely phase: current shell PoC, after screen capture or another accepted visual
 evidence path exists.

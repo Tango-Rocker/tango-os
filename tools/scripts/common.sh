@@ -240,7 +240,6 @@ engineos_eos_commands() {
     eos-runtime \
     eos-secureboot \
     eos-source-test \
-    eos-terminal \
     eos-test \
     eos-update \
     eos-usb \

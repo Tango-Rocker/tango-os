@@ -2,7 +2,7 @@
 
 `engineos-cube` is the first custom EngineOS graphical app. It is a small
 SDL2/Wayland OpenGL ES client that renders a rotating cube and logs renderer
-evidence for launchpad proofs.
+evidence for pane-presentation proofs.
 
 Expected entry points:
 
@@ -13,12 +13,10 @@ eos-app launch cube
 eos-app launch cube --smoke --smoke-ms 3000
 ```
 
-The app intentionally remains a normal Wayland client. The EngineOS shell owns
-launching, focus, fullscreen slot visibility, and input routing.
+The app intentionally remains a normal Wayland client. Tmux launches it in a
+pane scope; the EngineOS shell owns composition, clipping, focus, and input.
 
-When launched through `eos-app launch cube` from inside tmux, the launcher
-writes the current pane geometry to the shell's launch-bounds state. The shell
-then sizes the cube to the matching output sub-rectangle. `engineos-cube` logs
-the negotiated `window_size` and `drawable_size` in `cube.log` so panel-bounds
-proofs can compare requested tmux geometry, shell layout, and client drawable
-size.
+When launched through `eos-app launch cube`, tmux supplies authoritative pane
+geometry over the frontend protocol and the shell clips the surface to its pane
+scene. `engineos-cube` logs the negotiated `window_size` and `drawable_size` in
+`cube.log` for presentation-size proof.

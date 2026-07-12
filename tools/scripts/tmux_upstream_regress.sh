@@ -203,12 +203,13 @@ if [[ "$existing_count" -eq 0 ]]; then
   cp -a "$extracted" "$fork_source"
 
   for patch_file in \
-      0001-engine-mux-default-socket.patch \
       0002-engine-mux-in-server-frontend.patch \
       0003-engine-mux-graphical-client.patch \
       0004-engine-pane-presentations.patch \
       0005-upstream-regression-fixes.patch \
-      0006-engine-mux-deterministic-shutdown.patch; do
+      0006-engine-mux-deterministic-shutdown.patch \
+      0007-strip-sent-flag-before-pane-input.patch \
+      0008-skip-graphical-client-tty-alerts.patch; do
     patch -d "$fork_source" -Np1 -i "$ROOT/packages/engineos-mux/$patch_file" \
       >>"$OUTPUT_DIR/fork-patch.log"
   done

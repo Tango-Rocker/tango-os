@@ -102,8 +102,8 @@ install_managed_tmux_config() {
     elif grep -F 'TMUX_PLUGIN_MANAGER_PATH' "$dest" >/dev/null 2>&1 ||
         grep -F "set -g @plugin 'tmux-plugins/" "$dest" >/dev/null 2>&1 ||
         grep -F '/usr/share/tmux/plugins/tpm/tpm' "$dest" >/dev/null 2>&1; then
-      as_root cp "$dest" "$dest.engineos-legacy.bak"
-      log "backup legacy tmux config: $dest.engineos-legacy.bak"
+      as_root cp "$dest" "$dest.engineos-backup"
+      log "backup previous tmux config: $dest.engineos-backup"
     else
       log "keep existing unmanaged tmux config: $dest"
       return
@@ -125,14 +125,14 @@ install_managed_zprofile() {
   local owner="${4:-}"
 
   if [[ -e "$dest" && "$FORCE_CONFIG" != true ]]; then
-    if grep -F 'engineos-tmux-attach-primary' "$dest" >/dev/null 2>&1; then
+    if grep -F 'tmux new-session -A -s engineos' "$dest" >/dev/null 2>&1; then
       log "keep existing current zprofile: $dest"
       return
     fi
     if grep -F 'EngineDev OS' "$dest" >/dev/null 2>&1 ||
         grep -F 'Try: eos-doctor --vm' "$dest" >/dev/null 2>&1; then
-      as_root cp "$dest" "$dest.engineos-legacy.bak"
-      log "backup legacy zprofile: $dest.engineos-legacy.bak"
+      as_root cp "$dest" "$dest.engineos-backup"
+      log "backup previous zprofile: $dest.engineos-backup"
     else
       log "keep existing unmanaged zprofile: $dest"
       return
@@ -258,20 +258,10 @@ ensure_pacman_servers() {
 
 configure_tmux() {
   local home
-	local helper
   home="$(user_home "$TARGET_USER")"
   [[ -n "$home" ]] || die "cannot find home for user: $TARGET_USER"
 
   install_managed_tmux_config "$home/.tmux.conf" "$PAYLOAD/assets/tmux.conf" 0644 "$TARGET_USER:$TARGET_USER"
-  for helper in engineos-tmux-attach-primary engineos-tmux-pane-bridge \
-      engineos-tmux-pane-sync engineos-tmux-window-move \
-      engineos-tmux-window-sync engineos-tmux-window-focus \
-      engineos-tmux-window-proxy; do
-		if [[ -e "/usr/local/bin/$helper" ]]; then
-			as_root rm -f "/usr/local/bin/$helper"
-			log "removed legacy helper: /usr/local/bin/$helper"
-		fi
-  done
 }
 
 configure_zsh() {

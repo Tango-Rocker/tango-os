@@ -70,7 +70,7 @@ eos-crash-bundle --runtime
 
 - Sprint 7: wlroots headless shell
 - Sprint 8: nested shell with one client
-- Sprint 9: shell launches terminal and app slots
+- Sprint 9: shell renders native tmux consoles and pane presentations
 - Sprint 10: minimal surface model
 - PoC 2: shell proof
 
@@ -107,10 +107,11 @@ eos-proof shell-launch --bare-metal
 - build hygiene
 
 EngineRuntime image work is archived. Current acceptance runs through package
-updates and the installed bare-metal app stack. The pane bridge, exact MC
-output routing, shell state, and per-user Quake workflow are proven; the
-remaining hardware gate is boot/recovery completeness plus interactive Quake
-assets, input, and audible audio.
+updates and the installed bare-metal app stack. The native tmux frontend,
+pane-local MC images, observational shell state, and scoped Quake workflow are
+the single accepted architecture; the remaining hardware gate is
+boot/recovery completeness plus interactive Quake assets, input, and audible
+audio.
 
 The next hardware gate is explicit: `eos-validate boot --bare-metal` and
 `eos-proof shell-launch --bare-metal` must reject pixman/llvmpipe/software

@@ -14,9 +14,6 @@ PAMName=login
 WorkingDirectory=/home/dev
 Environment=ENGINEOS_LOG_DIR=/var/log/engineos
 Environment=XDG_SESSION_TYPE=wayland
-Environment=ENGINEOS_TERMINAL_REQUIRE_WAYLAND=true
-Environment=ENGINEOS_SHELL_BOOTSTRAP=terminal
-Environment="ENGINEOS_TERMINAL_SESSION_CMD=engineos-tmux-attach-primary"
 UMask=0002
 ExecStart=/usr/local/bin/engineos-dev-shell-start
 Restart=on-failure

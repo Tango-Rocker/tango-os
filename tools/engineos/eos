@@ -106,7 +106,7 @@ Commands:
   eos-doctor, eos-logs, eos-crash-bundle
   eos-build, eos-package, eos-lint, eos-preflight, eos-ci, eos-dev, eos-release, eos-artifacts
   eos-builder, eos-deploy, eos-install, eos-update
-  eos-app, eos-terminal, eos-outputs, eos-runtime, eos-game, eos-assets, eos-capture, eos-input
+  eos-app, eos-outputs, eos-runtime, eos-game, eos-assets, eos-capture, eos-input
   eos-proof, eos-validate, eos-vm, eos-usb, eos-secureboot
   eos-agent, eos-observe, eos-test, eos-source-test
 
@@ -594,10 +594,6 @@ main() {
     eos-app)
       record_eos_command "$tool" "$@"
       exec_script app.sh "$@"
-      ;;
-    eos-terminal)
-      record_eos_command "$tool" "$@"
-      exec_script terminal_launcher.sh "$@"
       ;;
     eos-outputs)
       record_eos_command "$tool" "$@"

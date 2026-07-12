@@ -72,7 +72,6 @@ ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-test reliability >/dev/null
 ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-test logs >/dev/null
 ENGINEOS_OUT_DIR="$TMP_DIR/out" run_eos eos-test artifacts >/dev/null
 ENGINEOS_OUT_DIR="$TMP_DIR/out" run_eos eos-test release >/dev/null
-ENGINEOS_TERMINAL_CANDIDATES="missing-terminal" run_eos eos-terminal --dry-run >/dev/null
 ENGINEOS_LOG_DIR="$TMP_DIR/logs" run_eos eos-test shell >/dev/null
 ENGINEOS_CAPTURE_DIR="$TMP_DIR/captures" ENGINEOS_CAPTURE_TOOL=metadata run_eos eos-capture frame --target shell >/dev/null
 run_eos eos-input record "$TMP_DIR/input.json" >/dev/null

@@ -1,36 +1,12 @@
-# EngineOS launchpad app registry.
+# EngineOS pane-presentation app registry.
 #
-# This file declares the MVP app contract used by the shell runner, app launcher,
-# and proof tooling. Keep commands canonical here; source-tree helpers may
+# This file declares the MVP graphical app contract used by the native mux app
+# launcher and proof tooling. Keep commands canonical here; source-tree helpers may
 # rewrite a leading `eos-*` to the local checkout command path.
 
-[apps.terminal]
-slot = "terminal"
-role = "terminal"
-command = "eos-app launch terminal"
-package = "foot"
-app_ids = ["foot", "terminal", "alacritty", "kitty", "wezterm"]
-log = "terminal.log"
-health = "terminal-owner-log"
-input = "normal"
-capture = "none"
-instance = "dedicated"
-
-[apps.terminal-secondary]
-slot = "terminal-secondary"
-role = "terminal-secondary"
-command = "eos-app launch terminal-secondary"
-package = "foot"
-app_ids = ["engineos-terminal-secondary", "terminal-secondary"]
-log = "terminal.log"
-health = "terminal-owner-log"
-input = "normal"
-capture = "none"
-instance = "dedicated"
-
 [apps.cube]
-slot = "cube"
-role = "cube"
+slot = "pane"
+role = "presentation"
 command = "eos-app launch cube"
 smoke_command = "eos-app launch cube --smoke"
 package = "engineos-cube"
@@ -42,8 +18,8 @@ capture = "none"
 instance = "dedicated"
 
 [apps.quake]
-slot = "engine"
-role = "engine"
+slot = "pane"
+role = "presentation"
 command = "eos-app launch quake"
 smoke_command = "eos-app launch quake --smoke"
 package = "engineos-quakespasm"
@@ -57,11 +33,23 @@ instance = "dedicated"
 
 [apps.falkon]
 slot = "pane"
-role = "pane"
+role = "presentation"
 command = "eos-app pane launch -- falkon"
 package = "falkon"
 app_ids = ["org.kde.falkon", "falkon"]
 log = "app.log"
+health = "pane-presentation"
+input = "normal"
+capture = "none"
+instance = "dedicated"
+
+[apps.chroma]
+slot = "pane"
+role = "presentation"
+command = "eos-app launch chroma"
+package = "stable-diffusion.cpp-pipefusion"
+app_ids = ["stable-diffusion-chroma"]
+log = "chroma.log"
 health = "pane-presentation"
 input = "normal"
 capture = "none"

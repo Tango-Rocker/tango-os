@@ -157,22 +157,14 @@ opengl_check() {
 
 runtime_config_check() {
   local bootstrap=""
-  local cube_cmd=""
-  local engine_cmd=""
-  local mux_mode=""
   local recovery_tty=""
-  local terminal_session=""
 
   if [[ -r "$RUNTIME_CONF" ]]; then
     ok "$RUNTIME_CONF exists"
     # shellcheck disable=SC1090
     source "$RUNTIME_CONF"
     bootstrap="${ENGINEOS_SHELL_BOOTSTRAP:-}"
-    cube_cmd="${ENGINEOS_CUBE_CMD:-}"
-    engine_cmd="${ENGINEOS_ENGINE_CMD:-}"
-    mux_mode="${ENGINEOS_MUX_MODE:-}"
     recovery_tty="${ENGINEOS_RUNTIME_RECOVERY_TTY:-}"
-    terminal_session="${ENGINEOS_TERMINAL_SESSION_CMD:-}"
     if [[ -n "$recovery_tty" ]]; then
       ok "runtime recovery TTY configured: $recovery_tty"
     else
@@ -192,35 +184,11 @@ runtime_config_check() {
     fail "runtime recovery TTY has unexpected format: $recovery_tty"
   fi
 
-  if [[ "$terminal_session" == *"engineos-tmux-attach-primary"* ]]; then
-    ok "runtime terminal session attaches existing primary tmux or starts engineos"
-  else
-    fail "runtime terminal session must use engineos-tmux-attach-primary"
-  fi
-
-  if [[ "$mux_mode" == "native" ]]; then
-    ok "runtime shell uses native mux by default"
-  else
-    fail "runtime mux mode must be native"
-  fi
-
-  if [[ "$bootstrap" == "launchpad" ]]; then
-    ok "runtime legacy rollback bootstrap starts launchpad"
-  else
-    fail "runtime legacy rollback bootstrap must be launchpad"
-  fi
-
-  if [[ "$cube_cmd" == *"eos-app launch cube"* ]]; then
-    ok "runtime cube command uses app launcher"
-  else
-    fail "runtime cube command must use eos-app launch cube"
-  fi
-
-  if [[ "$engine_cmd" == *"eos-app launch quake"* ]]; then
-    ok "runtime engine command uses app launcher"
-  else
-    fail "runtime engine command must use eos-app launch quake"
-  fi
+	if [[ "$bootstrap" == "none" ]]; then
+		ok "runtime shell uses native mux without shell-owned app bootstrap"
+	else
+		fail "runtime shell bootstrap must be none"
+	fi
 
   enabled_service_check "getty@${recovery_tty}.service"
   if [[ "$MODE" == "bare-metal" ]]; then

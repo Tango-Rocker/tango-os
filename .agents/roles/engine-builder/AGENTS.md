@@ -3,7 +3,8 @@
 Responsibilities:
 - Build scenes, demos, game loops, renderer checks, and visual runtime proofs
   using EngineOS/Tango-OS platform capabilities.
-- Keep work aligned with the user-service game workflow, app manifest, and shell launchpad.
+- Keep work aligned with native tmux pane presentations, app manifests, and
+  presentation leases.
 
 Boundaries:
 - Do not redefine OS package or service ownership.

@@ -6,7 +6,7 @@ VM milestones are archived context, not active acceptance gates.
 ## Product Shape
 
 EngineDev is the current development system: a package-managed Arch install
-running the EngineOS wlroots shell, persistent tmux sessions, shell-owned apps,
+running the EngineOS wlroots shell, persistent native tmux sessions, pane apps,
 and the Quake development workflow. The later appliance remains a smaller
 EngineRuntime system, but image generation resumes only when the live stack is
 ready to package.
@@ -17,10 +17,10 @@ The following foundations are already available:
 
 - local EngineOS package builds and deterministic committed-range deployment
 - live AMD/radeonsi shell startup and shell-owned Wayland clients
-- terminal, secondary terminal, cube, and Quake app-manifest slots
-- one tmux server with restart-safe primary/secondary session attachment
-- event-driven pane focus/geometry and exact launch-token GUI binding
-- exact MC image-preview routing by pane and terminal client tty
+- the system tmux fork as the only pane, PTY, layout, and presentation server
+- one tmux server with restart-safe text and graphical clients
+- launch-scope Wayland binding without tokens or geometry IPC
+- MC image-preview routing by pane, generation, and graphical lease
 - QuakeSpasm, dgen, level-agent, and TrenchBroom package integration
 - `eos-game quake` workflow with per-user Quake and level-agent services
 - lean role/skill agent harness and fail-closed Luna session extraction
@@ -59,9 +59,9 @@ Acceptance:
 - `eos-app pane launch -- COMMAND` binds only the exact launched client
 - native `eos-app pane launch --game -- COMMAND` retains the pane console and
   releases capture when the console is shown
-- pane focus and geometry are event-driven with no proxy windows or polling
+- pane focus and geometry come from revisioned native mux snapshots
 - MC Quick View renders on the invoking terminal output and pane rectangle
-- stale tokens, panes, and ambiguous output ownership fail explicitly
+- stale revisions, panes, and ambiguous lease ownership fail explicitly
 
 Commands:
 
@@ -78,12 +78,9 @@ View screenshot acceptance run. The compositor now exposes screencopy and
 xdg-output; real `grim` captures pass on headless pixman, headless radeonsi
 GLES2, the live two-output layout, and a named physical output.
 
-The replacement path is staged in parallel: the tmux 3.6b fork now owns the
-versioned frontend, terminal grids, graphical clients, compound presentations,
-leases, game panes, and independent lease-keyed pane previews. The exact
-installed mux and shell packages are exercised by `eos-test mux`; independent
-per-output sessions, terminal-image transport, real Falkon/Quake hardware
-acceptance, and final bridge removal remain. See
+The tmux 3.6b fork now owns the versioned frontend, terminal grids, graphical
+clients, compound presentations, leases, game panes, and lease-keyed pane
+previews. The rollback bridge has been removed. See
 [graphical-tmux.md](graphical-tmux.md).
 
 ### 3. Quake Development Loop
@@ -95,7 +92,7 @@ Acceptance:
 
 - dgen is built from the exact pinned `quake-generator` release
 - the level agent fails closed on extractor/generator errors
-- Quake runs through `engineos-quake.service`
+- Quake runs as a scoped tmux game-pane foreground job
 - edit/build/play/reload operations share one user-facing command surface
 - user assets remain outside the repository
 
