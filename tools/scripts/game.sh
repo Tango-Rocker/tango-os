@@ -12,7 +12,6 @@ shift 2 2>/dev/null || true
 RUNTIME_DIR="${ENGINEOS_GAME_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/tmp}/engineos}"
 STATE_DIR="${ENGINEOS_GAME_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/engineos}"
 LAUNCH_REQUEST="${ENGINEOS_QUAKE_LAUNCH_REQUEST:-$RUNTIME_DIR/quake-launch.json}"
-read -r -a SYSTEMCTL <<<"${ENGINEOS_SYSTEMCTL_CMD:-systemctl}"
 
 usage() {
   cat <<'HELP'
@@ -48,29 +47,6 @@ eos_command() {
   fi
 }
 
-systemctl_user() { "${SYSTEMCTL[@]}" --user "$@"; }
-
-import_graphical_environment() {
-  local names=() name
-  for name in WAYLAND_DISPLAY DISPLAY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS XDG_SESSION_TYPE; do
-    [[ -n "${!name:-}" ]] && names+=("$name")
-  done
-  [[ ${#names[@]} -eq 0 ]] || systemctl_user import-environment "${names[@]}"
-}
-
-native_mux_active() {
-  case "${ENGINEOS_MUX_MODE:-}" in
-    native) return 0 ;;
-    legacy) return 1 ;;
-    "") ;;
-    *) die "ENGINEOS_MUX_MODE must be legacy or native" ;;
-  esac
-  local state="${ENGINEOS_STATE_DIR:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/engineos}/shell-state.json"
-  [[ -r "$state" ]] || return 1
-  jq -e '.mux.mode == "native" and .mux.connected == true' "$state" \
-    >/dev/null 2>&1
-}
-
 resolve_id1() {
   if [[ -n "${ENGINEOS_QUAKE_ID1:-}" ]]; then
     printf '%s\n' "$ENGINEOS_QUAKE_ID1"
@@ -88,24 +64,6 @@ quake_runner() {
   else
     die "Quake runner is missing"
   fi
-}
-
-write_launch_request() {
-	local map="$1" game="$2" smoke="$3" window="$4" fullscreen="$5" id1="$6"
-  mkdir -p "$RUNTIME_DIR" "$STATE_DIR/logs"
-  chmod 0700 "$RUNTIME_DIR"
-	python - "$LAUNCH_REQUEST" "$map" "$game" "$smoke" "$window" "$fullscreen" "$id1" <<'PY'
-import json, os, pathlib, sys
-path = pathlib.Path(sys.argv[1])
-data = {"schema": "engineos-quake-launch/v1", "map": sys.argv[2] or None,
-		"game": sys.argv[3] or None, "smoke": sys.argv[4] == "true",
-		"window": sys.argv[5] == "true", "fullscreen": sys.argv[6] == "true",
-		"id1": sys.argv[7]}
-tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-os.chmod(tmp, 0o600)
-tmp.replace(path)
-PY
 }
 
 play_quake() {
@@ -128,7 +86,7 @@ play_quake() {
   id1="$(resolve_id1)" || die "Quake assets are not ready; run eos-assets prepare/check quake"
 	[[ "$window" != true || "$fullscreen" != true ]] ||
 		die "quake play cannot combine --window and --fullscreen"
-	if [[ "$foreground" == false ]] && native_mux_active; then
+	if [[ "$foreground" == false ]]; then
 		local app_args=(launch quake)
 		[[ -z "$map" ]] || app_args+=(--map "$map")
 		[[ "$game" == id1 ]] || app_args+=(--game "$game")
@@ -146,10 +104,6 @@ play_quake() {
 		export ENGINEOS_QUAKE_ID1="$id1"
 		exec "$(quake_runner)" "${runner_args[@]}"
 	fi
-	write_launch_request "$map" "$game" "$smoke" "$window" "$fullscreen" "$id1"
-  import_graphical_environment
-  systemctl_user restart engineos-quake.service
-  printf 'Quake started by engineos-quake.service%s\n' "${map:+ map=$map}"
 }
 
 reload_quake() {
@@ -195,7 +149,9 @@ case "$ACTION" in
     prompt="${1:-}"
     [[ -n "$prompt" ]] || die "$ACTION requires a level prompt"
     shift
-    systemctl_user start engineos-level-agent.service
+		if command -v systemctl >/dev/null 2>&1; then
+			systemctl --user start engineos-level-agent.service
+		fi
     level_agent build "$prompt" "$@"
     ;;
   edit)
@@ -208,15 +164,14 @@ case "$ACTION" in
   play) play_quake "$@" ;;
   reload) reload_quake "$@" ;;
   status)
-    systemctl_user show engineos-quake.service --property=ActiveState,SubState,MainPID --no-pager
+		"$(eos_command eos-app)" pane list --json
     level_agent status "${1:-}"
     ;;
   proof)
     "$(eos_command eos-assets)" check quake
-    systemctl_user show engineos-quake.service --property=LoadState,ActiveState --no-pager
-    "$(eos_command eos-app)" manifest validate
+		"$(eos_command eos-app)" manifest validate
     ;;
-  stop) systemctl_user stop engineos-quake.service ;;
+  stop) "$(eos_command eos-app)" pane signal TERM ;;
   help|--help|-h) usage ;;
   *) die "unknown quake action: $ACTION" ;;
 esac

@@ -7,7 +7,7 @@ ENGINEOS_RUNTIME_CMD="${ENGINEOS_RUNTIME_CMD:-eos-runtime}"
 CMDLINE_FILE="${ENGINEOS_PROC_CMDLINE:-/proc/cmdline}"
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 REFRESH_WAYLAND_ON_START="${ENGINEOS_REFRESH_WAYLAND_ON_START:-true}"
-MUX_BIN="${ENGINEOS_MUX_BIN:-engine-mux}"
+MUX_BIN="${ENGINEOS_TMUX_BIN:-tmux}"
 
 mkdir -p "$LOG_DIR"
 
@@ -66,40 +66,38 @@ refresh_wayland_session() {
   fi
 }
 
-prepare_native_mux() {
+prepare_mux() {
   local mux_socket
 
-  [[ "${ENGINEOS_MUX_MODE:-legacy}" == "native" ]] || return 0
   command -v "$MUX_BIN" >/dev/null 2>&1 || {
-    log "native mux startup failed reason=missing-engine-mux"
+	log "mux startup failed reason=missing-tmux"
     return 1
   }
 
   mux_socket="${ENGINEOS_MUX_SOCKET:-$RUNTIME_DIR/engineos/mux.sock}"
   if [[ -n "${ENGINEOS_MUX_SOCKET:-}" ]]; then
     [[ -S "$mux_socket" ]] || {
-      log "native mux startup failed reason=configured-socket-missing socket=$mux_socket"
+	  log "mux startup failed reason=configured-socket-missing socket=$mux_socket"
       return 1
     }
-    log "using configured native mux socket=$mux_socket"
+	log "using configured mux socket=$mux_socket"
   else
     if ! "$MUX_BIN" has-session -t '=engineos' 2>/dev/null; then
-      log "creating native mux session=engineos"
+	  log "creating mux session=engineos"
       "$MUX_BIN" new-session -d -s engineos
     fi
     [[ -S "$mux_socket" ]] || {
-      log "native mux startup failed reason=frontend-socket-missing socket=$mux_socket"
+	  log "mux startup failed reason=frontend-socket-missing socket=$mux_socket"
       return 1
     }
-    log "native mux ready session=engineos socket=$mux_socket"
+	log "mux ready session=engineos socket=$mux_socket"
   fi
 
-  export ENGINEOS_SHELL_BOOTSTRAP=none
 }
 
 refresh_wayland_session
-prepare_native_mux
-log "starting EngineDev shell mode=--tty mux=${ENGINEOS_MUX_MODE:-legacy} bootstrap=${ENGINEOS_SHELL_BOOTSTRAP:-terminal}"
+prepare_mux
+log "starting EngineDev shell mode=--tty mux=native"
 
 if "$ENGINEOS_RUNTIME_CMD" shell --tty >>"$LOG_FILE" 2>&1; then
   log "EngineDev shell exited cleanly"

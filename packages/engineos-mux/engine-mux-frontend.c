@@ -2535,7 +2535,7 @@ engine_mux_frontend_init(void)
 		socket_name = socket_path;
 	else
 		socket_name++;
-	if (strcmp(socket_name, "engine-mux") != 0)
+	if (strcmp(socket_name, "default") != 0)
 		return (0);
 	runtime_dir = getenv("XDG_RUNTIME_DIR");
 	if (runtime_dir == NULL || *runtime_dir == '\0')

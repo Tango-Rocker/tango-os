@@ -23,12 +23,13 @@ evidence but does not replace bare-metal AMD validation.
 ./tools/engineos/eos-capture frame --target shell
 ```
 
-In a booted Runtime proof:
+In a live native-mux proof:
 
 ```bash
 eos-logs app --last 200
 eos-logs shell --last 200
-eos-proof launchpad --runtime
+eos-proof native-kms
 ```
 
-Expected Runtime evidence includes cube log `gl_renderer=` and `frames=`.
+Expected renderer evidence includes the hardware renderer, a committed nonblank
+shell frame, and no silent software fallback.

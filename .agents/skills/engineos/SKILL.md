@@ -1,6 +1,6 @@
 ---
 name: engineos
-description: Use for general Tang-OS / EngineOS work involving eos-* CLI tools, agent workflow, packages, runtime proofs, shell launchpad, Quake path, logs, crash bundles, observability, or role routing.
+description: Use for general Tang-OS / EngineOS work involving eos-* CLI tools, agent workflow, packages, runtime proofs, native mux panes, Quake path, logs, crash bundles, observability, or role routing.
 ---
 
 # EngineOS Orchestrator Skill

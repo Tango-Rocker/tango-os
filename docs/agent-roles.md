@@ -103,9 +103,9 @@ Proof commands:
 ## admin-shell
 
 Responsibilities:
-- Own the desktop shell, Wayland session, app slots, tiling/window state,
+- Own the desktop shell, Wayland session, mux pane scenes, tiling/window state,
   focus, input routing, recovery shortcuts, and user-space/system glue.
-- Keep shell-owned app launch and live shell state inspectable.
+- Keep pane presentation binding and live shell state inspectable.
 
 Boundaries:
 - Do not own Quake gameplay behavior beyond shell launch and focus routing.
@@ -132,7 +132,7 @@ Responsibilities:
 - Use EngineOS/Tango-OS engine capabilities to build scenes, demos, game loops,
   renderer checks, and runtime visual proofs.
 - Keep 3D/game work grounded in the current user-service game workflow, app
-  manifest, and shell launchpad contracts.
+  manifest, and native pane-presentation contracts.
 
 Boundaries:
 - Do not redefine OS service ownership or package policy.

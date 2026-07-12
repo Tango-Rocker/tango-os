@@ -1,12 +1,11 @@
 pkgname=engineos-shell
 pkgver=0.1.0
-pkgrel=75
+pkgrel=79
 pkgdesc="EngineOS wlroots shell bootstrap"
 arch=('x86_64')
 url="https://example.invalid/engineos"
 license=('custom:EngineOS-TBD')
-depends=('wlroots0.19' 'wayland' 'libinput' 'libxkbcommon' 'libpng' 'libjpeg-turbo' 'json-c' 'fcft' 'pixman' 'ttf-dejavu' 'noto-fonts' 'noto-fonts-cjk' 'noto-fonts-emoji' 'ttf-nerd-fonts-symbols-mono')
-optdepends=('engineos-mux: native graphical mux protocol mode')
+depends=('engineos-mux' 'wlroots0.19' 'wayland' 'libinput' 'libxkbcommon' 'libpng' 'libjpeg-turbo' 'json-c' 'fcft' 'pixman' 'ttf-dejavu' 'noto-fonts' 'noto-fonts-cjk' 'noto-fonts-emoji' 'ttf-nerd-fonts-symbols-mono')
 makedepends=('meson' 'ninja' 'pkgconf' 'gcc')
 source=()
 sha256sums=()

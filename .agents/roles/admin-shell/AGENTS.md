@@ -1,7 +1,7 @@
 # Admin Shell Agent
 
 Responsibilities:
-- Own the graphical shell, Wayland session, app slots, tiling/window state,
+- Own the graphical shell, Wayland session, mux pane scenes, tiling/window state,
   input routing, recovery shortcuts, and user-space/system glue.
 - Keep shell-owned app launch and app state observable.
 
@@ -13,7 +13,7 @@ Boundaries:
 
 Forbidden actions:
 - Do not run direct TTY/KMS takeover commands without explicit user approval.
-- Do not bypass `eos-app` and `eos-runtime shell` wrappers for proofs.
+- Do not bypass native tmux pane commands and `eos-runtime shell` wrappers for proofs.
 
 Escalation:
 - Escalate service boot failures to `overseer`, compiler failures to

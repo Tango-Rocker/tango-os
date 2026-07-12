@@ -56,18 +56,12 @@
 #include "engineos-terminal-renderer.h"
 #include "engineos-tmux-key.h"
 
-#ifndef XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION
-#define XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION 4
-#endif
 #ifndef XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION
 #define XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION 5
 #endif
 #ifndef XDG_TOPLEVEL_STATE_SUSPENDED_SINCE_VERSION
 #define XDG_TOPLEVEL_STATE_SUSPENDED_SINCE_VERSION 6
 #endif
-
-#define ENGINEOS_PANE_LAUNCH_TIMEOUT_MS 15000
-#define ENGINEOS_PANE_RENDER_GRACE_MS 750
 
 enum engineos_shell_mode {
 	ENGINEOS_SHELL_AUTO,
@@ -79,10 +73,6 @@ enum engineos_shell_mode {
 enum engineos_surface_role {
 	ENGINEOS_SURFACE_UNKNOWN,
 	ENGINEOS_SURFACE_MUX_PRESENTATION,
-	ENGINEOS_SURFACE_TERMINAL,
-	ENGINEOS_SURFACE_TERMINAL_SECONDARY,
-	ENGINEOS_SURFACE_CUBE,
-	ENGINEOS_SURFACE_ENGINE,
 };
 
 enum engineos_input_mode {
@@ -92,18 +82,6 @@ enum engineos_input_mode {
 	ENGINEOS_INPUT_GAME,
 };
 
-enum engineos_bootstrap_mode {
-	ENGINEOS_BOOTSTRAP_NONE,
-	ENGINEOS_BOOTSTRAP_TERMINAL,
-	ENGINEOS_BOOTSTRAP_ENGINE,
-	ENGINEOS_BOOTSTRAP_LAUNCHPAD,
-};
-
-enum engineos_mux_mode {
-	ENGINEOS_MUX_LEGACY,
-	ENGINEOS_MUX_NATIVE,
-};
-
 struct engineos_view_geometry {
 	int x;
 	int y;
@@ -111,49 +89,6 @@ struct engineos_view_geometry {
 	int height;
 	bool fullscreen;
 	const char *layout;
-};
-
-struct engineos_layout_request {
-	bool pane;
-	bool output;
-	bool fullscreen;
-	int pane_left;
-	int pane_top;
-	int pane_width;
-	int pane_height;
-	int window_width;
-	int window_height;
-	int cell_width;
-	int cell_height;
-	char source[32];
-};
-
-struct engineos_pane_binding {
-	struct wl_list link;
-	char *key;
-	char *socket;
-	char *session;
-	char *window_id;
-	char *window_index;
-	char *pane_id;
-	char *token;
-	char *command_label;
-	struct engineos_layout_request geometry;
-	struct engineos_shell_view *view;
-	enum engineos_surface_role terminal_role;
-	bool focused;
-	int64_t last_update_msec;
-	int64_t launch_deadline_msec;
-	int64_t render_until_msec;
-	bool timeout_logged;
-};
-
-struct engineos_terminal_client {
-	struct wl_list link;
-	char *tty;
-	char *focused_pane_key;
-	enum engineos_surface_role role;
-	int64_t last_update_msec;
 };
 
 struct engineos_preview_bounds {
@@ -247,16 +182,12 @@ struct engineos_shell_server {
 	uint32_t mux_consumed_keycode;
 	bool mux_prefix_pending;
 	bool mux_pointer_cell_valid;
-	struct wl_event_source *pane_binding_timer;
 	struct wl_event_source *mux_event_source;
 	struct wl_event_source *mux_snapshot_retry_timer;
 	struct wl_list outputs;
 	struct wl_list views;
 	struct wl_list keyboards;
 	struct wl_list pointers;
-	struct wl_list launches;
-	struct wl_list pane_bindings;
-	struct wl_list terminal_clients;
 	struct wl_listener new_output;
 	struct wl_listener new_input;
 	struct wl_listener new_xdg_surface;
@@ -285,11 +216,6 @@ struct engineos_shell_server {
 	double move_grab_x;
 	double move_grab_y;
 	const char *mode_name;
-	const char *startup_cmd;
-	const char *terminal_cmd;
-	const char *terminal_secondary_cmd;
-	const char *cube_cmd;
-	const char *engine_cmd;
 	char *state_dir;
 	char *state_file;
 	char *preview_socket_path;
@@ -298,11 +224,7 @@ struct engineos_shell_server {
 	struct wl_list previews;
 	struct engineos_preview_surface wallpaper;
 	struct engineos_mux_client mux_client;
-	enum engineos_mux_mode mux_mode;
-	enum engineos_bootstrap_mode bootstrap_mode;
 	enum engineos_input_mode input_mode;
-	enum engineos_surface_role active_slot;
-	enum engineos_surface_role pending_slot;
 	bool game_capture;
 	bool emergency_released;
 	bool cursor_hidden;
@@ -314,15 +236,7 @@ struct engineos_shell_server {
 	unsigned int next_view_id;
 	uint32_t next_mux_view_id;
 	uint64_t mux_snapshot_retry_count;
-};
-
-struct engineos_shell_launch {
-	struct wl_list link;
-	pid_t pid;
-	enum engineos_surface_role role;
-	char *label;
-	char *command;
-	bool mapped;
+	bool mux_image_resync_pending;
 };
 
 struct engineos_shell_keyboard {
@@ -425,17 +339,11 @@ struct engineos_shell_view {
 static const char *view_title(struct engineos_shell_view *view);
 static const char *view_app_id(struct engineos_shell_view *view);
 static const char *surface_role_name(enum engineos_surface_role role);
-static bool is_launchpad_role(enum engineos_surface_role role);
-static bool is_terminal_role(enum engineos_surface_role role);
 static char *join_state_path(const char *dir, const char *name);
 static bool mkdir_p(const char *path, mode_t mode);
 static bool compute_view_geometry(struct engineos_shell_view *view,
 	struct engineos_view_geometry *geometry);
-static bool is_persistent_panel_geometry(enum engineos_surface_role role,
-	const struct engineos_view_geometry *geometry);
 static bool is_managed_floating_view(struct engineos_shell_view *view);
-static struct engineos_pane_binding *pane_binding_for_view(
-	struct engineos_shell_view *view);
 static struct engineos_mux_pane_scene *find_mux_pane_scene(
 	struct engineos_shell_server *server, uint32_t pane_id,
 	uint32_t generation);
@@ -469,16 +377,10 @@ static void sync_pointer_constraint(struct engineos_shell_server *server,
 static void set_view_activated(struct engineos_shell_view *view, bool activated);
 static void focus_view(struct engineos_shell_view *view);
 static void activate_view(struct engineos_shell_view *view, const char *reason);
-static void set_active_slot(struct engineos_shell_server *server,
-	enum engineos_surface_role role, const char *reason);
-static void apply_launchpad_visibility(struct engineos_shell_server *server,
-	const char *reason);
 static void relayout_shell_views(struct engineos_shell_server *server,
 	const char *reason);
 static void hide_image_preview(struct engineos_shell_server *server,
 	const char *reason);
-static void launch_or_activate_slot(struct engineos_shell_server *server,
-	enum engineos_surface_role role, const char *reason);
 static void write_shell_state(struct engineos_shell_server *server,
 	const char *reason);
 static struct engineos_shell_view *native_presentation_root(
@@ -501,29 +403,11 @@ static const char *mode_to_string(enum engineos_shell_mode mode) {
 	}
 }
 
-static const char *mux_mode_name(enum engineos_mux_mode mode) {
-	return mode == ENGINEOS_MUX_NATIVE ? "native" : "legacy";
-}
-
-static bool parse_mux_mode(const char *value, enum engineos_mux_mode *mode) {
-	if (value == NULL || strcmp(value, "legacy") == 0) {
-		*mode = ENGINEOS_MUX_LEGACY;
-		return true;
-	}
-	if (strcmp(value, "native") == 0) {
-		*mode = ENGINEOS_MUX_NATIVE;
-		return true;
-	}
-	return false;
-}
-
 static void usage(FILE *out, const char *argv0) {
 	fprintf(out,
-		"Usage: %s [--headless|--nested|--tty] [--smoke] [--smoke-ms N] [--startup CMD]\n"
-		"          [--terminal CMD] [--terminal-secondary CMD] [--cube CMD] [--engine CMD]\n"
-		"          [--bootstrap MODE] [--mux legacy|native]\n"
+		"Usage: %s [--headless|--nested|--tty] [--smoke] [--smoke-ms N]\n"
 		"\n"
-		"Start the EngineOS wlroots shell bootstrap.\n"
+		"Start the EngineOS wlroots compositor.\n"
 		"\n"
 		"Options:\n"
 		"  --headless      prefer the wlroots headless backend\n"
@@ -531,51 +415,9 @@ static void usage(FILE *out, const char *argv0) {
 		"  --tty           prefer direct DRM/libinput backends\n"
 		"  --smoke         start and exit after one second\n"
 		"  --smoke-ms N    start and exit after N milliseconds\n"
-		"  --startup CMD   run CMD after the Wayland socket is ready\n"
-		"  --terminal CMD  command launched by Alt+Return\n"
-		"  --terminal-secondary CMD  command launched by Alt+4\n"
-		"  --cube CMD      command launched by Alt+2\n"
-		"  --engine CMD    command launched by Alt+G\n"
-		"  --bootstrap MODE  start none, terminal, engine, or launchpad after shell startup\n"
-		"  --mux MODE      select legacy pane bridge or fail-closed native mux protocol\n"
 		"  --version       print version\n"
 		"  --help          print this help\n",
 		argv0);
-}
-
-static const char *bootstrap_mode_name(enum engineos_bootstrap_mode mode) {
-	switch (mode) {
-	case ENGINEOS_BOOTSTRAP_TERMINAL:
-		return "terminal";
-	case ENGINEOS_BOOTSTRAP_ENGINE:
-		return "engine";
-	case ENGINEOS_BOOTSTRAP_LAUNCHPAD:
-		return "launchpad";
-	case ENGINEOS_BOOTSTRAP_NONE:
-	default:
-		return "none";
-	}
-}
-
-static bool parse_bootstrap_mode(const char *value,
-		enum engineos_bootstrap_mode *mode) {
-	if (strcmp(value, "none") == 0) {
-		*mode = ENGINEOS_BOOTSTRAP_NONE;
-		return true;
-	}
-	if (strcmp(value, "terminal") == 0) {
-		*mode = ENGINEOS_BOOTSTRAP_TERMINAL;
-		return true;
-	}
-	if (strcmp(value, "engine") == 0) {
-		*mode = ENGINEOS_BOOTSTRAP_ENGINE;
-		return true;
-	}
-	if (strcmp(value, "launchpad") == 0 || strcmp(value, "all") == 0) {
-		*mode = ENGINEOS_BOOTSTRAP_LAUNCHPAD;
-		return true;
-	}
-	return false;
 }
 
 static void remove_listener_if_linked(struct wl_listener *listener) {
@@ -682,162 +524,6 @@ static bool wait_for_initial_outputs(struct engineos_shell_server *server,
 	return true;
 }
 
-static struct engineos_shell_launch *find_launch_by_pid(
-		struct engineos_shell_server *server, pid_t pid) {
-	struct engineos_shell_launch *launch;
-	wl_list_for_each(launch, &server->launches, link) {
-		if (launch->pid == pid) {
-			return launch;
-		}
-	}
-	return NULL;
-}
-
-static void mark_launch_role_mapped(struct engineos_shell_server *server,
-		enum engineos_surface_role role) {
-	struct engineos_shell_launch *launch;
-	wl_list_for_each_reverse(launch, &server->launches, link) {
-		if (launch->role == role && !launch->mapped) {
-			launch->mapped = true;
-			wlr_log(WLR_INFO,
-				"launch action mapped label=%s role=%s pid=%ld",
-				launch->label, surface_role_name(launch->role),
-				(long)launch->pid);
-			write_shell_state(server, "launch-mapped");
-			return;
-		}
-	}
-}
-
-static void free_launch(struct engineos_shell_launch *launch) {
-	if (launch == NULL) {
-		return;
-	}
-	wl_list_remove(&launch->link);
-	free(launch->label);
-	free(launch->command);
-	free(launch);
-}
-
-static const char *wait_status_name(int status) {
-	if (WIFEXITED(status)) {
-		return "exited";
-	}
-	if (WIFSIGNALED(status)) {
-		return "signaled";
-	}
-	return "unknown";
-}
-
-static int wait_status_code(int status) {
-	if (WIFEXITED(status)) {
-		return WEXITSTATUS(status);
-	}
-	if (WIFSIGNALED(status)) {
-		return WTERMSIG(status);
-	}
-	return -1;
-}
-
-static int reap_child_processes(int signal_number, void *data) {
-	(void)signal_number;
-	struct engineos_shell_server *server = data;
-	int status = 0;
-	pid_t pid;
-
-	while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-		struct engineos_shell_launch *launch = find_launch_by_pid(server, pid);
-		if (launch == NULL) {
-			wlr_log(WLR_INFO,
-				"launch action exit label=unknown role=unknown pid=%ld status=%s code=%d mapped=unknown",
-				(long)pid, wait_status_name(status),
-				wait_status_code(status));
-			continue;
-		}
-
-		wlr_log(WLR_INFO,
-			"launch action exit label=%s role=%s pid=%ld status=%s code=%d mapped=%s command=%s",
-			launch->label, surface_role_name(launch->role), (long)pid,
-			wait_status_name(status), wait_status_code(status),
-			launch->mapped ? "true" : "false", launch->command);
-
-		if (is_launchpad_role(launch->role) && !launch->mapped) {
-			if (server->pending_slot == launch->role) {
-				server->pending_slot = ENGINEOS_SURFACE_UNKNOWN;
-			}
-			wlr_log(WLR_INFO,
-				"launchpad slot unavailable role=%s reason=process-exited-before-map status=%s code=%d",
-				surface_role_name(launch->role), wait_status_name(status),
-				wait_status_code(status));
-			apply_launchpad_visibility(server, "launch-exited-before-map");
-		}
-
-		write_shell_state(server, "launch-exit");
-		free_launch(launch);
-	}
-
-	if (pid < 0 && errno != ECHILD) {
-		wlr_log(WLR_ERROR, "waitpid failed while reaping children: %s",
-			strerror(errno));
-	}
-
-	return 0;
-}
-
-static void spawn_command(struct engineos_shell_server *server, const char *label,
-		enum engineos_surface_role role, const char *cmd) {
-	if (cmd == NULL || cmd[0] == '\0') {
-		wlr_log(WLR_INFO, "launch action ignored label=%s reason=no-command", label);
-		return;
-	}
-
-	pid_t pid = fork();
-	if (pid < 0) {
-		wlr_log(WLR_ERROR, "failed to fork command label=%s: %s",
-			label, strerror(errno));
-		return;
-	}
-	if (pid == 0) {
-		setenv("XDG_SESSION_TYPE", "wayland", 1);
-		setenv("GDK_BACKEND", "wayland", 0);
-		setenv("QT_QPA_PLATFORM", "wayland", 0);
-		setenv("SDL_VIDEODRIVER", "wayland", 0);
-		setenv("CLUTTER_BACKEND", "wayland", 0);
-		if (getenv("WAYLAND_DISPLAY") != NULL) {
-			unsetenv("DISPLAY");
-		}
-		execl("/bin/sh", "/bin/sh", "-c", cmd, (char *)NULL);
-		_exit(127);
-	}
-
-	struct engineos_shell_launch *launch = calloc(1, sizeof(*launch));
-	if (launch == NULL) {
-		wlr_log(WLR_ERROR,
-			"launch action untracked label=%s role=%s pid=%ld reason=oom command=%s",
-			label, surface_role_name(role), (long)pid, cmd);
-		return;
-	}
-	launch->pid = pid;
-	launch->role = role;
-	launch->label = strdup(label);
-	launch->command = strdup(cmd);
-	if (launch->label == NULL || launch->command == NULL) {
-		wlr_log(WLR_ERROR,
-			"launch action untracked label=%s role=%s pid=%ld reason=oom command=%s",
-			label, surface_role_name(role), (long)pid, cmd);
-		free(launch->label);
-		free(launch->command);
-		free(launch);
-		return;
-	}
-	wl_list_insert(&server->launches, &launch->link);
-
-	wlr_log(WLR_INFO,
-		"launch action label=%s role=%s pid=%ld command=%s",
-		label, surface_role_name(role), (long)pid, cmd);
-	write_shell_state(server, "launch-spawned");
-}
-
 static const char *input_type_name(enum wlr_input_device_type type) {
 	switch (type) {
 	case WLR_INPUT_DEVICE_KEYBOARD:
@@ -879,16 +565,8 @@ static void schedule_outputs(struct engineos_shell_server *server) {
 
 static const char *surface_role_name(enum engineos_surface_role role) {
 	switch (role) {
-	case ENGINEOS_SURFACE_TERMINAL:
-		return "terminal";
 	case ENGINEOS_SURFACE_MUX_PRESENTATION:
 		return "mux-presentation";
-	case ENGINEOS_SURFACE_TERMINAL_SECONDARY:
-		return "terminal-secondary";
-	case ENGINEOS_SURFACE_CUBE:
-		return "cube";
-	case ENGINEOS_SURFACE_ENGINE:
-		return "engine";
 	case ENGINEOS_SURFACE_UNKNOWN:
 	default:
 		return "unknown";
@@ -922,35 +600,6 @@ static const char *pointer_constraint_type_name(
 	}
 }
 
-static bool is_launchpad_role(enum engineos_surface_role role) {
-	return role == ENGINEOS_SURFACE_TERMINAL ||
-		role == ENGINEOS_SURFACE_TERMINAL_SECONDARY ||
-		role == ENGINEOS_SURFACE_CUBE ||
-		role == ENGINEOS_SURFACE_ENGINE;
-}
-
-static bool is_terminal_role(enum engineos_surface_role role) {
-	return role == ENGINEOS_SURFACE_TERMINAL ||
-		role == ENGINEOS_SURFACE_TERMINAL_SECONDARY;
-}
-
-static const char *slot_command(struct engineos_shell_server *server,
-		enum engineos_surface_role role) {
-	switch (role) {
-	case ENGINEOS_SURFACE_TERMINAL:
-		return server->terminal_cmd;
-	case ENGINEOS_SURFACE_TERMINAL_SECONDARY:
-		return server->terminal_secondary_cmd;
-	case ENGINEOS_SURFACE_CUBE:
-		return server->cube_cmd;
-	case ENGINEOS_SURFACE_ENGINE:
-		return server->engine_cmd;
-	case ENGINEOS_SURFACE_UNKNOWN:
-	default:
-		return NULL;
-	}
-}
-
 static void primary_output_size(struct engineos_shell_server *server,
 		int *width, int *height) {
 	*width = 1280;
@@ -969,8 +618,8 @@ static void primary_output_size(struct engineos_shell_server *server,
 	}
 }
 
-static void output_geometry_for_role(struct engineos_shell_server *server,
-		enum engineos_surface_role role, int *x, int *y, int *width, int *height) {
+static void primary_output_geometry(struct engineos_shell_server *server,
+		int *x, int *y, int *width, int *height) {
 	*x = 0;
 	*y = 0;
 	*width = 1280;
@@ -993,13 +642,7 @@ static void output_geometry_for_role(struct engineos_shell_server *server,
 			continue;
 		}
 
-		if (role == ENGINEOS_SURFACE_TERMINAL_SECONDARY) {
-			if (candidate_x > selected_x) {
-				selected = output;
-				selected_x = candidate_x;
-				selected_y = candidate_y;
-			}
-		} else if (candidate_x < selected_x) {
+		if (candidate_x < selected_x) {
 			selected = output;
 			selected_x = candidate_x;
 			selected_y = candidate_y;
@@ -1023,7 +666,7 @@ static void output_geometry_for_role(struct engineos_shell_server *server,
 }
 
 static bool is_managed_floating_view(struct engineos_shell_view *view) {
-	return view != NULL && !is_launchpad_role(view->role);
+	return view != NULL;
 }
 
 static void ensure_floating_geometry(struct engineos_shell_view *view) {
@@ -1035,7 +678,7 @@ static void ensure_floating_geometry(struct engineos_shell_view *view) {
 	int output_y = 0;
 	int output_width = 1280;
 	int output_height = 720;
-	output_geometry_for_role(view->server, ENGINEOS_SURFACE_TERMINAL,
+	primary_output_geometry(view->server,
 		&output_x, &output_y, &output_width, &output_height);
 
 	int width = (output_width * 3) / 4;
@@ -1081,7 +724,7 @@ static void ensure_floating_geometry(struct engineos_shell_view *view) {
 
 static void floating_output_geometry(struct engineos_shell_view *view,
 		int *x, int *y, int *width, int *height) {
-	output_geometry_for_role(view->server, ENGINEOS_SURFACE_TERMINAL,
+	primary_output_geometry(view->server,
 		x, y, width, height);
 }
 
@@ -1146,12 +789,6 @@ static void set_view_minimized(struct engineos_shell_view *view,
 	if (view == NULL || !view->mapped) {
 		return;
 	}
-	if (is_launchpad_role(view->role) && minimized) {
-		wlr_log(WLR_INFO,
-			"window minimize ignored role=%s reason=launchpad-slot title=%s app_id=%s",
-			surface_role_name(view->role), view_title(view), view_app_id(view));
-		return;
-	}
 	view->minimized = minimized;
 	wlr_scene_node_set_enabled(&view->scene_tree->node, !minimized);
 	if (view->xdg_surface != NULL && view->xdg_surface->toplevel != NULL) {
@@ -1169,640 +806,6 @@ static void set_view_minimized(struct engineos_shell_view *view,
 		view_title(view), view_app_id(view));
 	schedule_outputs(view->server);
 	write_shell_state(view->server, reason != NULL ? reason : "window-minimize");
-}
-
-static bool parse_nonnegative_int(const char *value, int *out) {
-	if (value == NULL || value[0] == '\0') {
-		return false;
-	}
-
-	errno = 0;
-	char *end = NULL;
-	long parsed = strtol(value, &end, 10);
-	if (errno != 0 || end == value) {
-		return false;
-	}
-	while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n') {
-		end++;
-	}
-	if (*end != '\0' || parsed < 0 || parsed > INT_MAX) {
-		return false;
-	}
-
-	*out = (int)parsed;
-	return true;
-}
-
-static bool read_layout_request(struct engineos_shell_server *server,
-		enum engineos_surface_role role,
-		struct engineos_layout_request *request) {
-	memset(request, 0, sizeof(*request));
-	snprintf(request->source, sizeof(request->source), "%s", "unknown");
-
-	if (server->state_dir == NULL) {
-		return false;
-	}
-
-	char request_name[96];
-	snprintf(request_name, sizeof(request_name), "launch-bounds/%s.env",
-		surface_role_name(role));
-	char *path = join_state_path(server->state_dir, request_name);
-	if (path == NULL) {
-		return false;
-	}
-
-	FILE *file = fopen(path, "r");
-	free(path);
-	if (file == NULL) {
-		return false;
-	}
-
-	bool role_matches = true;
-	char line[256];
-	while (fgets(line, sizeof(line), file) != NULL) {
-		char key[64] = {0};
-		char value[128] = {0};
-		if (sscanf(line, " %63[^=]=%127[^\n]", key, value) != 2) {
-			continue;
-		}
-
-		if (strcmp(key, "role") == 0) {
-			role_matches = strcmp(value, surface_role_name(role)) == 0;
-		} else if (strcmp(key, "mode") == 0) {
-			request->pane = strcmp(value, "pane") == 0;
-			request->output = strcmp(value, "output") == 0;
-			request->fullscreen = strcmp(value, "fullscreen") == 0;
-		} else if (strcmp(key, "source") == 0) {
-			snprintf(request->source, sizeof(request->source), "%.31s", value);
-		} else if (strcmp(key, "pane_left") == 0) {
-			parse_nonnegative_int(value, &request->pane_left);
-		} else if (strcmp(key, "pane_top") == 0) {
-			parse_nonnegative_int(value, &request->pane_top);
-		} else if (strcmp(key, "pane_width") == 0) {
-			parse_nonnegative_int(value, &request->pane_width);
-		} else if (strcmp(key, "pane_height") == 0) {
-			parse_nonnegative_int(value, &request->pane_height);
-		} else if (strcmp(key, "window_width") == 0) {
-			parse_nonnegative_int(value, &request->window_width);
-		} else if (strcmp(key, "window_height") == 0) {
-			parse_nonnegative_int(value, &request->window_height);
-		} else if (strcmp(key, "cell_width") == 0) {
-			parse_nonnegative_int(value, &request->cell_width);
-		} else if (strcmp(key, "cell_height") == 0) {
-			parse_nonnegative_int(value, &request->cell_height);
-		}
-	}
-	fclose(file);
-
-	if (!role_matches) {
-		return false;
-	}
-	if (request->fullscreen) {
-		return true;
-	}
-	if (request->output) {
-		return true;
-	}
-	return request->pane &&
-		request->pane_width > 0 &&
-		request->pane_height > 0 &&
-		request->window_width > 0 &&
-		request->window_height > 0;
-}
-
-static bool apply_pane_geometry(
-		const struct engineos_layout_request *request,
-		const struct engineos_view_geometry *output_geometry,
-		struct engineos_view_geometry *geometry) {
-	long x_offset = 0;
-	long y_offset = 0;
-	long width = 0;
-	long height = 0;
-
-	if (request->cell_width > 0 && request->cell_height > 0) {
-		x_offset = (long)request->pane_left * request->cell_width;
-		y_offset = (long)request->pane_top * request->cell_height;
-		width = (long)request->pane_width * request->cell_width;
-		height = (long)request->pane_height * request->cell_height;
-	} else {
-		x_offset = ((long)output_geometry->width * request->pane_left) /
-			request->window_width;
-		y_offset = ((long)output_geometry->height * request->pane_top) /
-			request->window_height;
-		width = ((long)output_geometry->width * request->pane_width) /
-			request->window_width;
-		height = ((long)output_geometry->height * request->pane_height) /
-			request->window_height;
-	}
-
-	if (width <= 0 || height <= 0 ||
-			x_offset < 0 || y_offset < 0 ||
-			x_offset > INT_MAX || y_offset > INT_MAX ||
-			width > INT_MAX || height > INT_MAX) {
-		return false;
-	}
-
-	geometry->x = output_geometry->x + (int)x_offset;
-	geometry->y = output_geometry->y + (int)y_offset;
-	geometry->width = (int)width;
-	geometry->height = (int)height;
-
-	int output_right = output_geometry->x + output_geometry->width;
-	int output_bottom = output_geometry->y + output_geometry->height;
-	if (geometry->x < output_geometry->x) {
-		geometry->x = output_geometry->x;
-	}
-	if (geometry->y < output_geometry->y) {
-		geometry->y = output_geometry->y;
-	}
-	if (geometry->x + geometry->width > output_right) {
-		geometry->width = output_right - geometry->x;
-	}
-	if (geometry->y + geometry->height > output_bottom) {
-		geometry->height = output_bottom - geometry->y;
-	}
-	if (geometry->width <= 0 || geometry->height <= 0) {
-		return false;
-	}
-
-	geometry->fullscreen = false;
-	geometry->layout = "tmux-pane";
-	return true;
-}
-
-static bool pane_geometry_request_valid(
-		const struct engineos_layout_request *request) {
-	return request != NULL &&
-		request->pane &&
-		request->pane_width > 0 &&
-		request->pane_height > 0 &&
-		request->window_width > 0 &&
-		request->window_height > 0;
-}
-
-static char *copy_string(const char *value) {
-	return strdup(value != NULL ? value : "");
-}
-
-static bool replace_string(char **target, const char *value) {
-	char *copy = copy_string(value);
-	if (copy == NULL) {
-		return false;
-	}
-	free(*target);
-	*target = copy;
-	return true;
-}
-
-static char *build_pane_binding_key(const char *socket,
-		const char *session, const char *pane_id) {
-	if (socket == NULL || socket[0] == '\0' ||
-			session == NULL || session[0] == '\0' ||
-			pane_id == NULL || pane_id[0] == '\0') {
-		return NULL;
-	}
-	size_t len = strlen("tmux:::") + strlen(socket) +
-		strlen(session) + strlen(pane_id) + 1;
-	char *key = malloc(len);
-	if (key == NULL) {
-		return NULL;
-	}
-	snprintf(key, len, "tmux:%s:%s:%s", socket, session, pane_id);
-	return key;
-}
-
-static struct engineos_terminal_client *find_terminal_client_by_tty(
-		struct engineos_shell_server *server, const char *tty) {
-	if (server == NULL || tty == NULL || tty[0] == '\0') {
-		return NULL;
-	}
-	struct engineos_terminal_client *client;
-	wl_list_for_each(client, &server->terminal_clients, link) {
-		if (client->tty != NULL && strcmp(client->tty, tty) == 0) {
-			return client;
-		}
-	}
-	return NULL;
-}
-
-static struct engineos_terminal_client *find_terminal_client_by_pane_key(
-		struct engineos_shell_server *server, const char *key) {
-	struct engineos_terminal_client *selected = NULL;
-	if (server == NULL || key == NULL || key[0] == '\0') {
-		return NULL;
-	}
-	struct engineos_terminal_client *client;
-	wl_list_for_each(client, &server->terminal_clients, link) {
-		if (client->focused_pane_key == NULL ||
-				strcmp(client->focused_pane_key, key) != 0) {
-			continue;
-		}
-		if (selected == NULL ||
-				client->last_update_msec > selected->last_update_msec) {
-			selected = client;
-		}
-	}
-	return selected;
-}
-
-static struct engineos_terminal_client *register_terminal_client(
-		struct engineos_shell_server *server, const char *tty,
-		enum engineos_surface_role role) {
-	if (server == NULL || tty == NULL || strncmp(tty, "/dev/", 5) != 0 ||
-			!is_terminal_role(role)) {
-		return NULL;
-	}
-	struct engineos_terminal_client *client =
-		find_terminal_client_by_tty(server, tty);
-	if (client == NULL) {
-		client = calloc(1, sizeof(*client));
-		if (client == NULL) {
-			return NULL;
-		}
-		client->tty = strdup(tty);
-		if (client->tty == NULL) {
-			free(client);
-			return NULL;
-		}
-		wl_list_insert(&server->terminal_clients, &client->link);
-	}
-	client->role = role;
-	client->last_update_msec = monotonic_msec();
-	return client;
-}
-
-static void free_terminal_client(struct engineos_terminal_client *client) {
-	if (client == NULL) {
-		return;
-	}
-	wl_list_remove(&client->link);
-	free(client->tty);
-	free(client->focused_pane_key);
-	free(client);
-}
-
-static struct engineos_pane_binding *find_pane_binding_by_key(
-		struct engineos_shell_server *server, const char *key) {
-	if (server == NULL || key == NULL || key[0] == '\0') {
-		return NULL;
-	}
-	struct engineos_pane_binding *binding;
-	wl_list_for_each(binding, &server->pane_bindings, link) {
-		if (binding->key != NULL && strcmp(binding->key, key) == 0) {
-			return binding;
-		}
-	}
-	return NULL;
-}
-
-static struct engineos_pane_binding *find_pending_pane_binding_by_token(
-		struct engineos_shell_server *server, const char *token) {
-	if (server == NULL || token == NULL || token[0] == '\0') {
-		return NULL;
-	}
-	int64_t now = monotonic_msec();
-	struct engineos_pane_binding *binding;
-	wl_list_for_each(binding, &server->pane_bindings, link) {
-		if (binding->token != NULL && strcmp(binding->token, token) == 0 &&
-				binding->launch_deadline_msec > now) {
-			return binding;
-		}
-	}
-	return NULL;
-}
-
-static bool has_pending_pane_launch(struct engineos_shell_server *server) {
-	int64_t now = monotonic_msec();
-	struct engineos_pane_binding *binding;
-	wl_list_for_each(binding, &server->pane_bindings, link) {
-		if (binding->token != NULL && binding->launch_deadline_msec > now) {
-			return true;
-		}
-	}
-	return false;
-}
-
-static bool view_launch_token(struct engineos_shell_view *view,
-		char *token, size_t token_size) {
-	if (view == NULL || view->xdg_surface == NULL ||
-			view->xdg_surface->surface == NULL ||
-			view->xdg_surface->surface->resource == NULL || token_size == 0) {
-		return false;
-	}
-	struct wl_client *client =
-		wl_resource_get_client(view->xdg_surface->surface->resource);
-	if (client == NULL) {
-		return false;
-	}
-	pid_t pid = 0;
-	uid_t uid = 0;
-	gid_t gid = 0;
-	wl_client_get_credentials(client, &pid, &uid, &gid);
-	if (pid <= 0 || uid != getuid()) {
-		return false;
-	}
-
-	char path[64];
-	snprintf(path, sizeof(path), "/proc/%ld/environ", (long)pid);
-	int fd = open(path, O_RDONLY | O_CLOEXEC);
-	if (fd < 0) {
-		return false;
-	}
-	const size_t max_bytes = 1024 * 1024;
-	char *environment = malloc(max_bytes + 1);
-	if (environment == NULL) {
-		close(fd);
-		return false;
-	}
-	size_t used = 0;
-	while (used < max_bytes) {
-		ssize_t count = read(fd, environment + used, max_bytes - used);
-		if (count < 0 && errno == EINTR) {
-			continue;
-		}
-		if (count <= 0) {
-			break;
-		}
-		used += (size_t)count;
-	}
-	close(fd);
-	environment[used] = '\0';
-
-	const char prefix[] = "ENGINEOS_PANE_LAUNCH_TOKEN=";
-	bool found = false;
-	for (size_t offset = 0; offset < used;) {
-		char *entry = environment + offset;
-		size_t remaining = used - offset;
-		size_t length = strnlen(entry, remaining);
-		if (length == remaining) {
-			break;
-		}
-		if (length > sizeof(prefix) - 1 &&
-				strncmp(entry, prefix, sizeof(prefix) - 1) == 0) {
-			const char *value = entry + sizeof(prefix) - 1;
-			size_t value_length = length - (sizeof(prefix) - 1);
-			if (value_length > 0 && value_length < token_size) {
-				memcpy(token, value, value_length);
-				token[value_length] = '\0';
-				found = true;
-			}
-			break;
-		}
-		offset += length + 1;
-	}
-	free(environment);
-	return found;
-}
-
-static struct engineos_pane_binding *pane_binding_for_view(
-		struct engineos_shell_view *view) {
-	if (view == NULL || view->server == NULL) {
-		return NULL;
-	}
-	struct engineos_pane_binding *binding;
-	wl_list_for_each(binding, &view->server->pane_bindings, link) {
-		if (binding->view == view) {
-			return binding;
-		}
-	}
-	return NULL;
-}
-
-static void pane_binding_schedule_timer(struct engineos_shell_server *server) {
-	if (server == NULL || server->pane_binding_timer == NULL) {
-		return;
-	}
-
-	int64_t now = monotonic_msec();
-	int64_t next = 0;
-	struct engineos_pane_binding *binding;
-	wl_list_for_each(binding, &server->pane_bindings, link) {
-		if (binding->token != NULL && binding->launch_deadline_msec > 0 &&
-				(next == 0 || binding->launch_deadline_msec < next)) {
-			next = binding->launch_deadline_msec;
-		}
-		if (binding->view != NULL && !binding->focused &&
-				binding->render_until_msec > 0 &&
-				(next == 0 || binding->render_until_msec < next)) {
-			next = binding->render_until_msec;
-		}
-	}
-	if (next == 0) {
-		return;
-	}
-
-	int64_t delta = next - now;
-	int delay = delta <= 0 ? 1 : delta > INT_MAX ? INT_MAX : (int)delta;
-	wl_event_source_timer_update(server->pane_binding_timer, delay);
-}
-
-static void free_pane_binding(struct engineos_pane_binding *binding) {
-	if (binding == NULL) {
-		return;
-	}
-	wl_list_remove(&binding->link);
-	free(binding->key);
-	free(binding->socket);
-	free(binding->session);
-	free(binding->window_id);
-	free(binding->window_index);
-	free(binding->pane_id);
-	free(binding->token);
-	free(binding->command_label);
-	free(binding);
-}
-
-static bool update_pane_binding_identity(
-		struct engineos_pane_binding *binding,
-		const char *socket, const char *session, const char *window_id,
-		const char *window_index, const char *pane_id) {
-	return replace_string(&binding->socket, socket) &&
-		replace_string(&binding->session, session) &&
-		replace_string(&binding->window_id, window_id) &&
-		replace_string(&binding->window_index, window_index) &&
-		replace_string(&binding->pane_id, pane_id);
-}
-
-static struct engineos_pane_binding *ensure_pane_binding(
-		struct engineos_shell_server *server,
-		const char *socket, const char *session, const char *window_id,
-		const char *window_index, const char *pane_id) {
-	char *key = build_pane_binding_key(socket, session, pane_id);
-	if (key == NULL) {
-		return NULL;
-	}
-
-	struct engineos_pane_binding *binding =
-		find_pane_binding_by_key(server, key);
-	if (binding != NULL) {
-		free(key);
-		if (!update_pane_binding_identity(binding, socket, session,
-					window_id, window_index, pane_id)) {
-			return NULL;
-		}
-		return binding;
-	}
-
-	binding = calloc(1, sizeof(*binding));
-	if (binding == NULL) {
-		free(key);
-		return NULL;
-	}
-	wl_list_init(&binding->link);
-	binding->terminal_role = ENGINEOS_SURFACE_UNKNOWN;
-	binding->key = key;
-	if (!update_pane_binding_identity(binding, socket, session,
-				window_id, window_index, pane_id)) {
-		free_pane_binding(binding);
-		return NULL;
-	}
-	wl_list_insert(&server->pane_bindings, &binding->link);
-	return binding;
-}
-
-static void update_pane_binding_geometry(
-		struct engineos_pane_binding *binding,
-		const struct engineos_layout_request *geometry) {
-	binding->geometry = *geometry;
-	binding->geometry.pane = true;
-	binding->geometry.output = false;
-	binding->geometry.fullscreen = false;
-	snprintf(binding->geometry.source, sizeof(binding->geometry.source),
-		"%s", "tmux-ipc");
-	binding->last_update_msec = monotonic_msec();
-}
-
-static bool prune_expired_pane_bindings(struct engineos_shell_server *server,
-		const char *reason) {
-	bool changed = false;
-	int64_t now = monotonic_msec();
-	struct engineos_pane_binding *binding;
-	struct engineos_pane_binding *tmp;
-	wl_list_for_each_safe(binding, tmp, &server->pane_bindings, link) {
-		if (binding->token == NULL || binding->launch_deadline_msec <= 0 ||
-				binding->launch_deadline_msec > now) {
-			continue;
-		}
-		wlr_log(WLR_ERROR,
-			"pane launch timeout key=%s command=%s previous_view=%u reason=%s",
-			binding->key != NULL ? binding->key : "(missing)",
-			binding->command_label != NULL ? binding->command_label : "(unknown)",
-			binding->view != NULL ? binding->view->view_id : 0,
-			reason != NULL ? reason : "unspecified");
-		free(binding->token);
-		binding->token = NULL;
-		binding->launch_deadline_msec = 0;
-		if (binding->view == NULL) {
-			free_pane_binding(binding);
-		}
-		changed = true;
-	}
-	return changed;
-}
-
-static void pane_binding_clear_focus(struct engineos_shell_server *server) {
-	int64_t now = monotonic_msec();
-	struct engineos_pane_binding *binding;
-	wl_list_for_each(binding, &server->pane_bindings, link) {
-		if (binding->focused) {
-			binding->focused = false;
-			if (binding->view != NULL) {
-				binding->render_until_msec =
-					now + ENGINEOS_PANE_RENDER_GRACE_MS;
-			}
-		}
-	}
-	pane_binding_schedule_timer(server);
-}
-
-static void pane_binding_set_focused(struct engineos_shell_server *server,
-		struct engineos_pane_binding *focused) {
-	int64_t now = monotonic_msec();
-	struct engineos_pane_binding *binding;
-	wl_list_for_each(binding, &server->pane_bindings, link) {
-		if (binding == focused) {
-			binding->focused = true;
-			binding->render_until_msec = 0;
-			binding->last_update_msec = now;
-			continue;
-		}
-		if (binding->focused) {
-			binding->focused = false;
-			if (binding->view != NULL) {
-				binding->render_until_msec =
-					now + ENGINEOS_PANE_RENDER_GRACE_MS;
-			}
-		}
-	}
-	pane_binding_schedule_timer(server);
-}
-
-static bool bind_view_to_pending_pane(struct engineos_shell_view *view) {
-	if (view == NULL || view->server == NULL || is_launchpad_role(view->role)) {
-		return false;
-	}
-	prune_expired_pane_bindings(view->server, "view-map");
-	char token[128] = {0};
-	if (!view_launch_token(view, token, sizeof(token))) {
-		if (has_pending_pane_launch(view->server)) {
-			wlr_log(WLR_ERROR,
-				"pane binding rejected view_id=%u title=%s app_id=%s reason=missing-launch-token",
-				view->view_id, view_title(view), view_app_id(view));
-		}
-		return false;
-	}
-	struct engineos_pane_binding *binding =
-		find_pending_pane_binding_by_token(view->server, token);
-	if (binding == NULL) {
-		wlr_log(WLR_ERROR,
-			"pane binding rejected view_id=%u title=%s app_id=%s reason=unknown-or-stale-token",
-			view->view_id, view_title(view), view_app_id(view));
-		return false;
-	}
-
-	struct engineos_shell_view *old_view = binding->view;
-	binding->view = view;
-	free(binding->token);
-	binding->token = NULL;
-	binding->launch_deadline_msec = 0;
-	binding->render_until_msec = 0;
-	binding->last_update_msec = monotonic_msec();
-	wlr_log(WLR_INFO,
-		"pane binding mapped key=%s view_id=%u replaced_view_id=%u title=%s app_id=%s command=%s focused=%s",
-		binding->key != NULL ? binding->key : "(missing)",
-		view->view_id, old_view != NULL ? old_view->view_id : 0,
-		view_title(view), view_app_id(view),
-		binding->command_label != NULL ? binding->command_label : "(unknown)",
-		binding->focused ? "true" : "false");
-	if (old_view != NULL && old_view != view && old_view->mapped) {
-		apply_view_layout(old_view);
-	}
-	return true;
-}
-
-static bool remove_pane_binding_for_view(struct engineos_shell_view *view,
-		const char *reason) {
-	struct engineos_pane_binding *binding = pane_binding_for_view(view);
-	if (binding == NULL) {
-		return false;
-	}
-	wlr_log(WLR_INFO,
-		"pane binding removed key=%s view_id=%u reason=%s title=%s app_id=%s",
-		binding->key != NULL ? binding->key : "(missing)",
-		view != NULL ? view->view_id : 0,
-		reason != NULL ? reason : "unspecified",
-		view != NULL ? view_title(view) : "(none)",
-		view != NULL ? view_app_id(view) : "(none)");
-	bool was_focused = binding->focused;
-	enum engineos_surface_role terminal_role = binding->terminal_role;
-	free_pane_binding(binding);
-	if (was_focused && view != NULL && view->server != NULL) {
-		set_active_slot(view->server,
-			is_terminal_role(terminal_role) ? terminal_role :
-				ENGINEOS_SURFACE_TERMINAL,
-			reason != NULL ? reason : "pane-view-unmapped");
-	}
-	return true;
 }
 
 static bool compute_view_geometry(struct engineos_shell_view *view,
@@ -1851,95 +854,13 @@ static bool compute_view_geometry(struct engineos_shell_view *view,
 		return geometry->width > 0 && geometry->height > 0;
 	}
 
-	if (!is_launchpad_role(view->role)) {
-		ensure_floating_geometry(view);
-		struct engineos_layout_request request;
-		struct engineos_pane_binding *binding = pane_binding_for_view(view);
-		if (binding != NULL && !view->fullscreen &&
-				pane_geometry_request_valid(&binding->geometry)) {
-			request = binding->geometry;
-			struct engineos_view_geometry output_geometry = {0};
-			enum engineos_surface_role terminal_role =
-				is_terminal_role(binding->terminal_role) ?
-					binding->terminal_role : ENGINEOS_SURFACE_TERMINAL;
-			output_geometry_for_role(view->server, terminal_role,
-				&output_geometry.x, &output_geometry.y,
-				&output_geometry.width, &output_geometry.height);
-			if (apply_pane_geometry(&request, &output_geometry, geometry)) {
-				geometry->layout = "tmux-pane-gui";
-				return true;
-			}
-		}
-		if (view->fullscreen) {
-			floating_output_geometry(view, &geometry->x, &geometry->y,
-				&geometry->width, &geometry->height);
-			geometry->fullscreen = true;
-			geometry->layout = "fullscreen";
-		} else {
-			geometry->x = view->x;
-			geometry->y = view->y;
-			geometry->width = view->width;
-			geometry->height = view->height;
-			geometry->fullscreen = false;
-			geometry->layout = view->maximized ? "maximized" : "floating";
-		}
-		return true;
-	}
-
-	output_geometry_for_role(view->server, view->role, &geometry->x,
-		&geometry->y, &geometry->width, &geometry->height);
-	geometry->layout = "output";
-
-	if (view->role != ENGINEOS_SURFACE_CUBE &&
-			view->role != ENGINEOS_SURFACE_ENGINE) {
-		return true;
-	}
-
-	struct engineos_layout_request request;
-	bool has_request = read_layout_request(view->server, view->role, &request);
-	if (has_request && request.fullscreen) {
-		geometry->fullscreen = true;
-		geometry->layout = "fullscreen-request";
-		return true;
-	}
-	if (has_request && request.output) {
-		geometry->layout = "output-request";
-		return true;
-	}
-	if (geometry->fullscreen) {
-		geometry->layout = "fullscreen";
-		return true;
-	}
-	if (has_request && request.pane) {
-		struct engineos_view_geometry output_geometry = *geometry;
-		if (apply_pane_geometry(&request, &output_geometry, geometry)) {
-			return true;
-		}
-	}
-
-	return true;
-}
-
-static bool is_persistent_panel_geometry(enum engineos_surface_role role,
-		const struct engineos_view_geometry *geometry) {
-	if (geometry == NULL || geometry->fullscreen ||
-			geometry->layout == NULL ||
-			strcmp(geometry->layout, "tmux-pane") != 0) {
-		return false;
-	}
-	return role == ENGINEOS_SURFACE_CUBE || role == ENGINEOS_SURFACE_ENGINE;
-}
-
-static bool is_tmux_pane_gui_geometry(
-		const struct engineos_view_geometry *geometry) {
-	return geometry != NULL &&
-		geometry->layout != NULL &&
-		strcmp(geometry->layout, "tmux-pane-gui") == 0;
+	return false;
 }
 
 static bool view_geometry_visible(struct engineos_shell_server *server,
 		struct engineos_shell_view *view,
 		const struct engineos_view_geometry *geometry) {
+	(void)geometry;
 	if (view == NULL || !view->mapped) {
 		return false;
 	}
@@ -1955,16 +876,7 @@ static bool view_geometry_visible(struct engineos_shell_server *server,
 			pane->lease_view_id != 0 &&
 			strcmp(pane->view_mode, "presentation") == 0;
 	}
-	if (server->active_slot == view->role || is_terminal_role(view->role)) {
-		return true;
-	}
-	if (is_managed_floating_view(view)) {
-		if (is_tmux_pane_gui_geometry(geometry)) {
-			return server->focused_view == view;
-		}
-		return true;
-	}
-	return is_persistent_panel_geometry(view->role, geometry);
+	return false;
 }
 
 static bool view_geometry_render_enabled(struct engineos_shell_server *server,
@@ -1973,30 +885,7 @@ static bool view_geometry_render_enabled(struct engineos_shell_server *server,
 	if (view == NULL || !view->mapped || view->minimized) {
 		return false;
 	}
-	if (is_managed_floating_view(view) &&
-			is_tmux_pane_gui_geometry(geometry)) {
-		struct engineos_pane_binding *binding = pane_binding_for_view(view);
-		if (binding == NULL) {
-			return false;
-		}
-		if (binding->focused || server->focused_view == view) {
-			return true;
-		}
-		return binding->render_until_msec > monotonic_msec();
-	}
 	return view_geometry_visible(server, view, geometry);
-}
-
-static struct engineos_shell_view *find_mapped_role(
-		struct engineos_shell_server *server,
-		enum engineos_surface_role role) {
-	struct engineos_shell_view *view;
-	wl_list_for_each(view, &server->views, link) {
-		if (view->mapped && view->role == role) {
-			return view;
-		}
-	}
-	return NULL;
 }
 
 static struct engineos_shell_view *find_mapped_view_id(
@@ -2105,88 +994,6 @@ static void write_preview_json(FILE *file,
 		preview != NULL ? preview->image_height : 0);
 }
 
-static void write_slot_state(FILE *file, struct engineos_shell_server *server,
-		enum engineos_surface_role role) {
-	struct engineos_shell_view *view = find_mapped_role(server, role);
-	bool mapped = view != NULL;
-	struct engineos_view_geometry geometry = {0};
-	if (mapped) {
-		compute_view_geometry(view, &geometry);
-	}
-	bool visible = mapped && view_geometry_visible(server, view, &geometry);
-
-	fprintf(file, "    \"%s\": {", surface_role_name(role));
-	fprintf(file, "\"mapped\": %s", mapped ? "true" : "false");
-	fprintf(file, ", \"visible\": %s", visible ? "true" : "false");
-	fprintf(file, ", \"layout\": ");
-	json_write_string(file, mapped ? geometry.layout : "");
-	fprintf(file, ", \"fullscreen\": %s", mapped && geometry.fullscreen ? "true" : "false");
-	fprintf(file, ", \"x\": %d", mapped ? geometry.x : 0);
-	fprintf(file, ", \"y\": %d", mapped ? geometry.y : 0);
-	fprintf(file, ", \"width\": %d", mapped ? geometry.width : 0);
-	fprintf(file, ", \"height\": %d", mapped ? geometry.height : 0);
-	fprintf(file, ", \"title\": ");
-	json_write_string(file, mapped ? view_title(view) : "");
-	fprintf(file, ", \"app_id\": ");
-	json_write_string(file, mapped ? view_app_id(view) : "");
-	fprintf(file, "}");
-}
-
-static void write_pane_binding_json(FILE *file,
-		struct engineos_pane_binding *binding) {
-	fprintf(file, "{\"key\": ");
-	json_write_string(file, binding->key);
-	fprintf(file, ", \"socket\": ");
-	json_write_string(file, binding->socket);
-	fprintf(file, ", \"session\": ");
-	json_write_string(file, binding->session);
-	fprintf(file, ", \"window_id\": ");
-	json_write_string(file, binding->window_id);
-	fprintf(file, ", \"window_index\": ");
-	json_write_string(file, binding->window_index);
-	fprintf(file, ", \"pane_id\": ");
-	json_write_string(file, binding->pane_id);
-	fprintf(file, ", \"command_label\": ");
-	json_write_string(file, binding->command_label);
-	fprintf(file, ", \"pending\": %s",
-		binding->token != NULL ? "true" : "false");
-	fprintf(file, ", \"terminal_slot\": ");
-	json_write_string(file, surface_role_name(binding->terminal_role));
-	fprintf(file, ", \"focused\": %s", binding->focused ? "true" : "false");
-	fprintf(file, ", \"view_id\": ");
-	if (binding->view != NULL && binding->view->mapped) {
-		fprintf(file, "%u", binding->view->view_id);
-	} else {
-		fprintf(file, "null");
-	}
-	fprintf(file, ", \"last_update_msec\": %ld",
-		(long)binding->last_update_msec);
-	fprintf(file, ", \"geometry\": {\"pane_left\": %d, \"pane_top\": %d, \"pane_width\": %d, \"pane_height\": %d, \"window_width\": %d, \"window_height\": %d, \"cell_width\": %d, \"cell_height\": %d}}",
-		binding->geometry.pane_left, binding->geometry.pane_top,
-		binding->geometry.pane_width, binding->geometry.pane_height,
-		binding->geometry.window_width, binding->geometry.window_height,
-		binding->geometry.cell_width, binding->geometry.cell_height);
-}
-
-static void write_pane_bindings_json(FILE *file,
-		struct engineos_shell_server *server) {
-	fprintf(file, "[");
-	bool first = true;
-	struct engineos_pane_binding *binding;
-	wl_list_for_each(binding, &server->pane_bindings, link) {
-		if (!first) {
-			fprintf(file, ",");
-		}
-		first = false;
-		fprintf(file, "\n    ");
-		write_pane_binding_json(file, binding);
-	}
-	if (!first) {
-		fprintf(file, "\n  ");
-	}
-	fprintf(file, "]");
-}
-
 static bool mkdir_p(const char *path, mode_t mode) {
 	if (path == NULL || path[0] == '\0') {
 		return false;
@@ -2244,47 +1051,6 @@ static bool json_extract_int(struct json_object *json, const char *key,
 	}
 	*out = (int)parsed;
 	return true;
-}
-
-static bool request_pane_identity(struct json_object *json, char *socket,
-		size_t socket_size, char *session, size_t session_size,
-		char *window_id, size_t window_id_size,
-		char *window_index, size_t window_index_size,
-		char *pane_id, size_t pane_id_size) {
-	struct json_object *pane = NULL;
-	if (json == NULL || !json_object_object_get_ex(json, "pane", &pane) ||
-			!json_object_is_type(pane, json_type_object)) {
-		return false;
-	}
-	return json_extract_string(pane, "socket", socket, socket_size) &&
-		json_extract_string(pane, "session", session, session_size) &&
-		json_extract_string(pane, "window_id", window_id, window_id_size) &&
-		json_extract_string(pane, "window_index", window_index,
-			window_index_size) &&
-		json_extract_string(pane, "pane_id", pane_id, pane_id_size);
-}
-
-static bool request_pane_geometry(struct json_object *json,
-		struct engineos_layout_request *geometry) {
-	struct json_object *value = NULL;
-	if (json == NULL || !json_object_object_get_ex(json, "geometry", &value) ||
-			!json_object_is_type(value, json_type_object)) {
-		return false;
-	}
-	memset(geometry, 0, sizeof(*geometry));
-	geometry->pane = true;
-	snprintf(geometry->source, sizeof(geometry->source), "%s", "tmux-ipc");
-	if (!json_extract_int(value, "pane_left", &geometry->pane_left) ||
-			!json_extract_int(value, "pane_top", &geometry->pane_top) ||
-			!json_extract_int(value, "pane_width", &geometry->pane_width) ||
-			!json_extract_int(value, "pane_height", &geometry->pane_height) ||
-			!json_extract_int(value, "window_width", &geometry->window_width) ||
-			!json_extract_int(value, "window_height", &geometry->window_height)) {
-		return false;
-	}
-	json_extract_int(value, "cell_width", &geometry->cell_width);
-	json_extract_int(value, "cell_height", &geometry->cell_height);
-	return pane_geometry_request_valid(geometry);
 }
 
 static bool request_preview_bounds(struct json_object *json,
@@ -2346,98 +1112,13 @@ static void clamp_box_to_output(struct engineos_view_geometry *box,
 	}
 }
 
-static enum engineos_surface_role parse_surface_role(const char *value) {
-	if (value == NULL) {
-		return ENGINEOS_SURFACE_UNKNOWN;
-	}
-	if (strcmp(value, "terminal") == 0) {
-		return ENGINEOS_SURFACE_TERMINAL;
-	}
-	if (strcmp(value, "terminal-secondary") == 0) {
-		return ENGINEOS_SURFACE_TERMINAL_SECONDARY;
-	}
-	if (strcmp(value, "cube") == 0) {
-		return ENGINEOS_SURFACE_CUBE;
-	}
-	if (strcmp(value, "engine") == 0) {
-		return ENGINEOS_SURFACE_ENGINE;
-	}
-	return ENGINEOS_SURFACE_UNKNOWN;
-}
-
-static char *request_pane_key(struct json_object *request) {
-	char socket[PATH_MAX] = {0};
-	char session[128] = {0};
-	char pane_id[64] = {0};
-	struct json_object *pane = NULL;
-	if (request == NULL ||
-			!json_object_object_get_ex(request, "pane", &pane) ||
-			!json_object_is_type(pane, json_type_object) ||
-			!json_extract_string(pane, "socket", socket, sizeof(socket)) ||
-			!json_extract_string(pane, "session", session, sizeof(session)) ||
-			!json_extract_string(pane, "pane_id", pane_id, sizeof(pane_id))) {
-		return NULL;
-	}
-	return build_pane_binding_key(socket, session, pane_id);
-}
-
-static enum engineos_surface_role terminal_role_for_request(
-		struct engineos_shell_server *server, struct json_object *request,
-		const char *legacy_slot, bool update_focus) {
-	char client_tty[PATH_MAX] = {0};
-	json_extract_string(request, "client_tty", client_tty,
-		sizeof(client_tty));
-	char *key = request_pane_key(request);
-	bool has_pane_identity = key != NULL;
-	struct engineos_terminal_client *client = NULL;
-	if (client_tty[0] != '\0') {
-		client = find_terminal_client_by_tty(server, client_tty);
-	}
-	if (client == NULL && key != NULL) {
-		client = find_terminal_client_by_pane_key(server, key);
-	}
-	if (client != NULL) {
-		if (update_focus && key != NULL) {
-			replace_string(&client->focused_pane_key, key);
-			client->last_update_msec = monotonic_msec();
-		}
-		enum engineos_surface_role role = client->role;
-		free(key);
-		return role;
-	}
-	free(key);
-
-	/* Requests without pane identity retain the explicit slot compatibility path. */
-	if (!has_pane_identity) {
-		return parse_surface_role(legacy_slot);
-	}
-	return ENGINEOS_SURFACE_UNKNOWN;
-}
-
-static enum engineos_surface_role preview_anchor_role(
-		struct engineos_shell_server *server, const char *slot) {
-	enum engineos_surface_role role = parse_surface_role(slot);
-	if (is_terminal_role(role)) {
-		return role;
-	}
-	if (server->focused_view != NULL && server->focused_view->mapped &&
-			is_terminal_role(server->focused_view->role)) {
-		return server->focused_view->role;
-	}
-	if (is_terminal_role(server->active_slot)) {
-		return server->active_slot;
-	}
-	return ENGINEOS_SURFACE_TERMINAL;
-}
-
 static bool compute_preview_box(struct engineos_shell_server *server,
 		const char *slot,
 		const struct engineos_preview_bounds *bounds,
 		struct engineos_view_geometry *box) {
-	enum engineos_surface_role anchor_role = preview_anchor_role(server, slot);
-	bool explicit_anchor = is_terminal_role(parse_surface_role(slot));
+	(void)slot;
 	struct engineos_view_geometry output = {0};
-	output_geometry_for_role(server, anchor_role,
+	primary_output_geometry(server,
 		&output.x, &output.y, &output.width, &output.height);
 
 	*box = output;
@@ -2446,25 +1127,14 @@ static bool compute_preview_box(struct engineos_shell_server *server,
 
 	if (bounds != NULL && bounds->set &&
 			bounds->window_width > 0 && bounds->window_height > 0) {
-		struct engineos_layout_request request = {0};
-		request.pane = true;
-		request.pane_left = bounds->x;
-		request.pane_top = bounds->y;
-		request.pane_width = bounds->width;
-		request.pane_height = bounds->height;
-		request.window_width = bounds->window_width;
-		request.window_height = bounds->window_height;
-		if (!apply_pane_geometry(&request, &output, box)) {
-			return false;
-		}
-	} else if (!explicit_anchor && server->focused_view != NULL &&
-			is_terminal_role(server->focused_view->role)) {
-		struct engineos_view_geometry focused = {0};
-		if (compute_view_geometry(server->focused_view, &focused) &&
-				focused.width > 0 && focused.height > 0) {
-			*box = focused;
-			box->layout = "preview-focused-terminal";
-		}
+		box->x = output.x + (int)((long)output.width * bounds->x /
+			bounds->window_width);
+		box->y = output.y + (int)((long)output.height * bounds->y /
+			bounds->window_height);
+		box->width = (int)((long)output.width * bounds->width /
+			bounds->window_width);
+		box->height = (int)((long)output.height * bounds->height /
+			bounds->window_height);
 	}
 
 	clamp_box_to_output(box, &output);
@@ -2592,72 +1262,6 @@ static struct engineos_mux_pane_model *find_shell_pane_model(
 	return NULL;
 }
 
-static struct engineos_mux_pane_model *find_shell_pane_id(
-		struct engineos_shell_server *server, uint32_t pane_id) {
-	struct engineos_mux_pane_model *focused = focused_mux_pane(server);
-	if (focused != NULL && focused->pane_id == pane_id)
-		return focused;
-	struct engineos_shell_output *focused_output = focused_mux_output(server);
-	if (focused_output != NULL) {
-		for (size_t index = 0;
-				index < focused_output->mux_snapshot.pane_count; index++) {
-			if (focused_output->mux_snapshot.panes[index].pane_id == pane_id)
-				return &focused_output->mux_snapshot.panes[index];
-		}
-	}
-	struct engineos_shell_output *output;
-	wl_list_for_each(output, &server->outputs, link) {
-		for (size_t index = 0; output->mux_registered &&
-				index < output->mux_snapshot.pane_count; index++) {
-			struct engineos_mux_pane_model *pane =
-				&output->mux_snapshot.panes[index];
-			if (pane->pane_id == pane_id && pane->lease_client_id ==
-					server->mux_client.frontend_client_id &&
-					pane->lease_view_id == output->mux_view_id)
-				return pane;
-		}
-	}
-	wl_list_for_each(output, &server->outputs, link) {
-		for (size_t index = 0; output->mux_registered &&
-				index < output->mux_snapshot.pane_count; index++) {
-			if (output->mux_snapshot.panes[index].pane_id == pane_id)
-				return &output->mux_snapshot.panes[index];
-		}
-	}
-	return NULL;
-}
-
-static struct engineos_mux_pane_model *native_preview_pane_for_request(
-		struct engineos_shell_server *server, struct json_object *request) {
-	if (server->mux_mode != ENGINEOS_MUX_NATIVE || !server->mux_client.ready)
-		return NULL;
-	struct json_object *pane_object = NULL;
-	char pane_id[64] = {0};
-	if (json_object_object_get_ex(request, "pane", &pane_object) &&
-			json_object_is_type(pane_object, json_type_object) &&
-			json_extract_string(pane_object, "pane_id", pane_id,
-				sizeof(pane_id))) {
-		const char *number = pane_id[0] == '%' ? pane_id + 1 : pane_id;
-		char *end = NULL;
-		unsigned long parsed = strtoul(number, &end, 10);
-		if (*number == '\0' || *end != '\0' || parsed > UINT32_MAX)
-			return NULL;
-		struct json_object *generation_object = NULL;
-		if (json_object_object_get_ex(pane_object, "generation",
-				&generation_object)) {
-			if (!json_object_is_type(generation_object, json_type_int))
-				return NULL;
-			int64_t generation = json_object_get_int64(generation_object);
-			if (generation <= 0 || generation > UINT32_MAX)
-				return NULL;
-			return find_shell_pane_model(server, (uint32_t)parsed,
-				(uint32_t)generation);
-		}
-		return find_shell_pane_id(server, (uint32_t)parsed);
-	}
-	return focused_mux_pane(server);
-}
-
 static bool pane_render_client(struct engineos_shell_server *server,
 		const struct engineos_mux_pane_model *pane,
 		struct engineos_mux_client *render_client) {
@@ -2773,7 +1377,20 @@ static struct engineos_mux_pane_output_scene *find_mux_pane_output_scene(
 }
 
 static void destroy_mux_pane_output_scene(
+		struct engineos_shell_server *server,
+		struct engineos_mux_pane_scene *pane_scene,
 		struct engineos_mux_pane_output_scene *output_scene) {
+	struct engineos_shell_view *view;
+	wl_list_for_each(view, &server->views, link) {
+		if (!view->mux_bound || view->mux_pane_id != pane_scene->pane_id ||
+				view->mux_pane_generation != pane_scene->generation ||
+				view->scene_tree == NULL || output_scene->tree == NULL ||
+				view->scene_tree->node.parent != output_scene->tree)
+			continue;
+		wlr_scene_node_reparent(&view->scene_tree->node, &server->scene->tree);
+		wlr_scene_node_set_enabled(&view->scene_tree->node, false);
+		view->mux_presentation_visible = false;
+	}
 	if (output_scene->tree != NULL)
 		wlr_scene_node_destroy(&output_scene->tree->node);
 	engineos_terminal_renderer_destroy(output_scene->renderer);
@@ -2935,7 +1552,8 @@ static void destroy_mux_output_scene(struct engineos_shell_output *output) {
 		wl_list_for_each_safe(output_scene, next, &pane_scene->output_scenes, link) {
 			if (output_scene->output != output)
 				continue;
-			destroy_mux_pane_output_scene(output_scene);
+			destroy_mux_pane_output_scene(output->server, pane_scene,
+				output_scene);
 		}
 	}
 	if (output->mux_scene_tree != NULL) {
@@ -2996,7 +1614,7 @@ static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
 			struct engineos_mux_pane_model *pane = find_output_pane_model(
 				output_scene->output, scene->pane_id, scene->generation);
 			if (pane == NULL || !pane->window_active)
-				destroy_mux_pane_output_scene(output_scene);
+				destroy_mux_pane_output_scene(server, scene, output_scene);
 		}
 		if (wl_list_empty(&scene->output_scenes)) {
 			struct engineos_shell_view *view;
@@ -3083,8 +1701,7 @@ static bool refresh_native_terminal_scene(struct engineos_shell_server *server,
 			if (pane->pane_id ==
 					output_scene->output->mux_snapshot.pane_id &&
 					pane->generation ==
-					output_scene->output->mux_snapshot.pane_generation &&
-					output_scene->terminal_scene->node.enabled) {
+					output_scene->output->mux_snapshot.pane_generation) {
 				output_scene->output->scheduled_mux_revision =
 					server->mux_client.revision;
 				output_scene->output->scheduled_grid_revision =
@@ -3386,6 +2003,10 @@ static int native_mux_snapshot_retry(void *data) {
 	struct engineos_shell_server *server = data;
 	if (!server->mux_client.ready)
 		return 0;
+	/* Preserve image resync requests independently of the mux client's last
+	 * request result. A later successful request in the same scene pass must
+	 * not erase an earlier stale-image response. */
+	server->mux_image_resync_pending = false;
 	bool changed = false;
 	char error[256] = {0};
 	if (!refresh_native_output_snapshots(server, &changed, error,
@@ -3397,7 +2018,10 @@ static int native_mux_snapshot_retry(void *data) {
 		return 0;
 	}
 	sync_native_presentation_visibility(server, "native-snapshot-retry");
-	if (changed && !refresh_native_terminal_scene(server,
+	if (server->mux_image_resync_pending &&
+			server->mux_snapshot_retry_timer != NULL)
+		wl_event_source_timer_update(server->mux_snapshot_retry_timer, 16);
+	if (!refresh_native_terminal_scene(server,
 			"native-snapshot-retry")) {
 		server->mux_client.ready = false;
 		wl_display_terminate(server->display);
@@ -3473,7 +2097,7 @@ static int native_mux_event(int fd, uint32_t mask, void *data) {
 		}
 	}
 	sync_native_presentation_visibility(server, "native-presentation-state");
-	if (changed && !refresh_native_terminal_scene(server,
+	if ((changed || state_changed) && !refresh_native_terminal_scene(server,
 			"native-grid-damage")) {
 		server->mux_client.ready = false;
 		wl_display_terminate(server->display);
@@ -3539,141 +2163,6 @@ static void hide_wallpaper(struct engineos_shell_server *server,
 	schedule_outputs(server);
 }
 
-static bool show_image_preview(struct engineos_shell_server *server,
-		const char *path, const char *slot, const char *owner,
-		const struct engineos_preview_bounds *bounds,
-		struct engineos_mux_pane_model *mux_pane, char *error,
-		size_t error_size) {
-	if (path == NULL || path[0] != '/') {
-		snprintf(error, error_size, "preview path must be absolute");
-		return false;
-	}
-	struct stat st;
-	if (stat(path, &st) < 0 || !S_ISREG(st.st_mode)) {
-		snprintf(error, error_size, "preview path is not a readable file");
-		return false;
-	}
-
-	struct engineos_view_geometry box = {0};
-	struct wlr_scene_tree *parent_tree = &server->scene->tree;
-	uint32_t lease_client_id = 0, lease_view_id = 0;
-	if (mux_pane != NULL) {
-		struct engineos_shell_output *model_output =
-			output_for_pane_model(server, mux_pane);
-		struct engineos_mux_pane_scene *pane_scene = find_mux_pane_scene(server,
-			mux_pane->pane_id, mux_pane->generation);
-		lease_client_id = mux_pane->presentation_mapped ?
-			mux_pane->lease_client_id : server->mux_client.frontend_client_id;
-		lease_view_id = mux_pane->presentation_mapped ?
-			mux_pane->lease_view_id :
-			(model_output != NULL ? model_output->mux_view_id : 0);
-		if (pane_scene == NULL || lease_client_id !=
-				server->mux_client.frontend_client_id || lease_view_id == 0) {
-			snprintf(error, error_size,
-				"preview pane has no local output lease");
-			return false;
-		}
-		struct engineos_mux_pane_output_scene *output_scene =
-			find_mux_pane_output_scene(pane_scene, lease_view_id);
-		if (output_scene == NULL) {
-			snprintf(error, error_size,
-				"preview pane lease has no output scene");
-			return false;
-		}
-		box.width = output_scene->stats.width;
-		box.height = output_scene->stats.height;
-		parent_tree = output_scene->tree;
-	} else if (!compute_preview_box(server, slot, bounds, &box)) {
-		snprintf(error, error_size, "preview bounds are outside the active output");
-		return false;
-	}
-
-	int image_width = 0;
-	int image_height = 0;
-	struct wlr_buffer *buffer =
-		engineos_image_decode(path, &image_width, &image_height, error, error_size);
-	if (buffer == NULL) {
-		return false;
-	}
-
-	long dest_width = box.width;
-	long dest_height = ((long)box.width * image_height) / image_width;
-	if (dest_height > box.height) {
-		dest_height = box.height;
-		dest_width = ((long)box.height * image_width) / image_height;
-	}
-	if (dest_width <= 0 || dest_height <= 0 ||
-			dest_width > INT_MAX || dest_height > INT_MAX) {
-		wlr_buffer_drop(buffer);
-		snprintf(error, error_size, "preview destination size is invalid");
-		return false;
-	}
-
-	uint32_t pane_id = mux_pane != NULL ? mux_pane->pane_id : 0;
-	uint32_t pane_generation = mux_pane != NULL ? mux_pane->generation : 0;
-	hide_matching_image_previews(server, NULL, mux_pane != NULL,
-		pane_id, pane_generation,
-		"replace-pane-preview");
-	struct engineos_preview_surface *preview = calloc(1, sizeof(*preview));
-	if (preview == NULL) {
-		wlr_buffer_drop(buffer);
-		snprintf(error, error_size, "failed to allocate preview state");
-		return false;
-	}
-	preview->buffer = buffer;
-	preview->scene_buffer = wlr_scene_buffer_create(parent_tree, buffer);
-	if (preview->scene_buffer == NULL) {
-		wlr_buffer_drop(buffer);
-		preview->buffer = NULL;
-		free(preview);
-		snprintf(error, error_size, "failed to create preview scene buffer");
-		return false;
-	}
-
-	preview->path = strdup(path);
-	preview->owner = owner != NULL && owner[0] != '\0' ?
-		strdup(owner) : NULL;
-	if (preview->path == NULL || (owner != NULL && owner[0] != '\0' &&
-			preview->owner == NULL)) {
-		reset_image_surface(preview);
-		free(preview);
-		snprintf(error, error_size, "failed to allocate preview identity");
-		return false;
-	}
-	preview->x = box.x + (box.width - (int)dest_width) / 2;
-	preview->y = box.y + (box.height - (int)dest_height) / 2;
-	preview->width = (int)dest_width;
-	preview->height = (int)dest_height;
-	preview->image_width = image_width;
-	preview->image_height = image_height;
-	if (mux_pane != NULL) {
-		preview->native_pane = true;
-		preview->pane_id = mux_pane->pane_id;
-		preview->pane_generation = mux_pane->generation;
-		preview->lease_client_id = lease_client_id;
-		preview->lease_view_id = lease_view_id;
-	}
-	wlr_scene_buffer_set_dest_size(preview->scene_buffer,
-		preview->width, preview->height);
-	wlr_scene_node_set_position(&preview->scene_buffer->node,
-		preview->x, preview->y);
-	wlr_scene_node_raise_to_top(&preview->scene_buffer->node);
-	wl_list_insert(server->previews.prev, &preview->link);
-	wlr_log(WLR_INFO,
-		"image preview shown path=%s owner=%s slot=%s pane=%%%u generation=%u lease=%u:%u image=%dx%d x=%d y=%d size=%dx%d bounds=%dx%d",
-		path,
-		preview->owner != NULL ? preview->owner : "",
-		slot != NULL ? slot : "",
-		preview->pane_id, preview->pane_generation,
-		preview->lease_client_id, preview->lease_view_id,
-		image_width, image_height, preview->x,
-		preview->y, preview->width, preview->height,
-		box.width, box.height);
-	write_shell_state(server, "preview-shown");
-	schedule_outputs(server);
-	return true;
-}
-
 static struct engineos_preview_surface *find_mux_image_preview(
 		struct engineos_shell_server *server, uint32_t pane_id,
 		uint32_t generation, uint32_t image_id) {
@@ -3697,6 +2186,7 @@ static bool create_mux_image_preview(struct engineos_shell_server *server,
 			pane->generation, pane->image_id, pane->image_bytes,
 			&encoded, &encoded_size, error, error_size)) {
 		if (server->mux_client.last_image_resync_required) {
+			server->mux_image_resync_pending = true;
 			wlr_log(WLR_INFO,
 				"mux image fetch superseded pane=%%%u generation=%u image_id=%u; snapshot resync deferred",
 				pane->pane_id, pane->generation, pane->image_id);
@@ -3783,8 +2273,6 @@ static bool create_mux_image_preview(struct engineos_shell_server *server,
 
 static bool sync_native_preview_leases(struct engineos_shell_server *server,
 		const char *reason) {
-	if (server->mux_mode != ENGINEOS_MUX_NATIVE)
-		return true;
 	struct engineos_preview_surface *preview, *tmp;
 	bool changed = false;
 	wl_list_for_each_safe(preview, tmp, &server->previews, link) {
@@ -3874,7 +2362,7 @@ static bool sync_native_preview_leases(struct engineos_shell_server *server,
 					error[0] != '\0' ? error : "output scene unavailable");
 				return false;
 			}
-			if (server->mux_client.last_image_resync_required) {
+			if (server->mux_image_resync_pending) {
 				if (server->mux_snapshot_retry_timer != NULL)
 					wl_event_source_timer_update(
 						server->mux_snapshot_retry_timer, 1);
@@ -3899,8 +2387,8 @@ static bool compute_wallpaper_box(struct engineos_shell_server *server,
 		return compute_preview_box(server, slot, bounds, box);
 	}
 
-	enum engineos_surface_role anchor_role = preview_anchor_role(server, slot);
-	output_geometry_for_role(server, anchor_role,
+	(void)slot;
+	primary_output_geometry(server,
 		&box->x, &box->y, &box->width, &box->height);
 	box->fullscreen = false;
 	box->layout = "wallpaper-output";
@@ -4001,8 +2489,8 @@ static void preview_write_response(int client_fd, const char *status,
 		const char *error) {
 	char response[1024];
 	if (strcmp(status, "ok") == 0) {
-		 snprintf(response, sizeof(response),
-			"{\"version\":1,\"status\":\"ok\",\"capabilities\":[\"ping\",\"show\",\"hide\",\"wallpaper\",\"hide-wallpaper\",\"launch\",\"windows\",\"focus-window\",\"relayout-windows\",\"terminal-register\",\"pane-launch\",\"pane-focus\",\"pane-geometry\",\"pane-unbind\",\"pane-list\",\"png\",\"jpeg\",\"contain\",\"cover\",\"opacity\"]}\n");
+		snprintf(response, sizeof(response),
+			"{\"version\":1,\"status\":\"ok\",\"capabilities\":[\"ping\",\"wallpaper\",\"hide-wallpaper\",\"focus-window\",\"relayout-windows\",\"png\",\"jpeg\",\"cover\",\"opacity\"]}\n");
 	} else {
 		char escaped[768];
 		size_t used = 0;
@@ -4028,30 +2516,6 @@ static void preview_write_response(int client_fd, const char *status,
 	}
 }
 
-static void preview_write_pane_list_response(
-		struct engineos_shell_server *server, int client_fd) {
-	int out_fd = dup(client_fd);
-	if (out_fd < 0) {
-		wlr_log(WLR_ERROR, "preview ipc response dup failed: %s",
-			strerror(errno));
-		return;
-	}
-	FILE *file = fdopen(out_fd, "w");
-	if (file == NULL) {
-		wlr_log(WLR_ERROR, "preview ipc response fdopen failed: %s",
-			strerror(errno));
-		close(out_fd);
-		return;
-	}
-	fprintf(file, "{\"version\":1,\"status\":\"ok\",\"pane_bindings\":");
-	write_pane_bindings_json(file, server);
-	fprintf(file, "}\n");
-	if (fclose(file) != 0) {
-		wlr_log(WLR_ERROR, "preview ipc pane-list response failed: %s",
-			strerror(errno));
-	}
-}
-
 static void handle_preview_request_json(struct engineos_shell_server *server,
 		int client_fd, struct json_object *request) {
 	char op[32] = {0};
@@ -4064,323 +2528,13 @@ static void handle_preview_request_json(struct engineos_shell_server *server,
 		preview_write_response(client_fd, "ok", NULL);
 		return;
 	}
-	if (strcmp(op, "terminal-register") == 0) {
-		char slot[64] = {0};
-		char tty[PATH_MAX] = {0};
-		if (!json_extract_string(request, "slot", slot, sizeof(slot)) ||
-				!json_extract_string(request, "tty", tty, sizeof(tty))) {
-			preview_write_response(client_fd, "error",
-				"terminal registration requires slot and tty");
-			return;
-		}
-		enum engineos_surface_role role = parse_surface_role(slot);
-		struct engineos_terminal_client *client =
-			register_terminal_client(server, tty, role);
-		if (client == NULL) {
-			preview_write_response(client_fd, "error",
-				"invalid terminal registration");
-			return;
-		}
-		wlr_log(WLR_INFO, "terminal registered tty=%s slot=%s",
-			tty, surface_role_name(role));
-		write_shell_state(server, "ipc-terminal-register");
-		preview_write_response(client_fd, "ok", NULL);
-		return;
-	}
-	if (strcmp(op, "hide") == 0) {
-		if (server->mux_mode == ENGINEOS_MUX_NATIVE) {
-			preview_write_response(client_fd, "error",
-				"native pane images are owned by engine-mux pane-image");
-			return;
-		}
-		char owner[128] = {0};
-		json_extract_string(request, "owner", owner, sizeof(owner));
-		struct json_object *pane_object = NULL;
-		bool has_pane = json_object_object_get_ex(request, "pane", &pane_object);
-		struct engineos_mux_pane_model *pane = has_pane ?
-			native_preview_pane_for_request(server, request) : NULL;
-		if (has_pane && pane == NULL) {
-			preview_write_response(client_fd, "error",
-				"preview pane is not in the active native mux view");
-			return;
-		}
-		if (owner[0] == '\0' && pane == NULL)
-			hide_image_preview(server, "ipc-hide-all");
-		else
-			hide_matching_image_previews(server,
-				owner[0] != '\0' ? owner : NULL,
-				pane != NULL,
-				pane != NULL ? pane->pane_id : 0,
-				pane != NULL ? pane->generation : 0, "ipc-hide");
-		preview_write_response(client_fd, "ok", NULL);
-		return;
-	}
 	if (strcmp(op, "hide-wallpaper") == 0) {
 		hide_wallpaper(server, "ipc-hide-wallpaper");
 		preview_write_response(client_fd, "ok", NULL);
 		return;
 	}
-	if (strcmp(op, "launch") == 0) {
-		char slot[64] = {0};
-		if (!json_extract_string(request, "slot", slot, sizeof(slot))) {
-			preview_write_response(client_fd, "error", "missing slot");
-			return;
-		}
-		enum engineos_surface_role role = parse_surface_role(slot);
-		if (!is_launchpad_role(role)) {
-			preview_write_response(client_fd, "error", "unsupported slot");
-			return;
-		}
-		launch_or_activate_slot(server, role, "ipc-launch");
-			preview_write_response(client_fd, "ok", NULL);
-			return;
-		}
-		if (strcmp(op, "pane-list") == 0) {
-			if (prune_expired_pane_bindings(server, "ipc-pane-list")) {
-				write_shell_state(server, "ipc-pane-list-prune");
-			}
-			preview_write_pane_list_response(server, client_fd);
-			return;
-		}
-		if (strcmp(op, "pane-launch") == 0) {
-			char socket[PATH_MAX] = {0};
-			char session[128] = {0};
-			char window_id[64] = {0};
-			char window_index[32] = {0};
-			char pane_id[64] = {0};
-			char token[128] = {0};
-			char command_label[256] = {0};
-			struct engineos_layout_request geometry;
-			if (!request_pane_identity(request, socket, sizeof(socket),
-						session, sizeof(session),
-						window_id, sizeof(window_id),
-						window_index, sizeof(window_index),
-						pane_id, sizeof(pane_id))) {
-				preview_write_response(client_fd, "error", "missing pane identity");
-				return;
-			}
-			if (!json_extract_string(request, "token", token, sizeof(token)) ||
-					token[0] == '\0') {
-				preview_write_response(client_fd, "error", "missing token");
-				return;
-			}
-			json_extract_string(request, "command_label", command_label,
-				sizeof(command_label));
-			if (!request_pane_geometry(request, &geometry)) {
-				preview_write_response(client_fd, "error", "invalid pane geometry");
-				return;
-			}
-			enum engineos_surface_role terminal_role =
-				terminal_role_for_request(server, request, NULL, true);
-			if (!is_terminal_role(terminal_role)) {
-				preview_write_response(client_fd, "error",
-					"pane is not owned by a registered terminal");
-				return;
-			}
-			struct engineos_pane_binding *binding =
-				ensure_pane_binding(server, socket, session, window_id,
-					window_index, pane_id);
-			if (binding == NULL) {
-				preview_write_response(client_fd, "error", "could not allocate pane binding");
-				return;
-			}
-			struct engineos_pane_binding *token_owner =
-				find_pending_pane_binding_by_token(server, token);
-			if (token_owner != NULL && token_owner != binding) {
-				preview_write_response(client_fd, "error", "duplicate launch token");
-				return;
-			}
-			update_pane_binding_geometry(binding, &geometry);
-			if (!replace_string(&binding->token, token) ||
-					!replace_string(&binding->command_label,
-						command_label[0] != '\0' ? command_label : "(unknown)")) {
-				preview_write_response(client_fd, "error", "could not store pane launch");
-				return;
-			}
-			binding->launch_deadline_msec =
-				monotonic_msec() + ENGINEOS_PANE_LAUNCH_TIMEOUT_MS;
-			binding->terminal_role = terminal_role;
-			binding->timeout_logged = false;
-			pane_binding_set_focused(server, binding);
-			set_active_slot(server, terminal_role,
-				"ipc-pane-launch");
-			relayout_shell_views(server, "ipc-pane-launch");
-			write_shell_state(server, "ipc-pane-launch");
-			pane_binding_schedule_timer(server);
-			wlr_log(WLR_INFO,
-				"pane launch registered key=%s command=%s terminal_slot=%s previous_view=%u bounds=%d,%d %dx%d window=%dx%d",
-				binding->key != NULL ? binding->key : "(missing)",
-				binding->command_label != NULL ? binding->command_label : "(unknown)",
-				surface_role_name(terminal_role),
-				binding->view != NULL ? binding->view->view_id : 0,
-				geometry.pane_left, geometry.pane_top,
-				geometry.pane_width, geometry.pane_height,
-				geometry.window_width, geometry.window_height);
-			preview_write_response(client_fd, "ok", NULL);
-			return;
-		}
-		if (strcmp(op, "pane-focus") == 0) {
-			char socket[PATH_MAX] = {0};
-			char session[128] = {0};
-			char window_id[64] = {0};
-			char window_index[32] = {0};
-			char pane_id[64] = {0};
-			if (!request_pane_identity(request, socket, sizeof(socket),
-						session, sizeof(session),
-						window_id, sizeof(window_id),
-						window_index, sizeof(window_index),
-						pane_id, sizeof(pane_id))) {
-				preview_write_response(client_fd, "error", "missing pane identity");
-				return;
-			}
-			char *key = build_pane_binding_key(socket, session, pane_id);
-			if (key == NULL) {
-				preview_write_response(client_fd, "error", "invalid pane identity");
-				return;
-			}
-			struct engineos_pane_binding *binding =
-				find_pane_binding_by_key(server, key);
-			enum engineos_surface_role terminal_role =
-				terminal_role_for_request(server, request, NULL, true);
-			if (!is_terminal_role(terminal_role) && binding != NULL) {
-				terminal_role = binding->terminal_role;
-			}
-			if (!is_terminal_role(terminal_role)) {
-				free(key);
-				preview_write_response(client_fd, "error",
-					"pane focus has no registered terminal owner");
-				return;
-			}
-			if (binding != NULL) {
-				binding->terminal_role = terminal_role;
-				pane_binding_set_focused(server, binding);
-				if (binding->view != NULL && binding->view->mapped) {
-					activate_view(binding->view, "ipc-pane-focus");
-				} else {
-					set_active_slot(server, terminal_role,
-						"ipc-pane-focus-pending");
-					write_shell_state(server, "ipc-pane-focus-pending");
-				}
-				wlr_log(WLR_INFO,
-					"pane focus requested key=%s bound=%s view_id=%u",
-					key,
-					binding->view != NULL && binding->view->mapped ? "true" : "false",
-					binding->view != NULL && binding->view->mapped ?
-						binding->view->view_id : 0);
-			} else {
-				pane_binding_clear_focus(server);
-				if (is_managed_floating_view(server->focused_view)) {
-					set_view_activated(server->focused_view, false);
-					server->focused_view = NULL;
-					wlr_seat_keyboard_notify_clear_focus(server->seat);
-				}
-				set_active_slot(server, terminal_role,
-					"ipc-pane-focus-unbound");
-				relayout_shell_views(server, "ipc-pane-focus-unbound");
-				write_shell_state(server, "ipc-pane-focus-unbound");
-				wlr_log(WLR_INFO, "pane focus requested key=%s bound=false", key);
-			}
-			free(key);
-			preview_write_response(client_fd, "ok", NULL);
-			return;
-		}
-		if (strcmp(op, "pane-geometry") == 0) {
-			char socket[PATH_MAX] = {0};
-			char session[128] = {0};
-			char window_id[64] = {0};
-			char window_index[32] = {0};
-			char pane_id[64] = {0};
-			struct engineos_layout_request geometry;
-			if (!request_pane_identity(request, socket, sizeof(socket),
-						session, sizeof(session),
-						window_id, sizeof(window_id),
-						window_index, sizeof(window_index),
-						pane_id, sizeof(pane_id))) {
-				preview_write_response(client_fd, "error", "missing pane identity");
-				return;
-			}
-			if (!request_pane_geometry(request, &geometry)) {
-				preview_write_response(client_fd, "error", "invalid pane geometry");
-				return;
-			}
-			char *key = build_pane_binding_key(socket, session, pane_id);
-			if (key == NULL) {
-				preview_write_response(client_fd, "error", "invalid pane identity");
-				return;
-			}
-			struct engineos_pane_binding *binding =
-				find_pane_binding_by_key(server, key);
-			if (binding != NULL) {
-				update_pane_binding_identity(binding, socket, session,
-					window_id, window_index, pane_id);
-				update_pane_binding_geometry(binding, &geometry);
-				enum engineos_surface_role terminal_role =
-					terminal_role_for_request(server, request, NULL, false);
-				if (is_terminal_role(terminal_role)) {
-					binding->terminal_role = terminal_role;
-				}
-				relayout_shell_views(server, "ipc-pane-geometry");
-				write_shell_state(server, "ipc-pane-geometry");
-				wlr_log(WLR_INFO,
-					"pane geometry updated key=%s bounds=%d,%d %dx%d window=%dx%d",
-					key, geometry.pane_left, geometry.pane_top,
-					geometry.pane_width, geometry.pane_height,
-					geometry.window_width, geometry.window_height);
-			} else {
-				wlr_log(WLR_INFO, "pane geometry ignored key=%s bound=false", key);
-			}
-			free(key);
-			preview_write_response(client_fd, "ok", NULL);
-			return;
-		}
-		if (strcmp(op, "pane-unbind") == 0) {
-			char socket[PATH_MAX] = {0};
-			char session[128] = {0};
-			char window_id[64] = {0};
-			char window_index[32] = {0};
-			char pane_id[64] = {0};
-			if (!request_pane_identity(request, socket, sizeof(socket),
-						session, sizeof(session),
-						window_id, sizeof(window_id),
-						window_index, sizeof(window_index),
-						pane_id, sizeof(pane_id))) {
-				preview_write_response(client_fd, "error", "missing pane identity");
-				return;
-			}
-			char *key = build_pane_binding_key(socket, session, pane_id);
-			if (key == NULL) {
-				preview_write_response(client_fd, "error", "invalid pane identity");
-				return;
-			}
-			struct engineos_pane_binding *binding =
-				find_pane_binding_by_key(server, key);
-			if (binding == NULL) {
-				free(key);
-				preview_write_response(client_fd, "error", "unknown pane");
-				return;
-			}
-			struct engineos_shell_view *old_view = binding->view;
-			bool was_focused = binding->focused;
-			enum engineos_surface_role terminal_role = binding->terminal_role;
-			free_pane_binding(binding);
-			if (old_view != NULL && old_view->mapped) {
-				apply_view_layout(old_view);
-			}
-			if (was_focused) {
-				set_active_slot(server,
-					is_terminal_role(terminal_role) ? terminal_role :
-						ENGINEOS_SURFACE_TERMINAL,
-					"ipc-pane-unbind");
-			}
-			relayout_shell_views(server, "ipc-pane-unbind");
-			write_shell_state(server, "ipc-pane-unbind");
-			wlr_log(WLR_INFO, "pane unbound key=%s", key);
-			free(key);
-			preview_write_response(client_fd, "ok", NULL);
-			return;
-		}
-		if (strcmp(op, "focus-window") == 0) {
-			int window_id = 0;
+	if (strcmp(op, "focus-window") == 0) {
+		int window_id = 0;
 		if (!json_extract_int(request, "window_id", &window_id) ||
 				window_id <= 0) {
 			preview_write_response(client_fd, "error", "missing window_id");
@@ -4393,10 +2547,6 @@ static void handle_preview_request_json(struct engineos_shell_server *server,
 			return;
 		}
 		activate_view(view, "ipc-focus-window");
-		wlr_log(WLR_INFO,
-			"window focus requested source=ipc window_id=%u role=%s title=%s app_id=%s",
-			view->view_id, surface_role_name(view->role),
-			view_title(view), view_app_id(view));
 		preview_write_response(client_fd, "ok", NULL);
 		return;
 	}
@@ -4412,32 +2562,14 @@ static void handle_preview_request_json(struct engineos_shell_server *server,
 			preview_write_response(client_fd, "error", "missing path");
 			return;
 		}
-		char slot[64] = {0};
-		json_extract_string(request, "slot", slot, sizeof(slot));
-		enum engineos_surface_role terminal_role =
-			terminal_role_for_request(server, request, slot, false);
-		char *wallpaper_pane_key = request_pane_key(request);
-		if (wallpaper_pane_key != NULL && !is_terminal_role(terminal_role)) {
-			free(wallpaper_pane_key);
-			preview_write_response(client_fd, "error",
-				"wallpaper pane has no registered terminal owner");
-			return;
-		}
-		free(wallpaper_pane_key);
-		if (is_terminal_role(terminal_role)) {
-			snprintf(slot, sizeof(slot), "%s",
-				surface_role_name(terminal_role));
-		}
 		char mode[32] = {0};
 		json_extract_string(request, "mode", mode, sizeof(mode));
 		struct engineos_preview_bounds bounds = {0};
 		request_preview_bounds(request, &bounds);
 		int opacity = request_opacity_percent(request, 100);
 		char error[512] = {0};
-		if (!show_wallpaper(server, path, slot, mode, &bounds, opacity,
-					error, sizeof(error))) {
-			wlr_log(WLR_ERROR, "wallpaper show failed path=%s error=%s",
-				path, error[0] != '\0' ? error : "unknown");
+		if (!show_wallpaper(server, path, NULL, mode, &bounds, opacity,
+				error, sizeof(error))) {
 			preview_write_response(client_fd, "error",
 				error[0] != '\0' ? error : "wallpaper failed");
 			return;
@@ -4445,61 +2577,9 @@ static void handle_preview_request_json(struct engineos_shell_server *server,
 		preview_write_response(client_fd, "ok", NULL);
 		return;
 	}
-	if (strcmp(op, "show") != 0) {
-		preview_write_response(client_fd, "error", "unsupported op");
-		return;
-	}
-	if (server->mux_mode == ENGINEOS_MUX_NATIVE) {
-		preview_write_response(client_fd, "error",
-			"native pane images are owned by engine-mux pane-image");
-		return;
-	}
 
-	char path[PATH_MAX] = {0};
-	if (!json_extract_string(request, "path", path, sizeof(path))) {
-		preview_write_response(client_fd, "error", "missing path");
-		return;
-	}
-	char slot[64] = {0};
-	json_extract_string(request, "slot", slot, sizeof(slot));
-	struct engineos_mux_pane_model *mux_pane =
-		native_preview_pane_for_request(server, request);
-	if (server->mux_mode == ENGINEOS_MUX_NATIVE && mux_pane == NULL) {
-		preview_write_response(client_fd, "error",
-			"preview pane is not in the active native mux view");
-		return;
-	}
-	if (mux_pane == NULL) {
-		enum engineos_surface_role terminal_role =
-			terminal_role_for_request(server, request, slot, false);
-		char *preview_pane_key = request_pane_key(request);
-		if (preview_pane_key != NULL && !is_terminal_role(terminal_role)) {
-			free(preview_pane_key);
-			preview_write_response(client_fd, "error",
-				"preview pane has no registered terminal owner");
-			return;
-		}
-		free(preview_pane_key);
-		if (is_terminal_role(terminal_role))
-			snprintf(slot, sizeof(slot), "%s",
-				surface_role_name(terminal_role));
-	}
-	char owner[128] = {0};
-	json_extract_string(request, "owner", owner, sizeof(owner));
-	struct engineos_preview_bounds bounds = {0};
-	request_preview_bounds(request, &bounds);
-	char error[512] = {0};
-	if (!show_image_preview(server, path, slot, owner, &bounds, mux_pane,
-			error, sizeof(error))) {
-		wlr_log(WLR_ERROR, "image preview show failed path=%s error=%s",
-			path, error[0] != '\0' ? error : "unknown");
-		preview_write_response(client_fd, "error",
-			error[0] != '\0' ? error : "show failed");
-		return;
-	}
-	preview_write_response(client_fd, "ok", NULL);
+	preview_write_response(client_fd, "error", "unsupported op");
 }
-
 static void handle_preview_request(struct engineos_shell_server *server,
 		int client_fd, const char *request_text) {
 	enum json_tokener_error parse_error = json_tokener_success;
@@ -4722,10 +2802,8 @@ static void write_shell_state(struct engineos_shell_server *server,
 	json_write_string(file, getenv("WAYLAND_DISPLAY"));
 	fprintf(file, ",\n  \"screencopy\": %s",
 		server->screencopy_mgr != NULL ? "true" : "false");
-	fprintf(file, ",\n  \"bootstrap\": ");
-	json_write_string(file, bootstrap_mode_name(server->bootstrap_mode));
 	fprintf(file, ",\n  \"mux\": {\"mode\": ");
-	json_write_string(file, mux_mode_name(server->mux_mode));
+	json_write_string(file, "native");
 	fprintf(file, ", \"connected\": %s, \"revision\": %llu, \"socket\": ",
 		server->mux_client.ready ? "true" : "false",
 		(unsigned long long)server->mux_client.revision);
@@ -5069,10 +3147,6 @@ static void write_shell_state(struct engineos_shell_server *server,
 				"true" : "false");
 	}
 	fprintf(file, "]");
-	fprintf(file, ",\n  \"active_slot\": ");
-	json_write_string(file, surface_role_name(server->active_slot));
-	fprintf(file, ",\n  \"pending_slot\": ");
-	json_write_string(file, surface_role_name(server->pending_slot));
 	fprintf(file, ",\n  \"input\": {\"mode\": ");
 	json_write_string(file, input_mode_name(server->input_mode));
 	fprintf(file,
@@ -5119,34 +3193,7 @@ static void write_shell_state(struct engineos_shell_server *server,
 		server->wallpaper.y, server->wallpaper.width,
 		server->wallpaper.height, server->wallpaper.image_width,
 		server->wallpaper.image_height);
-	fprintf(file, ",\n  \"terminal_clients\": [");
-	bool first_terminal_client = true;
-	struct engineos_terminal_client *terminal_client;
-	wl_list_for_each(terminal_client, &server->terminal_clients, link) {
-		if (!first_terminal_client) {
-			fprintf(file, ",");
-		}
-		first_terminal_client = false;
-		fprintf(file, "\n    {\"tty\": ");
-		json_write_string(file, terminal_client->tty);
-		fprintf(file, ", \"slot\": ");
-		json_write_string(file, surface_role_name(terminal_client->role));
-		fprintf(file, ", \"focused_pane_key\": ");
-		json_write_string(file, terminal_client->focused_pane_key);
-		fprintf(file, "}");
-	}
-	if (!first_terminal_client) {
-		fprintf(file, "\n  ");
-	}
-	fprintf(file, "],\n  \"slots\": {\n");
-	write_slot_state(file, server, ENGINEOS_SURFACE_TERMINAL);
-	fprintf(file, ",\n");
-	write_slot_state(file, server, ENGINEOS_SURFACE_TERMINAL_SECONDARY);
-	fprintf(file, ",\n");
-	write_slot_state(file, server, ENGINEOS_SURFACE_CUBE);
-	fprintf(file, ",\n");
-	write_slot_state(file, server, ENGINEOS_SURFACE_ENGINE);
-	fprintf(file, "\n  },\n  \"windows\": [");
+	fprintf(file, ",\n  \"windows\": [");
 
 	bool first_window = true;
 	struct engineos_shell_view *view;
@@ -5157,8 +3204,6 @@ static void write_shell_state(struct engineos_shell_server *server,
 			struct engineos_view_geometry geometry = {0};
 			compute_view_geometry(view, &geometry);
 			bool visible = view_geometry_visible(server, view, &geometry);
-			struct engineos_pane_binding *pane_binding =
-				pane_binding_for_view(view);
 			if (!first_window) {
 				fprintf(file, ",");
 			}
@@ -5177,16 +3222,14 @@ static void write_shell_state(struct engineos_shell_server *server,
 			fprintf(file, ", \"app_id\": ");
 			json_write_string(file, view_app_id(view));
 			fprintf(file, ", \"bound\": %s, \"pane_key\": ",
-				pane_binding != NULL || view->mux_bound ? "true" : "false");
-			json_write_string(file,
-				pane_binding != NULL ? pane_binding->key : "");
+				view->mux_bound ? "true" : "false");
+			json_write_string(file, "");
 			fprintf(file, ", \"pane_id\": ");
 			char native_pane_id[32] = {0};
 			if (view->mux_bound)
 				snprintf(native_pane_id, sizeof(native_pane_id), "%%%u",
 					view->mux_pane_id);
-			json_write_string(file, view->mux_bound ? native_pane_id :
-				(pane_binding != NULL ? pane_binding->pane_id : ""));
+			json_write_string(file, view->mux_bound ? native_pane_id : "");
 			fprintf(file,
 				", \"mux_generation\": %u, \"surface_id\": %u, \"surface_role\": \"%s\", \"client_pid\": %ld, \"presentation_visible\": %s",
 				view->mux_bound ? view->mux_pane_generation : 0,
@@ -5200,30 +3243,7 @@ static void write_shell_state(struct engineos_shell_server *server,
 		if (!first_window) {
 			fprintf(file, "\n  ");
 		}
-		fprintf(file, "],\n  \"pane_bindings\": ");
-		write_pane_bindings_json(file, server);
-		fprintf(file, ",\n  \"launches\": [");
-
-	bool first = true;
-	struct engineos_shell_launch *launch;
-	wl_list_for_each(launch, &server->launches, link) {
-		if (!first) {
-			fprintf(file, ",");
-		}
-		first = false;
-		fprintf(file, "\n    {\"pid\": %ld, \"role\": ", (long)launch->pid);
-		json_write_string(file, surface_role_name(launch->role));
-		fprintf(file, ", \"label\": ");
-		json_write_string(file, launch->label);
-		fprintf(file, ", \"mapped\": %s, \"command\": ",
-			launch->mapped ? "true" : "false");
-		json_write_string(file, launch->command);
-		fprintf(file, "}");
-	}
-	if (!first) {
-		fprintf(file, "\n  ");
-	}
-	fprintf(file, "]\n}\n");
+		fprintf(file, "]\n}\n");
 
 	bool ok = true;
 	if (fclose(file) != 0) {
@@ -5249,26 +3269,6 @@ static void clear_pointer_focus(struct engineos_shell_server *server,
 		input_mode_name(server->input_mode),
 		server->game_capture ? "game" : "none",
 		reason != NULL ? reason : "unspecified");
-}
-
-static bool ascii_contains_ci(const char *haystack, const char *needle) {
-	if (haystack == NULL || needle == NULL || needle[0] == '\0') {
-		return false;
-	}
-
-	for (const char *h = haystack; *h != '\0'; h++) {
-		const char *hp = h;
-		const char *np = needle;
-		while (*hp != '\0' && *np != '\0' &&
-				tolower((unsigned char)*hp) == tolower((unsigned char)*np)) {
-			hp++;
-			np++;
-		}
-		if (*np == '\0') {
-			return true;
-		}
-	}
-	return false;
 }
 
 static struct engineos_shell_view *view_from_scene_node(
@@ -5332,8 +3332,7 @@ static bool should_lock_game_cursor(struct engineos_shell_server *server) {
 		server->input_mode == ENGINEOS_INPUT_GAME &&
 		server->focused_view != NULL &&
 		server->focused_view->mapped &&
-		(server->focused_view->role == ENGINEOS_SURFACE_ENGINE ||
-		 view_is_native_mux_game(server->focused_view));
+		view_is_native_mux_game(server->focused_view);
 }
 
 static struct wlr_surface *focused_game_surface(
@@ -5656,28 +3655,10 @@ static void set_input_mode_for_clicked_view(struct engineos_shell_view *view) {
 	struct engineos_shell_server *server = view->server;
 	server->emergency_released = false;
 
-	if (is_launchpad_role(view->role)) {
-		set_active_slot(server, view->role, "click-focus");
-		return;
-	}
-
 	bool native_game = view_is_native_mux_game(view);
 	server->game_capture = native_game;
-	switch (view->role) {
-	case ENGINEOS_SURFACE_ENGINE:
-		server->input_mode = ENGINEOS_INPUT_GAME;
-		break;
-	case ENGINEOS_SURFACE_MUX_PRESENTATION:
-		server->input_mode = native_game ? ENGINEOS_INPUT_GAME :
-			ENGINEOS_INPUT_GRAPHICAL;
-		break;
-	case ENGINEOS_SURFACE_TERMINAL:
-	case ENGINEOS_SURFACE_TERMINAL_SECONDARY:
-	case ENGINEOS_SURFACE_UNKNOWN:
-	default:
-		server->input_mode = ENGINEOS_INPUT_TERMINAL;
-		break;
-	}
+	server->input_mode = native_game ? ENGINEOS_INPUT_GAME :
+		ENGINEOS_INPUT_GRAPHICAL;
 
 	wlr_log(WLR_INFO, "input mode=%s capture=%s reason=click-focus role=%s",
 		input_mode_name(server->input_mode),
@@ -5686,55 +3667,6 @@ static void set_input_mode_for_clicked_view(struct engineos_shell_view *view) {
 	sync_pointer_constraint(server, "click-focus");
 	sync_cursor_image(server, "click-focus");
 	write_shell_state(server, "click-focus");
-}
-
-static enum engineos_surface_role classify_view_role(struct engineos_shell_view *view) {
-	const char *app_id = view_app_id(view);
-	const char *title = view_title(view);
-
-	if (ascii_contains_ci(app_id, "engineos-cube") ||
-			ascii_contains_ci(title, "engineos-cube") ||
-			ascii_contains_ci(app_id, "cube") ||
-			ascii_contains_ci(title, "cube")) {
-		return ENGINEOS_SURFACE_CUBE;
-	}
-	if (ascii_contains_ci(app_id, "engineos-terminal-secondary") ||
-			ascii_contains_ci(app_id, "terminal-secondary") ||
-			ascii_contains_ci(title, "EngineOS Side") ||
-			ascii_contains_ci(title, "terminal-secondary")) {
-		return ENGINEOS_SURFACE_TERMINAL_SECONDARY;
-	}
-	if (ascii_contains_ci(app_id, "quake") ||
-			ascii_contains_ci(title, "quake") ||
-			ascii_contains_ci(app_id, "engine") ||
-			ascii_contains_ci(title, "engine")) {
-		return ENGINEOS_SURFACE_ENGINE;
-	}
-	if (ascii_contains_ci(app_id, "foot") ||
-			ascii_contains_ci(app_id, "terminal") ||
-			ascii_contains_ci(app_id, "alacritty") ||
-			ascii_contains_ci(app_id, "kitty") ||
-			ascii_contains_ci(app_id, "wezterm") ||
-			ascii_contains_ci(app_id, "xterm") ||
-			ascii_contains_ci(title, "terminal")) {
-		return ENGINEOS_SURFACE_TERMINAL;
-	}
-	return ENGINEOS_SURFACE_UNKNOWN;
-}
-
-static bool xdg_toplevel_supports_configure_bounds(
-		struct wlr_xdg_toplevel *toplevel) {
-	if (toplevel == NULL || toplevel->resource == NULL ||
-			toplevel->base == NULL || toplevel->base->client == NULL ||
-			toplevel->base->client->shell == NULL) {
-		return false;
-	}
-	if (toplevel->base->client->shell->version <
-			XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION) {
-		return false;
-	}
-	return wl_resource_get_version(toplevel->resource) >=
-		XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION;
 }
 
 static bool xdg_toplevel_supports_wm_capabilities(
@@ -5792,64 +3724,23 @@ static void set_toplevel_suspended(struct wlr_xdg_toplevel *toplevel,
 	wlr_xdg_toplevel_set_suspended(toplevel, suspended);
 }
 
-static void set_toplevel_geometry(struct wlr_xdg_toplevel *toplevel,
-		const struct engineos_view_geometry *geometry) {
-	if (!xdg_toplevel_can_configure(toplevel) || geometry == NULL) {
-		return;
-	}
-	wlr_xdg_toplevel_set_fullscreen(toplevel, geometry->fullscreen);
-	if (xdg_toplevel_supports_configure_bounds(toplevel)) {
-		wlr_xdg_toplevel_set_bounds(toplevel, geometry->width,
-			geometry->height);
-	}
-	wlr_xdg_toplevel_set_size(toplevel, geometry->width, geometry->height);
-}
-
 static void apply_view_layout(struct engineos_shell_view *view) {
 	struct engineos_view_geometry geometry = {0};
 	compute_view_geometry(view, &geometry);
 
-	switch (view->role) {
-	case ENGINEOS_SURFACE_TERMINAL:
-	case ENGINEOS_SURFACE_TERMINAL_SECONDARY:
-	case ENGINEOS_SURFACE_CUBE:
-	case ENGINEOS_SURFACE_ENGINE:
-		if (view->xdg_surface != NULL &&
-				xdg_toplevel_can_configure(view->xdg_surface->toplevel)) {
-			if (view->role == ENGINEOS_SURFACE_CUBE ||
-					view->role == ENGINEOS_SURFACE_ENGINE) {
-				set_toplevel_geometry(view->xdg_surface->toplevel, &geometry);
-			} else {
-				wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel,
-					geometry.width, geometry.height);
-			}
-		}
-		break;
-	case ENGINEOS_SURFACE_UNKNOWN:
-	default:
-		if (view->xdg_surface != NULL &&
-				xdg_toplevel_can_configure(view->xdg_surface->toplevel)) {
-			if (geometry.layout != NULL &&
-					strcmp(geometry.layout, "tmux-pane-gui") == 0) {
-				set_toplevel_geometry(view->xdg_surface->toplevel, &geometry);
-				wlr_xdg_toplevel_set_maximized(view->xdg_surface->toplevel,
-					false);
-			} else {
-				wlr_xdg_toplevel_set_fullscreen(view->xdg_surface->toplevel,
-					geometry.fullscreen);
-				wlr_xdg_toplevel_set_maximized(view->xdg_surface->toplevel,
-					view->maximized);
-				wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel,
-					geometry.width, geometry.height);
-			}
-			set_toplevel_suspended(view->xdg_surface->toplevel, view->minimized);
-		}
-		break;
+	if (view->xdg_surface != NULL &&
+			xdg_toplevel_can_configure(view->xdg_surface->toplevel)) {
+		wlr_xdg_toplevel_set_fullscreen(view->xdg_surface->toplevel,
+			geometry.fullscreen);
+		wlr_xdg_toplevel_set_maximized(view->xdg_surface->toplevel,
+			view->maximized);
+		wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel,
+			geometry.width, geometry.height);
+		set_toplevel_suspended(view->xdg_surface->toplevel, view->minimized);
 	}
 	if (view->scene_tree != NULL) {
 		if (geometry.layout != NULL &&
-				(strcmp(geometry.layout, "tmux-pane-gui") == 0 ||
-				 strcmp(geometry.layout, "native-mux-presentation") == 0)) {
+				strcmp(geometry.layout, "native-mux-presentation") == 0) {
 			struct wlr_box clip = {
 				.x = 0,
 				.y = 0,
@@ -5863,99 +3754,19 @@ static void apply_view_layout(struct engineos_shell_view *view) {
 	}
 	wlr_scene_node_set_position(&view->scene_tree->node, geometry.x,
 		geometry.y);
-	if (is_launchpad_role(view->role)) {
-		wlr_log(WLR_INFO,
-			"layout view role=%s layout=%s x=%d y=%d size=%dx%d fullscreen=%s active_slot=%s title=%s app_id=%s",
-			surface_role_name(view->role), geometry.layout,
-			geometry.x, geometry.y, geometry.width, geometry.height,
-			geometry.fullscreen ? "true" : "false",
-			surface_role_name(view->server->active_slot),
-			view_title(view), view_app_id(view));
-	} else {
-		wlr_log(WLR_INFO,
-			"layout view role=%s layout=%s x=%d y=%d size=%dx%d maximized=%s minimized=%s title=%s app_id=%s",
-			surface_role_name(view->role), geometry.layout,
-			geometry.x, geometry.y, geometry.width, geometry.height,
-			view->maximized ? "true" : "false",
-			view->minimized ? "true" : "false",
-			view_title(view), view_app_id(view));
-	}
-}
-
-static void apply_launchpad_visibility(struct engineos_shell_server *server,
-		const char *reason) {
-	struct engineos_shell_view *view;
-	struct engineos_shell_view *active_view = NULL;
-	bool active_terminal = false;
-
-	wl_list_for_each(view, &server->views, link) {
-		if (!view->mapped || !is_launchpad_role(view->role)) {
-			continue;
-		}
-
-		bool active = view->role == server->active_slot;
-		struct engineos_view_geometry geometry = {0};
-		compute_view_geometry(view, &geometry);
-		bool visible = view_geometry_visible(server, view, &geometry);
-		apply_view_layout(view);
-		wlr_scene_node_set_enabled(&view->scene_tree->node,
-			view_geometry_render_enabled(server, view, &geometry));
-		if (active) {
-			active_view = view;
-			active_terminal = is_terminal_role(view->role);
-		} else {
-			set_view_activated(view, false);
-		}
-		wlr_log(WLR_INFO,
-			"launchpad slot visibility role=%s active=%s visible=%s reason=%s",
-			surface_role_name(view->role), active ? "true" : "false",
-			visible ? "true" : "false",
-			reason != NULL ? reason : "unspecified");
-	}
-
-	if (active_view != NULL && active_terminal) {
-		focus_view(active_view);
-	}
-
-	wl_list_for_each(view, &server->views, link) {
-		if (!view->mapped || !is_launchpad_role(view->role) ||
-				view == active_view) {
-			continue;
-		}
-		struct engineos_view_geometry geometry = {0};
-		compute_view_geometry(view, &geometry);
-		if (view_geometry_visible(server, view, &geometry) &&
-				is_persistent_panel_geometry(view->role, &geometry)) {
-			wlr_scene_node_raise_to_top(&view->scene_tree->node);
-		}
-	}
-
-	if (active_view != NULL && !active_terminal) {
-		focus_view(active_view);
-	} else if (active_view == NULL && is_launchpad_role(server->active_slot)) {
-		wlr_log(WLR_INFO,
-			"launchpad slot unavailable role=%s reason=%s",
-			surface_role_name(server->active_slot),
-			reason != NULL ? reason : "unspecified");
-		clear_keyboard_focus(server);
-	}
-	if (is_managed_floating_view(server->focused_view) &&
-			server->focused_view->mapped && !server->focused_view->minimized) {
-		wlr_scene_node_raise_to_top(&server->focused_view->scene_tree->node);
-		wlr_log(WLR_INFO,
-			"window raise focused role=%s reason=%s title=%s app_id=%s",
-			surface_role_name(server->focused_view->role),
-			reason != NULL ? reason : "unspecified",
-			view_title(server->focused_view),
-			view_app_id(server->focused_view));
-	}
-	schedule_outputs(server);
+	wlr_log(WLR_INFO,
+		"layout view role=%s layout=%s x=%d y=%d size=%dx%d maximized=%s minimized=%s title=%s app_id=%s",
+		surface_role_name(view->role), geometry.layout,
+		geometry.x, geometry.y, geometry.width, geometry.height,
+		view->maximized ? "true" : "false",
+		view->minimized ? "true" : "false",
+		view_title(view), view_app_id(view));
 }
 
 static void relayout_shell_views(struct engineos_shell_server *server,
 		const char *reason) {
+	(void)reason;
 	struct engineos_shell_view *previous_focus = server->focused_view;
-	apply_launchpad_visibility(server, reason);
 	if (is_managed_floating_view(previous_focus) &&
 			previous_focus->mapped && !previous_focus->minimized) {
 		focus_view(previous_focus);
@@ -5963,7 +3774,7 @@ static void relayout_shell_views(struct engineos_shell_server *server,
 
 	struct engineos_shell_view *view;
 	wl_list_for_each(view, &server->views, link) {
-		if (!view->mapped || is_launchpad_role(view->role)) {
+		if (!view->mapped) {
 			continue;
 		}
 		struct engineos_view_geometry geometry = {0};
@@ -5979,147 +3790,107 @@ static void relayout_shell_views(struct engineos_shell_server *server,
 	schedule_outputs(server);
 }
 
-static int pane_binding_timer_tick(void *data) {
-	struct engineos_shell_server *server = data;
-	bool changed = prune_expired_pane_bindings(server, "pane-binding-timer");
-	int64_t now = monotonic_msec();
-	struct engineos_pane_binding *binding;
-	wl_list_for_each(binding, &server->pane_bindings, link) {
-		if (binding->view != NULL && !binding->focused &&
-				binding->render_until_msec > 0 &&
-				binding->render_until_msec <= now) {
-			binding->render_until_msec = 0;
-			changed = true;
-		}
-	}
-	if (changed) {
-		relayout_shell_views(server, "pane-binding-timer");
-		write_shell_state(server, "pane-binding-timer");
-	}
-	pane_binding_schedule_timer(server);
-	return 0;
-}
-
-static void set_active_slot(struct engineos_shell_server *server,
-		enum engineos_surface_role role, const char *reason) {
-	if (!is_launchpad_role(role)) {
-		wlr_log(WLR_INFO, "launchpad active slot ignored role=%s reason=%s",
-			surface_role_name(role),
-			reason != NULL ? reason : "unspecified");
+static void set_input_mode(struct engineos_shell_server *server,
+		enum engineos_input_mode mode, const char *reason) {
+	if (mode == ENGINEOS_INPUT_GAME &&
+			!view_is_native_mux_game(server->focused_view)) {
+		server->game_capture = false;
+		wlr_log(WLR_INFO,
+			"input mode request ignored requested=game reason=no-focused-game");
 		return;
 	}
-
-	server->active_slot = role;
-	server->input_mode = role == ENGINEOS_SURFACE_ENGINE ?
-		ENGINEOS_INPUT_GAME : ENGINEOS_INPUT_TERMINAL;
-	if (server->input_mode == ENGINEOS_INPUT_GAME) {
-		server->game_capture =
-			find_mapped_role(server, ENGINEOS_SURFACE_ENGINE) != NULL;
-	} else {
-		server->game_capture = false;
-	}
-
-	wlr_log(WLR_INFO,
-		"launchpad active slot=%s mode=%s capture=%s reason=%s",
-		surface_role_name(server->active_slot),
-		input_mode_name(server->input_mode),
-		server->game_capture ? "game" : "none",
-		reason != NULL ? reason : "unspecified");
-	apply_launchpad_visibility(server, reason);
-	if (should_lock_game_cursor(server)) {
-		confine_cursor_to_view(server, server->focused_view, reason);
-	}
+	server->input_mode = mode;
+	server->game_capture = mode == ENGINEOS_INPUT_GAME;
+	if (mode == ENGINEOS_INPUT_SHELL)
+		clear_keyboard_focus(server);
 	sync_pointer_constraint(server, reason);
 	sync_cursor_image(server, reason);
 	write_shell_state(server, reason);
 }
 
-static void set_input_mode(struct engineos_shell_server *server,
-		enum engineos_input_mode mode, const char *reason) {
-	switch (mode) {
-	case ENGINEOS_INPUT_SHELL:
-		server->input_mode = mode;
-		server->game_capture = false;
-		wlr_log(WLR_INFO, "input mode=%s capture=%s reason=%s",
-			input_mode_name(server->input_mode),
-			server->game_capture ? "game" : "none",
-			reason != NULL ? reason : "unspecified");
-		clear_keyboard_focus(server);
-		sync_pointer_constraint(server, reason);
-		sync_cursor_image(server, reason);
-		write_shell_state(server, reason);
-		break;
-	case ENGINEOS_INPUT_TERMINAL:
-		set_active_slot(server, ENGINEOS_SURFACE_TERMINAL, reason);
-		break;
-	case ENGINEOS_INPUT_GRAPHICAL:
-		server->input_mode = mode;
-		server->game_capture = false;
-		sync_pointer_constraint(server, reason);
-		sync_cursor_image(server, reason);
-		write_shell_state(server, reason);
-		break;
-	case ENGINEOS_INPUT_GAME:
-		server->emergency_released = false;
-		if (view_is_native_mux_game(server->focused_view)) {
-				server->input_mode = ENGINEOS_INPUT_GAME;
-				server->game_capture = true;
-				sync_pointer_constraint(server, reason);
-				sync_cursor_image(server, reason);
-				write_shell_state(server, reason);
-				break;
-		}
-		if (find_mapped_role(server, ENGINEOS_SURFACE_ENGINE) != NULL) {
-			set_active_slot(server, ENGINEOS_SURFACE_ENGINE, reason);
-		} else {
-			server->game_capture = false;
-			wlr_log(WLR_INFO,
-				"input mode request ignored requested=game active_slot=%s capture=none reason=%s engine_mapped=false",
-				surface_role_name(server->active_slot),
-				reason != NULL ? reason : "unspecified");
-			sync_pointer_constraint(server, reason);
-			launch_or_activate_slot(server, ENGINEOS_SURFACE_ENGINE, reason);
-			write_shell_state(server, "game-mode-engine-unavailable");
-		}
-		break;
-	}
-}
-
 static void toggle_game_capture(struct engineos_shell_server *server) {
-	if (server->input_mode != ENGINEOS_INPUT_GAME) {
-		set_input_mode(server, ENGINEOS_INPUT_GAME, "capture-toggle");
-	}
-	bool native_game = view_is_native_mux_game(server->focused_view);
-	if (server->input_mode != ENGINEOS_INPUT_GAME ||
-			(!native_game &&
-			 find_mapped_role(server, ENGINEOS_SURFACE_ENGINE) == NULL)) {
+	if (!view_is_native_mux_game(server->focused_view)) {
 		server->game_capture = false;
-		wlr_log(WLR_INFO,
-			"input capture=none mode=%s reason=toggle-ignored engine_mapped=false active_slot=%s",
-			input_mode_name(server->input_mode),
-			surface_role_name(server->active_slot));
-		sync_pointer_constraint(server, "capture-toggle-ignored");
-		sync_cursor_image(server, "capture-toggle-ignored");
-		write_shell_state(server, "capture-toggle-ignored");
 		return;
 	}
+	server->input_mode = ENGINEOS_INPUT_GAME;
 	server->game_capture = !server->game_capture;
-	if (should_lock_game_cursor(server)) {
+	if (should_lock_game_cursor(server))
 		confine_cursor_to_view(server, server->focused_view, "capture-toggle");
-	}
 	sync_pointer_constraint(server, "capture-toggle");
 	sync_cursor_image(server, "capture-toggle");
-	wlr_log(WLR_INFO, "input capture=%s mode=%s reason=toggle",
-		server->game_capture ? "game" : "none",
-		input_mode_name(server->input_mode));
 	write_shell_state(server, "capture-toggle");
 }
-
 static void emergency_release(struct engineos_shell_server *server) {
 	server->emergency_released = true;
 	server->game_capture = false;
 	set_input_mode(server, ENGINEOS_INPUT_SHELL, "emergency-release");
 	wlr_log(WLR_INFO, "input emergency-release complete");
+}
+
+static bool send_mux_navigation_binding(struct engineos_shell_server *server,
+		const char *key_name, const char *reason) {
+	if (!server->mux_client.ready) {
+		wlr_log(WLR_ERROR,
+			"mux navigation unavailable key=%s reason=mux-not-ready",
+			key_name);
+		return false;
+	}
+	struct engineos_shell_output *output = focused_mux_output(server);
+	struct engineos_mux_pane_model *pane = focused_mux_pane(server);
+	if (output == NULL || pane == NULL) {
+		wlr_log(WLR_ERROR,
+			"mux navigation unavailable key=%s reason=no-focused-pane",
+			key_name);
+		return false;
+	}
+
+	bool grid_changed = false;
+	bool key_grid_changed = false;
+	char error[256] = {0};
+	const char *keys[] = {server->mux_client.prefix, key_name};
+	for (size_t index = 0; index < sizeof(keys) / sizeof(keys[0]); index++) {
+		key_grid_changed = false;
+		if (!engineos_mux_client_send_key(&server->mux_client,
+				output->mux_view_id, pane->pane_id, pane->generation,
+				keys[index], &key_grid_changed, error, sizeof(error))) {
+			wlr_log(WLR_ERROR,
+				"mux navigation failed key=%s step=%s rejected=%s: %s",
+				key_name, keys[index],
+				server->mux_client.last_request_rejected ? "true" : "false",
+				error[0] != '\0' ? error : "unknown error");
+			if (!server->mux_client.last_request_rejected)
+				server->mux_client.ready = false;
+			return false;
+		}
+		grid_changed = grid_changed || key_grid_changed;
+	}
+
+	bool ui_changed = false;
+	if (!engineos_mux_client_request_view_ui(&server->mux_client,
+			output->mux_view_id, &output->mux_snapshot, &ui_changed,
+			error, sizeof(error)) ||
+			!engineos_mux_client_refresh_presentation(&server->mux_client,
+				error, sizeof(error)) ||
+			!refresh_native_output_snapshots(server, &grid_changed, error,
+				sizeof(error))) {
+		wlr_log(WLR_ERROR, "mux navigation refresh failed key=%s: %s",
+			key_name, error[0] != '\0' ? error : "unknown error");
+		server->mux_client.ready = false;
+		return false;
+	}
+
+	sync_native_presentation_visibility(server, reason);
+	if ((grid_changed || ui_changed) &&
+			!refresh_native_terminal_scene(server, reason)) {
+		wlr_log(WLR_ERROR,
+			"mux navigation terminal refresh failed key=%s", key_name);
+		server->mux_client.ready = false;
+		return false;
+	}
+	wlr_log(WLR_INFO, "mux navigation complete key=%s reason=%s",
+		key_name, reason);
+	return true;
 }
 
 static void set_view_activated(struct engineos_shell_view *view, bool activated) {
@@ -6206,11 +3977,6 @@ static void activate_view(struct engineos_shell_view *view, const char *reason) 
 
 	struct engineos_shell_server *server = view->server;
 	server->emergency_released = false;
-	if (is_launchpad_role(view->role)) {
-		set_active_slot(server, view->role, reason);
-		return;
-	}
-
 	bool native_game = view_is_native_mux_game(view);
 	server->game_capture = native_game;
 	server->input_mode = native_game ? ENGINEOS_INPUT_GAME :
@@ -6272,31 +4038,6 @@ static void focus_next_window(struct engineos_shell_server *server,
 		reason != NULL ? reason : "unspecified");
 }
 
-static void launch_or_activate_slot(struct engineos_shell_server *server,
-		enum engineos_surface_role role, const char *reason) {
-	struct engineos_shell_view *view = find_mapped_role(server, role);
-	if (view != NULL) {
-		set_active_slot(server, role, reason);
-		return;
-	}
-
-	const char *cmd = slot_command(server, role);
-	if (cmd == NULL || cmd[0] == '\0') {
-		wlr_log(WLR_INFO,
-			"launchpad slot unavailable role=%s reason=no-command trigger=%s",
-			surface_role_name(role),
-			reason != NULL ? reason : "unspecified");
-		return;
-	}
-
-	server->pending_slot = role;
-	wlr_log(WLR_INFO,
-		"launchpad slot unavailable role=%s action=launch-requested trigger=%s",
-		surface_role_name(role),
-		reason != NULL ? reason : "unspecified");
-	spawn_command(server, surface_role_name(role), role, cmd);
-}
-
 static void nudge_focused_window(struct engineos_shell_server *server,
 		int dx, int dy, const char *reason) {
 	struct engineos_shell_view *view = server->focused_view;
@@ -6352,8 +4093,13 @@ static bool handle_keybinding(struct engineos_shell_server *server,
 	switch (sym) {
 	case XKB_KEY_BackSpace:
 		if ((modifiers & WLR_MODIFIER_CTRL) && (modifiers & WLR_MODIFIER_ALT)) {
-			wlr_log(WLR_INFO, "keybinding ctrl+alt+backspace: emergency release");
+			wlr_log(WLR_INFO,
+				"keybinding ctrl+alt+backspace: release to tmux console");
 			emergency_release(server);
+			struct engineos_mux_pane_model *pane = focused_mux_pane(server);
+			if (pane != NULL && strcmp(pane->view_mode, "presentation") == 0)
+				send_mux_navigation_binding(server, "v",
+					"ctrl-alt-backspace-console");
 			return true;
 		}
 		return false;
@@ -6380,26 +4126,14 @@ static bool handle_keybinding(struct engineos_shell_server *server,
 	}
 
 	switch (sym) {
-	case XKB_KEY_1:
-		wlr_log(WLR_INFO, "keybinding alt+1: terminal slot");
-		launch_or_activate_slot(server, ENGINEOS_SURFACE_TERMINAL, "alt+1");
+	case XKB_KEY_Escape: {
+		wlr_log(WLR_INFO, "keybinding alt+escape: release to tmux console");
+		emergency_release(server);
+		struct engineos_mux_pane_model *pane = focused_mux_pane(server);
+		if (pane != NULL && strcmp(pane->view_mode, "presentation") == 0)
+			send_mux_navigation_binding(server, "v", "alt-escape-console");
 		return true;
-	case XKB_KEY_2:
-		wlr_log(WLR_INFO, "keybinding alt+2: cube slot");
-		launch_or_activate_slot(server, ENGINEOS_SURFACE_CUBE, "alt+2");
-		return true;
-	case XKB_KEY_3:
-		wlr_log(WLR_INFO, "keybinding alt+3: engine slot");
-		launch_or_activate_slot(server, ENGINEOS_SURFACE_ENGINE, "alt+3");
-		return true;
-	case XKB_KEY_4:
-		wlr_log(WLR_INFO, "keybinding alt+4: secondary terminal slot");
-		launch_or_activate_slot(server, ENGINEOS_SURFACE_TERMINAL_SECONDARY, "alt+4");
-		return true;
-	case XKB_KEY_Escape:
-		wlr_log(WLR_INFO, "keybinding alt+escape: terminate shell");
-		wl_display_terminate(server->display);
-		return true;
+	}
 	case XKB_KEY_F1:
 		wlr_log(WLR_INFO, "keybinding alt+f1: shell mode");
 		set_input_mode(server, ENGINEOS_INPUT_SHELL, "alt+f1");
@@ -6448,19 +4182,23 @@ static bool handle_keybinding(struct engineos_shell_server *server,
 	case XKB_KEY_Down:
 		nudge_focused_window(server, 0, 32, "alt+down");
 		return true;
-	case XKB_KEY_Return:
-		wlr_log(WLR_INFO, "keybinding alt+return: launch terminal");
-		launch_or_activate_slot(server, ENGINEOS_SURFACE_TERMINAL, "alt+return");
+	case XKB_KEY_Tab: {
+		struct engineos_mux_pane_model *pane = focused_mux_pane(server);
+		if (pane != NULL && pane->presentation_mapped) {
+			bool showing_presentation =
+				strcmp(pane->view_mode, "presentation") == 0;
+			wlr_log(WLR_INFO, "keybinding alt+tab: toggle mapped pane %s",
+				showing_presentation ? "to console" : "to presentation");
+			send_mux_navigation_binding(server, "v",
+				showing_presentation ? "alt-tab-console" :
+					"alt-tab-presentation");
+		} else {
+			wlr_log(WLR_INFO,
+				"keybinding alt+tab: next tmux window (no mapped app)");
+			send_mux_navigation_binding(server, "n", "alt-tab-next-window");
+		}
 		return true;
-	case XKB_KEY_g:
-	case XKB_KEY_G:
-		wlr_log(WLR_INFO, "keybinding alt+g: launch engine");
-		launch_or_activate_slot(server, ENGINEOS_SURFACE_ENGINE, "alt+g");
-		return true;
-	case XKB_KEY_Tab:
-		wlr_log(WLR_INFO, "keybinding alt+tab: cycle managed windows");
-		focus_next_window(server, "alt+tab");
-		return true;
+	}
 	default:
 		return false;
 	}
@@ -6482,7 +4220,7 @@ static bool route_native_terminal_key(struct engineos_shell_server *server,
 		xkb_keysym_t sym, uint32_t keycode, uint32_t modifiers) {
 	(void)keyboard;
 	(void)keycode;
-	if (server->mux_mode != ENGINEOS_MUX_NATIVE || !server->mux_client.ready ||
+	if (!server->mux_client.ready ||
 			server->input_mode != ENGINEOS_INPUT_TERMINAL) return false;
 	if (event->state != WL_KEYBOARD_KEY_STATE_PRESSED) return true;
 	struct engineos_shell_output *output = focused_mux_output(server);
@@ -6547,8 +4285,7 @@ static bool route_native_graphical_prefix_key(
 		uint32_t keycode, uint32_t modifiers) {
 	(void)keyboard;
 	(void)keycode;
-	if (server->mux_mode != ENGINEOS_MUX_NATIVE ||
-			!server->mux_client.ready ||
+	if (!server->mux_client.ready ||
 			(server->input_mode != ENGINEOS_INPUT_GRAPHICAL &&
 			 server->input_mode != ENGINEOS_INPUT_GAME))
 		return false;
@@ -6921,8 +4658,7 @@ static uint32_t native_mux_mouse_modifiers(
 
 static bool native_mux_pointer_cell(struct engineos_shell_server *server,
 		uint32_t *view_id, uint32_t *cell_x, uint32_t *cell_y) {
-	if (server->mux_mode != ENGINEOS_MUX_NATIVE ||
-			!server->mux_client.ready ||
+	if (!server->mux_client.ready ||
 			server->input_mode != ENGINEOS_INPUT_TERMINAL ||
 			server->mux_client.primary_view_id == 0) return false;
 	struct wlr_output *target = wlr_output_layout_output_at(
@@ -7121,8 +4857,7 @@ static bool focus_native_mux_output(struct engineos_shell_server *server,
 
 static void focus_native_mux_output_at_cursor(
 		struct engineos_shell_server *server) {
-	if (server->mux_mode != ENGINEOS_MUX_NATIVE ||
-			!server->mux_client.ready ||
+	if (!server->mux_client.ready ||
 			server->input_mode != ENGINEOS_INPUT_TERMINAL) return;
 	struct wlr_output *target = wlr_output_layout_output_at(
 		server->output_layout, server->cursor->x, server->cursor->y);
@@ -7173,7 +4908,6 @@ static void cursor_handle_button(struct wl_listener *listener, void *data) {
 		bool routed = button != NULL &&
 			route_native_terminal_mouse(server, "release", button, false);
 		if (!routed && button != NULL && server->mux_pointer_cell_valid &&
-				server->mux_mode == ENGINEOS_MUX_NATIVE &&
 				server->mux_client.ready &&
 				server->input_mode == ENGINEOS_INPUT_TERMINAL &&
 				server->mux_pointer_view_id != 0) {
@@ -7513,7 +5247,7 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	int width = 0;
 	int height = 0;
 	wlr_output_effective_resolution(output, &width, &height);
-	if (server->mux_mode == ENGINEOS_MUX_NATIVE && server->mux_client.ready) {
+	if (server->mux_client.ready) {
 		int cell_width = 0;
 		int cell_height = 0;
 		char error[256] = {0};
@@ -7991,68 +5725,11 @@ static void xdg_surface_map(struct wl_listener *listener, void *data) {
 	(void)data;
 	struct engineos_shell_view *view = wl_container_of(listener, view, map);
 	view->mapped = true;
-	if (view->server->mux_mode == ENGINEOS_MUX_NATIVE) {
-		view->role = ENGINEOS_SURFACE_MUX_PRESENTATION;
-		if (native_presentation_map(view))
-			write_shell_state(view->server, "native-presentation-mapped");
-		else
-			write_shell_state(view->server, "native-presentation-rejected");
-		return;
-	}
-	view->role = classify_view_role(view);
-	if (!is_launchpad_role(view->role)) {
-		bind_view_to_pending_pane(view);
-	}
-	apply_view_layout(view);
-	if (is_launchpad_role(view->role)) {
-		mark_launch_role_mapped(view->server, view->role);
-		bool pending = view->server->pending_slot == view->role;
-		struct engineos_layout_request request;
-		bool has_layout_request =
-			(view->role == ENGINEOS_SURFACE_CUBE ||
-				view->role == ENGINEOS_SURFACE_ENGINE) &&
-			read_layout_request(view->server, view->role, &request);
-		bool pane_layout_launch = has_layout_request && request.pane;
-		bool exclusive_layout_launch =
-			has_layout_request && (request.output || request.fullscreen);
-		if (pending) {
-			view->server->pending_slot = ENGINEOS_SURFACE_UNKNOWN;
-		}
-		if (pending || exclusive_layout_launch ||
-				view->role == view->server->active_slot) {
-			set_active_slot(view->server, view->role,
-				pending ? "pending-slot-mapped" :
-				(exclusive_layout_launch ? "layout-request-mapped" :
-					"slot-mapped"));
-		} else {
-			wlr_log(WLR_INFO,
-				"launchpad slot mapped inactive role=%s active_slot=%s layout=%s",
-				surface_role_name(view->role),
-				surface_role_name(view->server->active_slot),
-				pane_layout_launch ? "tmux-pane" : "slot");
-			apply_launchpad_visibility(view->server,
-				pane_layout_launch ? "pane-layout-mapped-inactive" :
-					"slot-mapped-inactive");
-		}
-	} else {
-		wlr_log(WLR_INFO, "launchpad unknown view excluded id=%u title=%s app_id=%s",
-			view->view_id, view_title(view), view_app_id(view));
-		struct engineos_view_geometry geometry = {0};
-		compute_view_geometry(view, &geometry);
-		struct engineos_pane_binding *binding = pane_binding_for_view(view);
-		wlr_scene_node_set_enabled(&view->scene_tree->node,
-			view_geometry_render_enabled(view->server, view, &geometry));
-		if (binding != NULL && binding->focused) {
-			activate_view(view, "pane-launch-mapped");
-		} else if (binding == NULL &&
-				view->server->input_mode != ENGINEOS_INPUT_SHELL) {
-			activate_view(view, "floating-view-mapped");
-		}
-	}
-	wlr_log(WLR_INFO, "view mapped role=%s id=%u title=%s app_id=%s mapped_total=%u",
-		surface_role_name(view->role), view->view_id, view_title(view),
-		view_app_id(view), view->server->view_count);
-	write_shell_state(view->server, "view-mapped");
+	view->role = ENGINEOS_SURFACE_MUX_PRESENTATION;
+	if (native_presentation_map(view))
+		write_shell_state(view->server, "native-presentation-mapped");
+	else
+		write_shell_state(view->server, "native-presentation-rejected");
 }
 
 static void xdg_surface_unmap(struct wl_listener *listener, void *data) {
@@ -8061,8 +5738,7 @@ static void xdg_surface_unmap(struct wl_listener *listener, void *data) {
 	bool native_game = view_is_native_mux_game(view);
 	view->mapped = false;
 	wlr_scene_node_set_enabled(&view->scene_tree->node, false);
-	if (view->server->mux_mode == ENGINEOS_MUX_NATIVE)
-		native_presentation_unmap(view);
+	native_presentation_unmap(view);
 	if (view->server->moving_view == view) {
 		view->server->moving_view = NULL;
 	}
@@ -8071,26 +5747,10 @@ static void xdg_surface_unmap(struct wl_listener *listener, void *data) {
 		set_view_activated(view, false);
 		wlr_seat_keyboard_notify_clear_focus(view->server->seat);
 	}
-	remove_pane_binding_for_view(view, "view-unmapped");
-	if ((view->role == ENGINEOS_SURFACE_ENGINE || native_game) &&
-			view->server->game_capture) {
+	if (native_game && view->server->game_capture) {
 		view->server->game_capture = false;
 		sync_pointer_constraint(view->server, "engine-unmapped");
 		sync_cursor_image(view->server, "engine-unmapped");
-	}
-	if (is_launchpad_role(view->role) &&
-			view->server->active_slot == view->role) {
-		if (find_mapped_role(view->server, ENGINEOS_SURFACE_CUBE) != NULL) {
-			set_active_slot(view->server, ENGINEOS_SURFACE_CUBE, "slot-unmapped");
-		} else if (find_mapped_role(view->server, ENGINEOS_SURFACE_TERMINAL) != NULL) {
-			set_active_slot(view->server, ENGINEOS_SURFACE_TERMINAL, "slot-unmapped");
-		} else if (find_mapped_role(view->server, ENGINEOS_SURFACE_TERMINAL_SECONDARY) != NULL) {
-			set_active_slot(view->server, ENGINEOS_SURFACE_TERMINAL_SECONDARY, "slot-unmapped");
-		} else if (find_mapped_role(view->server, ENGINEOS_SURFACE_ENGINE) != NULL) {
-			set_active_slot(view->server, ENGINEOS_SURFACE_ENGINE, "slot-unmapped");
-		}
-	} else if (is_launchpad_role(view->role)) {
-		apply_launchpad_visibility(view->server, "slot-unmapped");
 	}
 	schedule_outputs(view->server);
 	wlr_log(WLR_INFO, "view unmapped role=%s id=%u title=%s app_id=%s",
@@ -8104,26 +5764,13 @@ static void xdg_surface_commit(struct wl_listener *listener, void *data) {
 	struct engineos_shell_view *view = wl_container_of(listener, view, commit);
 	if (view->xdg_surface->initial_commit &&
 			view->xdg_surface->toplevel != NULL) {
-		view->role = view->server->mux_mode == ENGINEOS_MUX_NATIVE ?
-			ENGINEOS_SURFACE_MUX_PRESENTATION : classify_view_role(view);
+		view->role = ENGINEOS_SURFACE_MUX_PRESENTATION;
 		set_toplevel_wm_capabilities(view->xdg_surface->toplevel);
-		if (is_launchpad_role(view->role)) {
-			struct engineos_view_geometry geometry = {0};
-			compute_view_geometry(view, &geometry);
-			if (view->role == ENGINEOS_SURFACE_CUBE ||
-					view->role == ENGINEOS_SURFACE_ENGINE) {
-				set_toplevel_geometry(view->xdg_surface->toplevel, &geometry);
-			} else if (xdg_toplevel_can_configure(view->xdg_surface->toplevel)) {
-				wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel,
-					geometry.width, geometry.height);
-			}
-		} else {
-			struct engineos_view_geometry geometry = {0};
-			compute_view_geometry(view, &geometry);
-			if (xdg_toplevel_can_configure(view->xdg_surface->toplevel)) {
-				wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel,
-					geometry.width, geometry.height);
-			}
+		struct engineos_view_geometry geometry = {0};
+		compute_view_geometry(view, &geometry);
+		if (xdg_toplevel_can_configure(view->xdg_surface->toplevel)) {
+			wlr_xdg_toplevel_set_size(view->xdg_surface->toplevel,
+				geometry.width, geometry.height);
 		}
 		wlr_log(WLR_INFO, "view initial configure id=%u role=%s title=%s app_id=%s",
 			view->view_id, surface_role_name(view->role), view_title(view),
@@ -8153,9 +5800,6 @@ static void xdg_toplevel_request_fullscreen(struct wl_listener *listener,
 		view->fullscreen ? "true" : "false",
 		view_title(view), view_app_id(view));
 	apply_view_layout(view);
-	if (is_launchpad_role(view->role)) {
-		apply_launchpad_visibility(view->server, "fullscreen-request");
-	}
 	write_shell_state(view->server, "fullscreen-request");
 }
 
@@ -8276,7 +5920,7 @@ static void xdg_surface_destroy(struct wl_listener *listener, void *data) {
 	struct engineos_shell_view *view = wl_container_of(listener, view, destroy);
 	struct engineos_shell_server *server = view->server;
 	bool native_game = view_is_native_mux_game(view);
-	if (server->mux_mode == ENGINEOS_MUX_NATIVE && view->mux_bound)
+	if (view->mux_bound)
 		native_presentation_unmap(view);
 
 	wlr_log(WLR_INFO, "view destroyed role=%s id=%u title=%s app_id=%s",
@@ -8289,14 +5933,10 @@ static void xdg_surface_destroy(struct wl_listener *listener, void *data) {
 	if (server->moving_view == view) {
 		server->moving_view = NULL;
 	}
-	if ((view->role == ENGINEOS_SURFACE_ENGINE || native_game) &&
-			server->game_capture) {
+	if (native_game && server->game_capture) {
 		server->game_capture = false;
 		sync_pointer_constraint(server, "engine-destroyed");
 		sync_cursor_image(server, "engine-destroyed");
-	}
-	if (server->pending_slot == view->role) {
-		server->pending_slot = ENGINEOS_SURFACE_UNKNOWN;
 	}
 	if (view->xdg_surface != NULL) {
 		view->xdg_surface->data = NULL;
@@ -8317,17 +5957,6 @@ static void xdg_surface_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&view->request_show_window_menu.link);
 	if (server->view_count > 0) {
 		server->view_count--;
-	}
-	if (is_launchpad_role(view->role) && server->active_slot == view->role) {
-		if (find_mapped_role(server, ENGINEOS_SURFACE_CUBE) != NULL) {
-			set_active_slot(server, ENGINEOS_SURFACE_CUBE, "slot-destroyed");
-		} else if (find_mapped_role(server, ENGINEOS_SURFACE_TERMINAL) != NULL) {
-			set_active_slot(server, ENGINEOS_SURFACE_TERMINAL, "slot-destroyed");
-		} else if (find_mapped_role(server, ENGINEOS_SURFACE_TERMINAL_SECONDARY) != NULL) {
-			set_active_slot(server, ENGINEOS_SURFACE_TERMINAL_SECONDARY, "slot-destroyed");
-		} else if (find_mapped_role(server, ENGINEOS_SURFACE_ENGINE) != NULL) {
-			set_active_slot(server, ENGINEOS_SURFACE_ENGINE, "slot-destroyed");
-		}
 	}
 	write_shell_state(server, "view-destroyed");
 	free(view);
@@ -8394,8 +6023,6 @@ static void xdg_popup_map(struct wl_listener *listener, void *data) {
 	struct engineos_shell_popup *popup =
 		wl_container_of(listener, popup, map);
 	popup->mapped = true;
-	if (popup->server->mux_mode != ENGINEOS_MUX_NATIVE)
-		return;
 	char error[256] = {0};
 	bool grid_changed = false;
 	if (popup->owner == NULL || !popup->owner->mux_bound ||
@@ -8445,8 +6072,7 @@ static void xdg_popup_unmap(struct wl_listener *listener, void *data) {
 	struct engineos_shell_popup *popup =
 		wl_container_of(listener, popup, unmap);
 	popup->mapped = false;
-	if (popup->server->mux_mode == ENGINEOS_MUX_NATIVE)
-		xdg_popup_unmap_mux(popup);
+	xdg_popup_unmap_mux(popup);
 	write_shell_state(popup->server, "native-popup-unmapped");
 }
 
@@ -8454,8 +6080,7 @@ static void xdg_popup_destroy(struct wl_listener *listener, void *data) {
 	(void)data;
 	struct engineos_shell_popup *popup =
 		wl_container_of(listener, popup, destroy);
-	if (popup->server->mux_mode == ENGINEOS_MUX_NATIVE)
-		xdg_popup_unmap_mux(popup);
+	xdg_popup_unmap_mux(popup);
 
 	if (popup->xdg_popup != NULL && popup->xdg_popup->base != NULL) {
 		popup->xdg_popup->base->data = NULL;
@@ -8740,10 +6365,6 @@ static void destroy_server(struct engineos_shell_server *server) {
 	hide_image_preview(server, "shell-destroy");
 	hide_wallpaper(server, "shell-destroy");
 	close_preview_ipc(server, false, true);
-	if (server->pane_binding_timer != NULL) {
-		wl_event_source_remove(server->pane_binding_timer);
-		server->pane_binding_timer = NULL;
-	}
 	if (server->mux_event_source != NULL) {
 		wl_event_source_remove(server->mux_event_source);
 		server->mux_event_source = NULL;
@@ -8751,32 +6372,6 @@ static void destroy_server(struct engineos_shell_server *server) {
 	if (server->mux_snapshot_retry_timer != NULL) {
 		wl_event_source_remove(server->mux_snapshot_retry_timer);
 		server->mux_snapshot_retry_timer = NULL;
-	}
-	if (!wl_list_empty(&server->pane_bindings)) {
-		struct engineos_pane_binding *binding;
-		struct engineos_pane_binding *tmp;
-		wl_list_for_each_safe(binding, tmp, &server->pane_bindings, link) {
-			free_pane_binding(binding);
-		}
-	}
-	if (!wl_list_empty(&server->terminal_clients)) {
-		struct engineos_terminal_client *client;
-		struct engineos_terminal_client *tmp;
-		wl_list_for_each_safe(client, tmp, &server->terminal_clients, link) {
-			free_terminal_client(client);
-		}
-	}
-	if (!wl_list_empty(&server->launches)) {
-		struct engineos_shell_launch *launch;
-		struct engineos_shell_launch *tmp;
-		wl_list_for_each_safe(launch, tmp, &server->launches, link) {
-			wlr_log(WLR_INFO,
-				"launch action abandoned label=%s role=%s pid=%ld mapped=%s command=%s",
-				launch->label, surface_role_name(launch->role),
-				(long)launch->pid, launch->mapped ? "true" : "false",
-				launch->command);
-			free_launch(launch);
-		}
 	}
 	clear_active_pointer_constraint(server, "shell-destroy");
 	if (server->display != NULL) {
@@ -8866,13 +6461,6 @@ int main(int argc, char **argv) {
 	struct engineos_shell_server server = {0};
 	server.preview_socket_fd = -1;
 	server.mux_client.fd = -1;
-	if (!parse_mux_mode(getenv("ENGINEOS_MUX_MODE"), &server.mux_mode)) {
-		fprintf(stderr, "engineos-shell: ENGINEOS_MUX_MODE must be legacy or native\n");
-		return 2;
-	}
-	wl_list_init(&server.launches);
-	wl_list_init(&server.pane_bindings);
-	wl_list_init(&server.terminal_clients);
 	wl_list_init(&server.mux_pane_scenes);
 	wl_list_init(&server.previews);
 	wl_list_init(&server.outputs);
@@ -8886,20 +6474,13 @@ int main(int argc, char **argv) {
 		{"tty", no_argument, NULL, 'T'},
 		{"smoke", no_argument, NULL, 's'},
 		{"smoke-ms", required_argument, NULL, 'm'},
-		{"startup", required_argument, NULL, 'c'},
-		{"terminal", required_argument, NULL, 1000},
-		{"engine", required_argument, NULL, 1001},
-		{"bootstrap", required_argument, NULL, 1002},
-		{"cube", required_argument, NULL, 1003},
-		{"terminal-secondary", required_argument, NULL, 1004},
-		{"mux", required_argument, NULL, 1005},
 		{"version", no_argument, NULL, 'v'},
 		{"help", no_argument, NULL, 'h'},
 		{0},
 	};
 
 	int opt;
-	while ((opt = getopt_long(argc, argv, "HNTsm:c:vh", options, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "HNTsm:vh", options, NULL)) != -1) {
 		switch (opt) {
 		case 'H':
 			mode = ENGINEOS_SHELL_HEADLESS;
@@ -8917,34 +6498,6 @@ int main(int argc, char **argv) {
 			server.smoke_ms = atoi(optarg);
 			if (server.smoke_ms <= 0) {
 				fprintf(stderr, "engineos-shell: --smoke-ms must be positive\n");
-				return 2;
-			}
-			break;
-		case 'c':
-			server.startup_cmd = optarg;
-			break;
-		case 1000:
-			server.terminal_cmd = optarg;
-			break;
-		case 1004:
-			server.terminal_secondary_cmd = optarg;
-			break;
-		case 1001:
-			server.engine_cmd = optarg;
-			break;
-		case 1002:
-			if (!parse_bootstrap_mode(optarg, &server.bootstrap_mode)) {
-				fprintf(stderr,
-					"engineos-shell: --bootstrap must be none, terminal, engine, launchpad, or all\n");
-				return 2;
-			}
-			break;
-		case 1003:
-			server.cube_cmd = optarg;
-			break;
-		case 1005:
-			if (!parse_mux_mode(optarg, &server.mux_mode)) {
-				fprintf(stderr, "engineos-shell: --mux must be legacy or native\n");
 				return 2;
 			}
 			break;
@@ -8967,8 +6520,6 @@ int main(int argc, char **argv) {
 
 	server.mode_name = mode_to_string(mode);
 	server.input_mode = ENGINEOS_INPUT_TERMINAL;
-	server.active_slot = ENGINEOS_SURFACE_TERMINAL;
-	server.pending_slot = ENGINEOS_SURFACE_UNKNOWN;
 	apply_mode_environment(mode);
 	const char *wlr_debug = getenv("ENGINEOS_WLR_DEBUG");
 	wlr_log_init(wlr_debug != NULL && strcmp(wlr_debug, "1") == 0 ?
@@ -8978,61 +6529,48 @@ int main(int argc, char **argv) {
 		destroy_server(&server);
 		return 1;
 	}
-	if (server.mux_mode == ENGINEOS_MUX_NATIVE) {
-		const char *configured_socket = getenv("ENGINEOS_MUX_SOCKET");
-		char *default_socket = NULL;
-		if (configured_socket == NULL || configured_socket[0] == '\0') {
-			default_socket = join_state_path(server.state_dir, "mux.sock");
-			configured_socket = default_socket;
-		}
-		char mux_error[256] = {0};
-		bool connected = configured_socket != NULL &&
-			engineos_mux_client_connect(&server.mux_client, configured_socket,
-				mux_error, sizeof(mux_error));
-		free(default_socket);
-		if (!connected) {
-			fprintf(stderr, "engineos-shell: native mux handshake failed: %s\n",
-				mux_error[0] != '\0' ? mux_error : "socket path allocation failed");
-			engineos_mux_client_destroy(&server.mux_client);
-			free(server.state_file);
-			free(server.state_dir);
-			return 1;
-		}
+	const char *configured_socket = getenv("ENGINEOS_MUX_SOCKET");
+	char *default_socket = NULL;
+	if (configured_socket == NULL || configured_socket[0] == '\0') {
+		default_socket = join_state_path(server.state_dir, "mux.sock");
+		configured_socket = default_socket;
+	}
+	char mux_error[256] = {0};
+	bool connected = configured_socket != NULL &&
+		engineos_mux_client_connect(&server.mux_client, configured_socket,
+			mux_error, sizeof(mux_error));
+	free(default_socket);
+	if (!connected) {
+		fprintf(stderr, "engineos-shell: mux handshake failed: %s\n",
+			mux_error[0] != '\0' ? mux_error : "socket path allocation failed");
+		engineos_mux_client_destroy(&server.mux_client);
+		free(server.state_file);
+		free(server.state_dir);
+		return 1;
 	}
 
 	if (!setup_server(&server)) {
 		destroy_server(&server);
 		return 1;
 	}
-	if (server.mux_mode == ENGINEOS_MUX_NATIVE &&
-			!setup_native_terminal_scene(&server)) {
+	if (!setup_native_terminal_scene(&server)) {
 		destroy_server(&server);
 		return 1;
 	}
 
 	struct wl_event_loop *event_loop = wl_display_get_event_loop(server.display);
-	if (server.mux_mode == ENGINEOS_MUX_NATIVE) {
-		server.mux_event_source = wl_event_loop_add_fd(event_loop,
-			server.mux_client.fd,
-			WL_EVENT_READABLE | WL_EVENT_HANGUP | WL_EVENT_ERROR,
-			native_mux_event, &server);
-		if (server.mux_event_source == NULL) {
-			wlr_log(WLR_ERROR, "failed to register native mux event source");
-			destroy_server(&server);
-			return 1;
-		}
+	server.mux_event_source = wl_event_loop_add_fd(event_loop,
+		server.mux_client.fd,
+		WL_EVENT_READABLE | WL_EVENT_HANGUP | WL_EVENT_ERROR,
+		native_mux_event, &server);
+	if (server.mux_event_source == NULL) {
+		wlr_log(WLR_ERROR, "failed to register mux event source");
+		destroy_server(&server);
+		return 1;
 	}
 	wl_event_loop_add_signal(event_loop, SIGINT, terminate_from_signal, &server);
 	wl_event_loop_add_signal(event_loop, SIGTERM, terminate_from_signal, &server);
 	wl_event_loop_add_signal(event_loop, SIGHUP, relayout_from_signal, &server);
-	wl_event_loop_add_signal(event_loop, SIGCHLD, reap_child_processes, &server);
-	server.pane_binding_timer =
-		wl_event_loop_add_timer(event_loop, pane_binding_timer_tick, &server);
-	if (server.pane_binding_timer == NULL) {
-		wlr_log(WLR_ERROR, "failed to add pane binding timer");
-		destroy_server(&server);
-		return 1;
-	}
 	server.mux_snapshot_retry_timer =
 		wl_event_loop_add_timer(event_loop, native_mux_snapshot_retry, &server);
 	if (server.mux_snapshot_retry_timer == NULL) {
@@ -9070,7 +6608,7 @@ int main(int argc, char **argv) {
 		destroy_server(&server);
 		return 1;
 	}
-	if (server.mux_mode == ENGINEOS_MUX_NATIVE && !server.mux_client.ready) {
+	if (!server.mux_client.ready) {
 		wlr_log(WLR_ERROR, "native mux graphical view registration failed");
 		destroy_server(&server);
 		return 1;
@@ -9081,17 +6619,9 @@ int main(int argc, char **argv) {
 	wlr_log(WLR_INFO, "input mode=%s capture=%s reason=startup",
 		input_mode_name(server.input_mode),
 		server.game_capture ? "game" : "none");
-	wlr_log(WLR_INFO, "launch commands terminal=%s terminal_secondary=%s cube=%s engine=%s startup=%s",
-		server.terminal_cmd != NULL ? server.terminal_cmd : "(none)",
-		server.terminal_secondary_cmd != NULL ? server.terminal_secondary_cmd : "(none)",
-		server.cube_cmd != NULL ? server.cube_cmd : "(none)",
-		server.engine_cmd != NULL ? server.engine_cmd : "(none)",
-		server.startup_cmd != NULL ? server.startup_cmd : "(none)");
-	wlr_log(WLR_INFO, "bootstrap mode=%s",
-		bootstrap_mode_name(server.bootstrap_mode));
 	wlr_log(WLR_INFO,
 		"mux mode=%s connected=%s revision=%llu socket=%s pane=%%%u generation=%u grid_revision=%llu grid=%ux%u nonblank=%u",
-		mux_mode_name(server.mux_mode),
+		"native",
 		server.mux_client.ready ? "true" : "false",
 		(unsigned long long)server.mux_client.revision,
 		server.mux_client.socket_path != NULL ? server.mux_client.socket_path : "(none)",
@@ -9103,35 +6633,9 @@ int main(int argc, char **argv) {
 		"client launch environment wayland_display=%s xdg_session_type=wayland display=unset sdl=wayland gdk=wayland qt=wayland",
 		socket);
 	write_shell_state(&server, "startup");
-	spawn_command(&server, "startup", ENGINEOS_SURFACE_UNKNOWN,
-		server.startup_cmd);
-	if (server.bootstrap_mode == ENGINEOS_BOOTSTRAP_TERMINAL) {
-		set_active_slot(&server, ENGINEOS_SURFACE_TERMINAL, "bootstrap-terminal");
-		spawn_command(&server, "bootstrap-terminal",
-			ENGINEOS_SURFACE_TERMINAL, server.terminal_cmd);
-		spawn_command(&server, "bootstrap-terminal-secondary",
-			ENGINEOS_SURFACE_TERMINAL_SECONDARY, server.terminal_secondary_cmd);
-	}
-	if (server.bootstrap_mode == ENGINEOS_BOOTSTRAP_ENGINE) {
-		set_active_slot(&server, ENGINEOS_SURFACE_ENGINE, "bootstrap-engine");
-		spawn_command(&server, "bootstrap-engine",
-			ENGINEOS_SURFACE_ENGINE, server.engine_cmd);
-	}
-	if (server.bootstrap_mode == ENGINEOS_BOOTSTRAP_LAUNCHPAD) {
-		set_active_slot(&server, ENGINEOS_SURFACE_CUBE, "bootstrap-launchpad");
-		spawn_command(&server, "bootstrap-terminal",
-			ENGINEOS_SURFACE_TERMINAL, server.terminal_cmd);
-		spawn_command(&server, "bootstrap-terminal-secondary",
-			ENGINEOS_SURFACE_TERMINAL_SECONDARY, server.terminal_secondary_cmd);
-		spawn_command(&server, "bootstrap-cube",
-			ENGINEOS_SURFACE_CUBE, server.cube_cmd);
-		spawn_command(&server, "bootstrap-engine",
-			ENGINEOS_SURFACE_ENGINE, server.engine_cmd);
-	}
 
 	wl_display_run(server.display);
-	bool runtime_failed = server.mux_mode == ENGINEOS_MUX_NATIVE &&
-		!server.mux_client.ready;
+	bool runtime_failed = !server.mux_client.ready;
 	wlr_log(WLR_INFO, "engineos-shell shutdown outputs=%u keyboards=%u pointers=%u views=%u",
 		server.output_count, server.keyboard_count, server.pointer_count, server.view_count);
 	write_shell_state(&server, "shutdown");

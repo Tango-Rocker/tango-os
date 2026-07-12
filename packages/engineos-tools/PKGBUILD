@@ -1,12 +1,12 @@
 pkgname=engineos-tools
 pkgver=0.1.0
-pkgrel=52
+pkgrel=55
 pkgdesc="EngineOS command, proof, agent, and observability tools"
 arch=('any')
 url="https://example.invalid/engineos"
 license=('custom:EngineOS-TBD')
 install=engineos-tools.install
-depends=('bash' 'python' 'git' 'ripgrep' 'jq' 'engineos-config')
+depends=('bash' 'python' 'git' 'ripgrep' 'jq' 'engineos-config' 'engineos-mux')
 provides=(
   'engineos-core' 'engineos-cli' 'engineos-package-tools' 'engineos-preflight-tools'
   'engineos-build-tools' 'engineos-deploy-tools' 'engineos-install-tools'

@@ -1,3 +1,3 @@
 interface:
   display_name: "EngineOS Admin Shell"
-  short_description: "Manage EngineOS shell, Wayland session, app slots, and input state"
+  short_description: "Manage EngineOS shell, mux pane scenes, and input state"

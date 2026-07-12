@@ -259,6 +259,16 @@ lint_pkgbuild() {
 			fail "$pkg: in-server frontend sources must be packaged"
 			return
 		fi
+		if ! grep -q "provides=('tmux=3.6_b')" "$pkg_dir/PKGBUILD" ||
+				! grep -q "replaces=('tmux')" "$pkg_dir/PKGBUILD" ||
+				! grep -q 'usr/bin/tmux' "$pkg_dir/PKGBUILD"; then
+			fail "$pkg: fork must replace the system tmux package and binary"
+			return
+		fi
+		if grep -q 'usr/bin/engine-mux' "$pkg_dir/PKGBUILD"; then
+			fail "$pkg: side-by-side engine-mux binary must not be packaged"
+			return
+		fi
 		if [[ -e "$pkg_dir/files/usr/lib/systemd/user/engine-muxd.service" ]]; then
 			fail "$pkg: standalone engine-muxd service must not be packaged"
 			return

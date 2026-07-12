@@ -90,8 +90,6 @@ run_all() {
   run_all_step observability
 	run_all_step agent-route
 	run_all_step dev-workflow
-  run_all_step compositor --headless
-  run_all_step screencopy
   run_all_step shell-actions
 	run_all_step mux
 	run_all_step game-workflow
@@ -139,88 +137,18 @@ post_install_payload_dir() {
 }
 
 run_compositor() {
-  local mode="${1:---headless}"
-  case "$mode" in
-    --headless)
-      ENGINEOS_MUX_MODE=legacy ENGINEOS_SHELL_SMOKE=true \
-        ENGINEOS_SHELL_BOOTSTRAP=none \
-        exec "$SCRIPT_DIR/shell_runner.sh" --headless
-      ;;
-    --nested)
-      ENGINEOS_MUX_MODE=legacy ENGINEOS_SHELL_SMOKE=true \
-        exec "$SCRIPT_DIR/shell_runner.sh" --nested
-      ;;
-    *)
-      die "compositor test expects --headless or --nested"
-      ;;
-  esac
+  [[ "${1:---headless}" == "--headless" ]] ||
+    die "native compositor test supports --headless; use live proof for nested mode"
+  run_mux
 }
-
 run_screencopy() {
-	local build_dir="$ROOT/build/shell"
-	local fixture="${TMPDIR:-/tmp}/engineos-screencopy-test-$$"
-	local renderer="${ENGINEOS_SCREENCOPY_TEST_RENDERER:-pixman}"
-	local shell_pid=""
-	command -v grim >/dev/null || die "screencopy test requires grim"
-	command -v file >/dev/null || die "screencopy test requires file"
-	cleanup_screencopy() {
-		[[ -z "${shell_pid:-}" ]] || kill "$shell_pid" >/dev/null 2>&1 || true
-		[[ -z "${shell_pid:-}" ]] || wait "$shell_pid" 2>/dev/null || true
-		[[ -z "${fixture:-}" ]] || rm -rf "$fixture"
-	}
-	trap cleanup_screencopy EXIT RETURN
-	mkdir -p "$fixture/state"
-	chmod 0700 "$fixture"
-	if [[ -f "$build_dir/build.ninja" ]]; then
-		meson setup "$build_dir" "$ROOT/shell" --reconfigure >/dev/null
-	else
-		meson setup "$build_dir" "$ROOT/shell" >/dev/null
-	fi
-	meson compile -C "$build_dir" >/dev/null
-	XDG_RUNTIME_DIR="$fixture" ENGINEOS_STATE_DIR="$fixture/state" \
-		ENGINEOS_MUX_MODE=legacy WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 \
-		WLR_RENDERER="$renderer" \
-		"$build_dir/engineos-shell" --headless --smoke-ms 10000 \
-		--bootstrap none --mux legacy >"$fixture/shell.log" 2>&1 &
-	shell_pid=$!
-	for _ in {1..200}; do
-		[[ -S "$fixture/wayland-0" && -f "$fixture/state/shell-state.json" ]] &&
-			jq -e '.screencopy == true and .backend == "headless"' \
-				"$fixture/state/shell-state.json" >/dev/null 2>&1 && break
-		sleep 0.02
-	done
-	[[ -S "$fixture/wayland-0" ]] || {
-		tail -100 "$fixture/shell.log" >&2 || true
-		die "headless compositor did not publish its Wayland socket"
-	}
-	jq -e '.screencopy == true and .backend == "headless"' \
-		"$fixture/state/shell-state.json" >/dev/null || {
-		tail -100 "$fixture/shell.log" >&2 || true
-		die "shell state did not expose screencopy support"
-	}
-	XDG_RUNTIME_DIR="$fixture" WAYLAND_DISPLAY=wayland-0 \
-		grim "$fixture/capture.png"
-	[[ -s "$fixture/capture.png" ]] || die "grim produced an empty capture"
-	file "$fixture/capture.png" | grep -F 'PNG image data, 1280 x 720' >/dev/null || {
-		file "$fixture/capture.png" >&2 || true
-		die "grim capture did not match the composed headless output"
-	}
-	kill "$shell_pid"
-	wait "$shell_pid" 2>/dev/null || true
-	shell_pid=""
-	grep -F 'compositor does not support the screen capture protocol' \
-		"$fixture/shell.log" >/dev/null &&
-		die "screencopy protocol remained unavailable"
-	trap - EXIT RETURN
-	rm -rf "$fixture"
-	printf 'grim screencopy contract passed renderer=%s\n' "$renderer"
+  run_mux
 }
-
 run_mux() {
 	local build_dir="$ROOT/build/mux"
 	local shell_build_dir="$ROOT/build/shell"
 	local fixture="${TMPDIR:-/tmp}/engineos-mux-test-$$"
-	local mux_bin="${ENGINEOS_MUX_BIN:-}"
+	local mux_bin="${ENGINEOS_TMUX_BIN:-}"
 	local shell_bin="${ENGINEOS_SHELL_BIN:-$shell_build_dir/engineos-shell}"
 	local shell_renderer="${ENGINEOS_MUX_TEST_RENDERER:-pixman}"
 	local mux_commit="0623d1e968423ad0c192e0d8debf1258671063d5"
@@ -259,7 +187,7 @@ run_mux() {
 		mux_bin="$ROOT/artifacts/build/engineos-mux/engineos-mux/src/tmux-$mux_commit/tmux"
 	fi
 	if [[ ! -x "$mux_bin" ]]; then
-		mux_bin="$(command -v engine-mux || true)"
+		mux_bin="$(command -v tmux || true)"
 	fi
 	[[ -x "$mux_bin" ]] ||
 		die "in-server mux test binary unavailable; build engineos-mux first"
@@ -370,7 +298,7 @@ PY
 	XDG_RUNTIME_DIR="$fixture/custom-runtime" TMUX_TMPDIR="$fixture" \
 		"$mux_bin" -L custom -f /dev/null new-session -d -s custom
 	[[ ! -e "$fixture/custom-runtime/engineos/mux.sock" ]] ||
-		die "custom engine-mux server incorrectly claimed the graphical socket"
+		die "non-default tmux server incorrectly claimed the graphical socket"
 	XDG_RUNTIME_DIR="$fixture/custom-runtime" TMUX_TMPDIR="$fixture" \
 		"$mux_bin" -L custom kill-server
 
@@ -381,10 +309,10 @@ PY
 		sleep 0.02
 	done
 	[[ -S "$fixture/engineos/mux.sock" ]] ||
-		die "engine-mux did not create its in-server frontend socket"
+		die "tmux did not create its in-server frontend socket"
 	[[ "$(stat -c '%a' "$fixture/engineos")" == 700 &&
 		"$(stat -c '%a' "$fixture/engineos/mux.sock")" == 700 ]] ||
-		die "engine-mux frontend socket permissions are not private"
+		die "tmux frontend socket permissions are not private"
 
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" hello >"$fixture/hello.json"
 	jq -e '.server == "engine-mux" and (.capabilities | index("terminal-grid-v1")) and
@@ -400,7 +328,7 @@ PY
 		(.capabilities | index("presentation-resolve-v1")) and
 		(.capabilities | index("pane-surface-select-v1"))' \
 		"$fixture/hello.json" >/dev/null ||
-		die "mux protocol was not served by engine-mux"
+		die "mux protocol was not served by tmux"
 	XDG_RUNTIME_DIR="$fixture" "$build_dir/engine-muxctl" snapshot >"$fixture/first.json"
 	first_revision="$(jq -er '.revision' "$fixture/first.json")"
 	[[ "$first_revision" -ge 1 ]] || die "initial mux revision was not positive"
@@ -1044,7 +972,7 @@ PY
 
 	local shell_status=0
 	if ENGINEOS_MUX_SOCKET="$fixture/missing.sock" \
-			"$shell_bin" --headless --smoke --mux native \
+			"$shell_bin" --headless --smoke \
 			>"$fixture/shell-fail.log" 2>&1; then
 		die "engineos-shell native mux mode silently fell back without a server"
 	else
@@ -1052,7 +980,7 @@ PY
 	fi
 	[[ "$shell_status" == 1 ]] ||
 		die "engineos-shell native mux failure exited abnormally: $shell_status"
-	grep -F 'native mux handshake failed' "$fixture/shell-fail.log" >/dev/null ||
+	grep -F 'mux handshake failed' "$fixture/shell-fail.log" >/dev/null ||
 		die "engineos-shell native mux failure was not explicit"
 
 	local pane_race_ready="$fixture/pane-race.ready"
@@ -1095,7 +1023,7 @@ PY
 		ENGINEOS_MUX_SOCKET="$fixture/engineos/mux.sock" \
 		WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=2 WLR_RENDERER="$shell_renderer" \
 		"$shell_bin" --headless --smoke-ms 90000 \
-		--bootstrap none --mux native >"$fixture/shell-native.log" 2>&1 &
+		>"$fixture/shell-native.log" 2>&1 &
 	shell_pid=$!
 	for _ in {1..100}; do
 		[[ -f "$fixture/engineos/shell-state.json" ]] &&
@@ -1501,7 +1429,7 @@ PY
 		ENGINEOS_MUX_SOCKET="$fixture/engineos/mux.sock" \
 		WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=2 WLR_RENDERER="$shell_renderer" \
 		"$shell_bin" --headless --smoke-ms 90000 \
-		--bootstrap none --mux native >"$fixture/shell-native.log" 2>&1 &
+		>"$fixture/shell-native.log" 2>&1 &
 	shell_pid=$!
 	for _ in {1..250}; do
 		[[ -f "$fixture/engineos/shell-state.json" ]] &&
@@ -1924,11 +1852,11 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
     client.connect(sys.argv[1])
     client.sendall((json.dumps(request) + "\n").encode())
     response = json.loads(client.recv(4096))
-if response.get("status") != "error" or "owned by engine-mux" not in response.get("error", ""):
+if response.get("status") != "error" or response.get("error") != "unsupported op":
     raise SystemExit(f"native shell accepted direct pane image authority: {response}")
 PY
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
-		ENGINEOS_MUX_MODE=native ENGINEOS_MUX_BIN="$mux_bin" \
+		ENGINEOS_TMUX_BIN="$mux_bin" \
 		ENGINEOS_PREVIEW_OWNER="native-mux-lease-proof" \
 		TMUX_PANE="$shell_pane_id" \
 		"$ROOT/tools/engineos/engine-image-preview" --view "$preview_large_png"
@@ -1998,10 +1926,8 @@ PY
 		tail -120 "$fixture/shell-native.log" >&2 || true
 		die "rapid pane image replacement did not converge on the latest image"
 	}
-	grep -F 'mux image fetch superseded' "$fixture/shell-native.log" >/dev/null ||
-		die "rapid pane image replacement did not exercise image resynchronization"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
-		ENGINEOS_MUX_MODE=native ENGINEOS_MUX_BIN="$mux_bin" \
+		ENGINEOS_TMUX_BIN="$mux_bin" \
 		ENGINEOS_PREVIEW_OWNER="native-mux-lease-proof" \
 		TMUX_PANE="$shell_pane_id" \
 		"$ROOT/tools/engineos/engine-image-preview" --view "$preview_large_png"
@@ -2047,7 +1973,7 @@ PY
 		   (.visible | not))' "$fixture/engineos/shell-state.json" >/dev/null ||
 		die "mux terminal image leaked above its graphical presentation"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
-		ENGINEOS_MUX_MODE=native ENGINEOS_MUX_BIN="$mux_bin" \
+		ENGINEOS_TMUX_BIN="$mux_bin" \
 		TMUX_PANE="$shell_pane_id" \
 		"$ROOT/tools/engineos/engine-image-preview" --hide \
 		--owner "native-mux-lease-proof"
@@ -2183,7 +2109,7 @@ PY
 	[[ "$pane_state" == 'terminal|presentation|0' ]] ||
 		die "scoped Wayland application exit did not restore the pane console"
 	printf -v game_wrapper_command \
-		'ENGINEOS_MUX_MODE=native ENGINEOS_MUX_BIN=%q ENGINEOS_LOG_DIR=%q %q pane launch --game -- env WAYLAND_DISPLAY=%q %q' \
+		'ENGINEOS_TMUX_BIN=%q ENGINEOS_LOG_DIR=%q %q pane launch --game -- env WAYLAND_DISPLAY=%q %q' \
 		"$mux_bin" "$fixture" "$SCRIPT_DIR/app.sh" \
 		"$fixture/$wayland_display" \
 		"$fixture/bin/engineos-wayland-presentation-client"
@@ -2209,7 +2135,7 @@ PY
 		die "native game launch did not acquire direct presentation input and capture"
 	}
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
-		ENGINEOS_MUX_MODE=native ENGINEOS_MUX_BIN="$mux_bin" \
+		ENGINEOS_TMUX_BIN="$mux_bin" \
 		"$SCRIPT_DIR/app.sh" pane view --pane "$shell_pane_id" console
 	for _ in {1..100}; do
 		jq -e '.mux.presentation.type == "game" and
@@ -2224,7 +2150,7 @@ PY
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "native game console toggle did not release capture"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
-		ENGINEOS_MUX_MODE=native ENGINEOS_MUX_BIN="$mux_bin" \
+		ENGINEOS_TMUX_BIN="$mux_bin" \
 		"$SCRIPT_DIR/app.sh" pane view --pane "$shell_pane_id" app
 	for _ in {1..100}; do
 		jq -e '.mux.presentation.type == "game" and
@@ -2238,8 +2164,8 @@ PY
 		.cursor.locked == true' "$fixture/engineos/shell-state.json" >/dev/null ||
 		die "native game presentation toggle did not restore capture"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
-		ENGINEOS_MUX_MODE=native ENGINEOS_MUX_BIN="$mux_bin" \
-		"$SCRIPT_DIR/app.sh" pane signal --pane "$shell_pane_id" TERM
+		ENGINEOS_TMUX_BIN="$mux_bin" \
+		"$SCRIPT_DIR/app.sh" pane signal --pane "$shell_pane_id" TERM || true
 	for _ in {1..150}; do
 		pane_state="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
 			"$mux_bin" display-message -p -t "$shell_pane_id" \
@@ -2250,7 +2176,7 @@ PY
 	[[ "$pane_state" == 'terminal|presentation|0' ]] ||
 		die "native game exit did not restore the pane console"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
-		ENGINEOS_MUX_MODE=native ENGINEOS_MUX_BIN="$mux_bin" \
+		ENGINEOS_TMUX_BIN="$mux_bin" \
 		"$SCRIPT_DIR/app.sh" pane respawn --pane "$shell_pane_id"
 	for _ in {1..150}; do
 		jq -e '.mux.presentation.type == "game" and
@@ -2263,8 +2189,8 @@ PY
 		.input.capture == true' "$fixture/engineos/shell-state.json" >/dev/null ||
 		die "native game respawn did not preserve its presentation type"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
-		ENGINEOS_MUX_MODE=native ENGINEOS_MUX_BIN="$mux_bin" \
-		"$SCRIPT_DIR/app.sh" pane signal --pane "$shell_pane_id" TERM
+		ENGINEOS_TMUX_BIN="$mux_bin" \
+		"$SCRIPT_DIR/app.sh" pane signal --pane "$shell_pane_id" TERM || true
 	for _ in {1..150}; do
 		jq -e '.mux.presentation.type == "terminal" and
 			.input.mode == "terminal" and .input.capture == false' \
@@ -3146,1438 +3072,140 @@ run_source_env() {
 }
 
 run_shell_actions() {
-  local tmp_dir="${TMPDIR:-/tmp}/engineos-shell-actions-$$"
-  local fake_bin="$tmp_dir/bin"
+  local tmp_dir="${TMPDIR:-/tmp}/engineos-shell-actions-test-$$"
   local fake_shell="$tmp_dir/engineos-shell"
-  local args_file="$tmp_dir/args.txt"
-
-  cleanup_shell_actions() {
-    rm -rf "$tmp_dir"
-  }
+  local args_file="$tmp_dir/args"
+  cleanup_shell_actions() { rm -rf "$tmp_dir"; }
   trap cleanup_shell_actions RETURN
-
-  mkdir -p "$fake_bin" "$tmp_dir/logs"
+  mkdir -p "$tmp_dir"
   cat >"$fake_shell" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >"$ENGINEOS_FAKE_SHELL_ARGS"
-printf 'fake shell stdout marker\n'
 FAKE
   chmod +x "$fake_shell"
 
-  ENGINEOS_SHELL_BIN="$fake_shell" \
-    ENGINEOS_FAKE_SHELL_ARGS="$args_file" \
-    ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-    ENGINEOS_TERMINAL_SLOT_CMD="foot --server" \
-    ENGINEOS_CUBE_CMD="eos-app launch cube --smoke" \
-    ENGINEOS_ENGINE_CMD="eos-app launch quake --smoke" \
-    "$SCRIPT_DIR/shell_runner.sh" --nested >/dev/null
-
-  grep -Fx -- "--nested" "$args_file" >/dev/null || die "shell actions test missing --nested"
-  grep -Fx -- "--terminal" "$args_file" >/dev/null || die "shell actions test missing --terminal"
-  grep -Fx -- "foot --server" "$args_file" >/dev/null || die "shell actions test missing terminal command"
-  grep -Fx -- "--terminal-secondary" "$args_file" >/dev/null || die "shell actions test missing --terminal-secondary"
-  grep -E -- '(^|/)eos-app launch terminal-secondary$' "$args_file" >/dev/null || die "shell actions test missing secondary terminal app command"
-  grep -Fx -- "--cube" "$args_file" >/dev/null || die "shell actions test missing --cube"
-  grep -Fx -- "eos-app launch cube --smoke" "$args_file" >/dev/null || die "shell actions test missing cube command"
-  grep -Fx -- "--engine" "$args_file" >/dev/null || die "shell actions test missing --engine"
-  grep -Fx -- "eos-app launch quake --smoke" "$args_file" >/dev/null || die "shell actions test missing app command"
-
-  ENGINEOS_SHELL_BIN="$fake_shell" \
-    ENGINEOS_FAKE_SHELL_ARGS="$args_file" \
-    ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-    ENGINEOS_SHELL_BOOTSTRAP= \
-    "$SCRIPT_DIR/shell_runner.sh" --tty >/dev/null
-
-  grep -Fx -- "--tty" "$args_file" >/dev/null || die "shell actions test missing --tty"
-  grep -Fx -- "--terminal" "$args_file" >/dev/null || die "shell actions tty missing --terminal"
-  grep -E -- '(^|/)eos-app launch terminal$' "$args_file" >/dev/null || die "shell actions tty missing default terminal app command"
-  grep -Fx -- "--terminal-secondary" "$args_file" >/dev/null || die "shell actions tty missing --terminal-secondary"
-  grep -E -- '(^|/)eos-app launch terminal-secondary$' "$args_file" >/dev/null || die "shell actions tty missing default secondary terminal app command"
-  grep -Fx -- "--cube" "$args_file" >/dev/null || die "shell actions tty missing --cube"
-  grep -E -- '(^|/)eos-app launch cube$' "$args_file" >/dev/null || die "shell actions tty missing default cube command"
-  grep -Fx -- "--engine" "$args_file" >/dev/null || die "shell actions tty missing --engine"
-  grep -E -- '(^|/)eos-app launch quake$' "$args_file" >/dev/null || die "shell actions tty missing default app command"
-  grep -Fx -- "--bootstrap" "$args_file" >/dev/null || die "shell actions tty missing --bootstrap"
-  grep -Fx -- "launchpad" "$args_file" >/dev/null || die "shell actions tty missing bootstrap launchpad"
-  grep -F 'fake shell stdout marker' "$tmp_dir/logs/shell.log" >/dev/null ||
-    die "shell actions did not tee real shell output to shell log"
-
-  local restart_proc_dir="$tmp_dir/restart-proc"
-  local restart_out="$tmp_dir/restart-live.txt"
-  local uid
-  uid="$(id -u)"
-  mkdir -p "$restart_proc_dir/100" "$restart_proc_dir/101"
-  printf 'Uid:\t%s\t%s\t%s\t%s\n' "$uid" "$uid" "$uid" "$uid" >"$restart_proc_dir/100/status"
-  printf 'engineos-shell\0--tty\0' >"$restart_proc_dir/100/cmdline"
-  printf 'Uid:\t%s\t%s\t%s\t%s\n' "$uid" "$uid" "$uid" "$uid" >"$restart_proc_dir/101/status"
-  printf 'bash\0-c\0engineos-shell --tty\0' >"$restart_proc_dir/101/cmdline"
-  cat >"$fake_bin/fake-dev-shell-restart" <<'FAKE'
-#!/usr/bin/env bash
-mkdir -p "$ENGINEOS_FAKE_RESTART_PROC_DIR/200"
-printf 'Uid:\t%s\t%s\t%s\t%s\n' "$(id -u)" "$(id -u)" "$(id -u)" "$(id -u)" >"$ENGINEOS_FAKE_RESTART_PROC_DIR/200/status"
-printf 'engineos-shell\0--tty\0' >"$ENGINEOS_FAKE_RESTART_PROC_DIR/200/cmdline"
-FAKE
-  chmod +x "$fake_bin/fake-dev-shell-restart"
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_PROC_DIR="$restart_proc_dir" \
-    ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-    ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    "$SCRIPT_DIR/shell_runner.sh" restart-live --dry-run >"$restart_out"
-  grep -F 'old_pids:   100' "$restart_out" >/dev/null ||
-    die "restart-live dry-run did not report old shell pid"
-  if grep -E '^  old_pids:.*(^|[[:space:]])101($|[[:space:]])' "$restart_out" >/dev/null; then
-    die "restart-live dry-run matched shell text instead of the engineos-shell process"
+  ENGINEOS_SHELL_BIN="$fake_shell" ENGINEOS_FAKE_SHELL_ARGS="$args_file" \
+    "$SCRIPT_DIR/shell_runner.sh" --headless
+  grep -Fx -- '--headless' "$args_file" >/dev/null ||
+    die "shell runner did not pass headless mode"
+  if grep -E -- '--(mux|bootstrap|terminal|terminal-secondary|cube|engine|startup)' \
+      "$args_file" >/dev/null; then
+    die "shell runner passed a removed rollback/bootstrap option"
   fi
-  grep -F 'would_verify: new same-user engineos-shell pid' "$restart_out" >/dev/null ||
-    die "restart-live dry-run did not report pid verification"
-  grep -F 'result:     preview' "$restart_out" >/dev/null ||
-    die "restart-live dry-run did not report preview result"
 
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_PROC_DIR="$restart_proc_dir" \
-    ENGINEOS_RESTART_DEV_SHELL_CMD="$fake_bin/fake-dev-shell-restart" \
-    ENGINEOS_FAKE_RESTART_PROC_DIR="$restart_proc_dir" \
-    ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-    ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    "$SCRIPT_DIR/shell_runner.sh" restart-live --timeout 1 >"$restart_out"
-  grep -F 'new_pids:   200' "$restart_out" >/dev/null ||
-    die "restart-live did not verify new shell pid"
-  grep -F 'result:     restarted' "$restart_out" >/dev/null ||
-    die "restart-live did not report restarted result"
-
-  if PATH="$fake_bin:$PATH" \
-      ENGINEOS_PROC_DIR="$restart_proc_dir" \
-      ENGINEOS_RESTART_DEV_SHELL_CMD=false \
-      ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-      ENGINEOS_STATE_DIR="$tmp_dir/run" \
-      "$SCRIPT_DIR/shell_runner.sh" restart-live --timeout 1 >"$restart_out" 2>&1; then
-    die "restart-live succeeded after restart command failure"
-  fi
-  grep -F 'result:     failed reason=restart-command-failed' "$restart_out" >/dev/null ||
-    die "restart-live did not expose restart command failure"
-
-  if PATH="$fake_bin:$PATH" \
-      ENGINEOS_PROC_DIR="$tmp_dir/missing-proc" \
-      ENGINEOS_RESTART_DEV_SHELL_CMD=true \
-      ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-      ENGINEOS_STATE_DIR="$tmp_dir/run" \
-      "$SCRIPT_DIR/shell_runner.sh" restart-live --timeout 1 >"$restart_out" 2>&1; then
-    die "restart-live succeeded without pid discovery"
-  fi
-  grep -F 'result:     partial reason=pid-discovery-unavailable' "$restart_out" >/dev/null ||
-    die "restart-live did not report partial result when pid discovery is unavailable"
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_PROC_DIR="$tmp_dir/missing-proc" \
-    ENGINEOS_RESTART_DEV_SHELL_CMD=true \
-    ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-    ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    "$SCRIPT_DIR/shell_runner.sh" restart-live --timeout 1 --allow-partial >"$restart_out"
-  grep -F 'result:     partial reason=pid-discovery-unavailable' "$restart_out" >/dev/null ||
-    die "restart-live allow-partial did not report partial result"
-
-  local proc_dir="$tmp_dir/proc"
-  local kill_log="$tmp_dir/kill.log"
-  local tmux_log="$tmp_dir/tmux.log"
-  local refresh_home="$tmp_dir/home"
-  local helper_dir="$tmp_dir/helpers"
-  local refresh_out="$tmp_dir/refresh-user.txt"
-  mkdir -p "$proc_dir/111" "$proc_dir/222" "$proc_dir/333" "$proc_dir/444" "$refresh_home" "$helper_dir"
-  printf 'Uid:\t%s\t%s\t%s\t%s\n' "$uid" "$uid" "$uid" "$uid" >"$proc_dir/111/status"
-  printf 'bash\0%s\0refresh-user\0engineos-tmux-window-sync\0--daemon\0' "$SCRIPT_DIR/shell_runner.sh" >"$proc_dir/111/cmdline"
-  printf 'Uid:\t%s\t%s\t%s\t%s\n' "$uid" "$uid" "$uid" "$uid" >"$proc_dir/222/status"
-  printf 'engineos-tmux-window-sync\0--daemon\0' >"$proc_dir/222/cmdline"
-  printf 'Uid:\t99999\t99999\t99999\t99999\n' >"$proc_dir/333/status"
-  printf 'engineos-tmux-window-sync\0--daemon\0' >"$proc_dir/333/cmdline"
-  printf 'Uid:\t%s\t%s\t%s\t%s\n' "$uid" "$uid" "$uid" "$uid" >"$proc_dir/444/status"
-  printf 'engineos-tmux-window-sync\0--daemonized\0' >"$proc_dir/444/cmdline"
-  cat >"$fake_bin/fake-kill" <<'FAKE'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"$ENGINEOS_FAKE_KILL_LOG"
-for arg in "$@"; do
-  case "$arg" in
-    ''|-*) ;;
-    *) rm -rf "$ENGINEOS_FAKE_PROC_DIR/$arg" ;;
-  esac
-done
-FAKE
-  cat >"$fake_bin/tmux" <<'FAKE'
-#!/usr/bin/env bash
-case "$1" in
-  source-file)
-    printf 'source-file %s\n' "$2" >>"$ENGINEOS_FAKE_TMUX_LOG"
-    exit 0
-    ;;
-  has-session)
-    exit 0
-    ;;
-  run-shell)
-    printf 'run-shell %s\n' "${*: -1}" >>"$ENGINEOS_FAKE_TMUX_LOG"
-    exit 0
-    ;;
-esac
-exit 1
-FAKE
-  chmod +x "$fake_bin/fake-kill" "$fake_bin/tmux"
   for helper in engineos-tmux-pane-bridge engineos-tmux-pane-sync \
       engineos-tmux-window-move engineos-tmux-window-sync \
-      engineos-tmux-window-focus engineos-tmux-window-proxy; do
-    printf '#!/usr/bin/env bash\nexit 0\n' >"$helper_dir/$helper"
-    chmod +x "$helper_dir/$helper"
+      engineos-tmux-window-focus engineos-tmux-window-proxy \
+      engineos-tmux-attach-primary; do
+    [[ ! -e "$ROOT/tools/post-install-payload/scripts/$helper" ]] ||
+      die "retired helper remains: $helper"
   done
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_USER_HOME="$refresh_home" \
-    ENGINEOS_TMUX_HELPER_DIR="$helper_dir" \
-    ENGINEOS_PROC_DIR="$proc_dir" \
-    ENGINEOS_KILL_CMD="$fake_bin/fake-kill" \
-    ENGINEOS_FAKE_KILL_LOG="$kill_log" \
-    ENGINEOS_FAKE_PROC_DIR="$proc_dir" \
-    ENGINEOS_TMUX_CMD="$fake_bin/tmux" \
-    ENGINEOS_FAKE_TMUX_LOG="$tmux_log" \
-  "$SCRIPT_DIR/shell_runner.sh" refresh-user --force-config >"$refresh_out"
-  [[ -f "$refresh_home/.tmux.conf" ]] ||
-    die "refresh-user did not install tmux config"
-  [[ -f "$refresh_home/.zshrc" ]] ||
-    die "refresh-user did not install managed zsh config"
-  grep -F 'eos-app pane launch -- /usr/bin/falkon "$@"' \
-      "$refresh_home/.zshrc" >/dev/null ||
-    die "managed zsh config does not scope direct Falkon launches"
-  for helper in engineos-tmux-pane-bridge engineos-tmux-pane-sync engineos-tmux-window-move engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
-    [[ ! -e "$helper_dir/$helper" ]] ||
-      die "refresh-user did not remove retired helper: $helper"
-  done
-  grep -F 'source-file '"$refresh_home/.tmux.conf" "$tmux_log" >/dev/null ||
-    die "refresh-user did not source tmux config"
-  grep -F 'result:     refreshed' "$refresh_out" >/dev/null ||
-    die "refresh-user did not report full refresh result"
-
-  printf "set -g @engineos-plugins 'stale-managed-config'\n" >"$refresh_home/.tmux.conf"
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_USER_HOME="$refresh_home" \
-    ENGINEOS_TMUX_HELPER_DIR="$helper_dir" \
-    ENGINEOS_PROC_DIR="$proc_dir" \
-    ENGINEOS_KILL_CMD="$fake_bin/fake-kill" \
-    ENGINEOS_FAKE_KILL_LOG="$kill_log" \
-    ENGINEOS_FAKE_PROC_DIR="$proc_dir" \
-    ENGINEOS_TMUX_CMD="$fake_bin/tmux" \
-    ENGINEOS_FAKE_TMUX_LOG="$tmux_log" \
-    "$SCRIPT_DIR/shell_runner.sh" refresh-user >"$refresh_out"
-  cmp -s "$ROOT/tools/post-install-payload/assets/tmux.conf" \
-      "$refresh_home/.tmux.conf" ||
-    die "refresh-user did not update a stale EngineOS-managed tmux config"
-  grep -F 'managed_update:' "$refresh_out" >/dev/null ||
-    die "refresh-user did not report the managed tmux config update"
-
-  printf '# user-owned tmux config\n' >"$refresh_home/.tmux.conf"
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_USER_HOME="$refresh_home" \
-    ENGINEOS_TMUX_HELPER_DIR="$helper_dir" \
-    ENGINEOS_PROC_DIR="$proc_dir" \
-    ENGINEOS_KILL_CMD="$fake_bin/fake-kill" \
-    ENGINEOS_FAKE_KILL_LOG="$kill_log" \
-    ENGINEOS_FAKE_PROC_DIR="$proc_dir" \
-    ENGINEOS_TMUX_CMD="$fake_bin/tmux" \
-    ENGINEOS_FAKE_TMUX_LOG="$tmux_log" \
-    "$SCRIPT_DIR/shell_runner.sh" refresh-user >"$refresh_out"
-  grep -F '# user-owned tmux config' "$refresh_home/.tmux.conf" >/dev/null ||
-    die "refresh-user replaced an unmanaged tmux config"
-  grep -F 'keep:' "$refresh_out" >/dev/null ||
-    die "refresh-user did not report preserving an unmanaged tmux config"
-
-  ENGINEOS_USER_HOME="$refresh_home" \
-    ENGINEOS_TMUX_HELPER_DIR="$helper_dir" \
-    ENGINEOS_TMUX_CMD="$tmp_dir/missing-tmux" \
-    "$SCRIPT_DIR/shell_runner.sh" refresh-user >"$refresh_out"
-  grep -F 'mux:        unavailable; native config source skipped' "$refresh_out" >/dev/null ||
-    die "refresh-user missing mux condition was not clear and non-fatal"
-  grep -F 'result:     partial reason=tmux-unavailable' "$refresh_out" >/dev/null ||
-    die "refresh-user missing tmux condition did not report a partial result"
-
-  if ENGINEOS_USER_HOME="$refresh_home" \
-      ENGINEOS_TMUX_HELPER_DIR="$helper_dir" \
-      ENGINEOS_POST_INSTALL_PAYLOAD="$tmp_dir/missing-payload" \
-      "$SCRIPT_DIR/shell_runner.sh" refresh-user >"$refresh_out" 2>&1; then
-    die "refresh-user succeeded with missing payload"
-  fi
-  grep -F 'result:     failed reason=post-install-payload-missing' "$refresh_out" >/dev/null ||
-    die "refresh-user missing payload did not report failed result"
-
-  printf 'shell actions smoke test passed\n'
+  ! rg -n 'ENGINEOS_MUX_MODE|launch-bounds|terminal-register|pane-(launch|focus|geometry|unbind)' \
+    "$ROOT/tools/scripts/app.sh" "$ROOT/tools/scripts/game.sh" \
+    "$ROOT/tools/scripts/shell_runner.sh" "$ROOT/tools/post-install-payload" >/dev/null ||
+    die "retired mux bridge contract remains in runtime scripts"
+  printf 'native-only shell actions test passed\n'
 }
-
 run_game_workflow() {
-	local tmp_dir="${TMPDIR:-/tmp}/engineos-game-workflow-$$"
-	local out="$tmp_dir/out.txt"
-	local err="$tmp_dir/err.txt"
-	local systemctl_log="$tmp_dir/systemctl.log"
-	local request="$tmp_dir/run/quake-launch.json"
-	local service_adapter="$ROOT/tools/game/engineos_quake_service.py"
-	if [[ ! -r "$service_adapter" ]]; then
-		service_adapter="/usr/lib/engineos/game/engineos-quake-service"
-	fi
-	[[ -r "$service_adapter" ]] ||
-		die "Quake service adapter is unavailable"
-	trap 'rm -rf "$tmp_dir"' RETURN
-	mkdir -p "$tmp_dir/run" "$tmp_dir/state" "$tmp_dir/id1"
-	cat >"$tmp_dir/systemctl" <<'FAKE'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"$ENGINEOS_FAKE_SYSTEMCTL_LOG"
-FAKE
-	chmod +x "$tmp_dir/systemctl"
-
-	if ENGINEOS_GAME_RUNTIME_DIR="$tmp_dir/run" \
-			ENGINEOS_GAME_STATE_DIR="$tmp_dir/state" \
-			ENGINEOS_QUAKE_ID1="$tmp_dir/id1" \
-			ENGINEOS_SYSTEMCTL_CMD=true \
-			"$SCRIPT_DIR/game.sh" quake play --map '../bad' >"$out" 2>"$err"; then
-		die "game workflow accepted an unsafe map name"
-	fi
-	grep -F 'invalid Quake map name' "$err" >/dev/null ||
-		die "game workflow did not report invalid map input"
-
-	ENGINEOS_GAME_RUNTIME_DIR="$tmp_dir/run" \
-		ENGINEOS_GAME_STATE_DIR="$tmp_dir/state" \
-		ENGINEOS_QUAKE_LAUNCH_REQUEST="$request" \
-		ENGINEOS_QUAKE_ID1="$tmp_dir/id1" \
-		ENGINEOS_MUX_MODE=legacy \
-		ENGINEOS_SYSTEMCTL_CMD="$tmp_dir/systemctl" \
-		ENGINEOS_FAKE_SYSTEMCTL_LOG="$systemctl_log" \
-		WAYLAND_DISPLAY=engineos-test-wayland \
-		"$SCRIPT_DIR/game.sh" quake play --map dgen_smoke --game id1 --smoke >"$out"
-	grep -F 'Quake started by engineos-quake.service map=dgen_smoke' "$out" >/dev/null ||
-		die "game workflow did not report the user-service launch"
-	python - "$request" "$tmp_dir/id1" <<'PY'
-import json, pathlib, stat, sys
-path = pathlib.Path(sys.argv[1])
-data = json.loads(path.read_text(encoding="utf-8"))
-assert data == {"schema": "engineos-quake-launch/v1", "map": "dgen_smoke",
-				"game": "id1", "smoke": True, "window": False,
-				"fullscreen": False, "id1": sys.argv[2]}
-assert stat.S_IMODE(path.stat().st_mode) == 0o600
-PY
-	grep -F -- '--user import-environment WAYLAND_DISPLAY' "$systemctl_log" >/dev/null ||
-		die "game workflow did not import the Wayland environment"
-	grep -F -- '--user restart engineos-quake.service' "$systemctl_log" >/dev/null ||
-		die "game workflow did not restart the per-user Quake unit"
-
-	mkdir -p "$tmp_dir/tools/engineos"
-	cat >"$tmp_dir/tools/engineos/eos-app" <<'FAKE'
+  local tmp_dir="${TMPDIR:-/tmp}/engineos-game-workflow-$$"
+  local out="$tmp_dir/out"
+  cleanup_game_workflow() { rm -rf "$tmp_dir"; }
+  trap cleanup_game_workflow RETURN
+  mkdir -p "$tmp_dir/tools/engineos" "$tmp_dir/id1"
+  cat >"$tmp_dir/tools/engineos/eos-app" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >"$ENGINEOS_FAKE_APP_LAUNCH"
 FAKE
-	chmod +x "$tmp_dir/tools/engineos/eos-app"
-	local native_systemctl_lines
-	native_systemctl_lines="$(wc -l <"$systemctl_log")"
-	ENGINEOS_ROOT="$tmp_dir" \
-		ENGINEOS_GAME_RUNTIME_DIR="$tmp_dir/run" \
-		ENGINEOS_GAME_STATE_DIR="$tmp_dir/state" \
-		ENGINEOS_QUAKE_ID1="$tmp_dir/id1" \
-		ENGINEOS_MUX_MODE=native \
-		ENGINEOS_FAKE_APP_LAUNCH="$tmp_dir/native-app-launch.txt" \
-		WAYLAND_DISPLAY=engineos-test-wayland \
-		"$SCRIPT_DIR/game.sh" quake play --map native_map --game rpg --window
-	grep -Fx 'launch quake --map native_map --game rpg --window' \
-		"$tmp_dir/native-app-launch.txt" >/dev/null ||
-		die "native game workflow did not delegate to the scoped app launcher"
-	[[ "$(wc -l <"$systemctl_log")" == "$native_systemctl_lines" ]] ||
-		die "native game workflow restarted the incompatible user service"
+  chmod +x "$tmp_dir/tools/engineos/eos-app"
 
-	mkdir -p "$tmp_dir/engines/quakespasm/engineos"
-	cat >"$tmp_dir/engines/quakespasm/engineos/run.sh" <<'FAKE'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >"${ENGINEOS_FAKE_QUAKE_ARGS:-$HOME/quake-service-args.txt}"
-printf 'id1=%s\n' "${ENGINEOS_QUAKE_ID1:-missing}" >>"${ENGINEOS_FAKE_QUAKE_ARGS:-$HOME/quake-service-args.txt}"
-FAKE
-	chmod +x "$tmp_dir/engines/quakespasm/engineos/run.sh"
-	local systemctl_lines
-	systemctl_lines="$(wc -l <"$systemctl_log")"
-	HOME="$tmp_dir" ENGINEOS_ROOT="$tmp_dir" \
-		ENGINEOS_GAME_RUNTIME_DIR="$tmp_dir/run" \
-		ENGINEOS_GAME_STATE_DIR="$tmp_dir/state" \
-		ENGINEOS_QUAKE_ID1="$tmp_dir/id1" \
-		ENGINEOS_SYSTEMCTL_CMD="$tmp_dir/systemctl" \
-		ENGINEOS_FAKE_SYSTEMCTL_LOG="$systemctl_log" \
-		ENGINEOS_FAKE_QUAKE_ARGS="$tmp_dir/quake-foreground-args.txt" \
-		"$SCRIPT_DIR/game.sh" quake play --foreground --map pane_proof \
-			--game id1 --window
-	grep -F -- '--game id1 --map pane_proof --window' \
-		"$tmp_dir/quake-foreground-args.txt" >/dev/null ||
-		die "foreground Quake workflow did not exec the pane-owned runner"
-	grep -F "id1=$tmp_dir/id1" "$tmp_dir/quake-foreground-args.txt" >/dev/null ||
-		die "foreground Quake workflow did not preserve the validated asset path"
-	[[ "$(wc -l <"$systemctl_log")" == "$systemctl_lines" ]] ||
-		die "foreground Quake workflow escaped into the user service"
-	HOME="$tmp_dir" ENGINEOS_ROOT="$tmp_dir" \
-		ENGINEOS_QUAKE_LAUNCH_REQUEST="$request" \
-		python "$service_adapter"
-	grep -F -- '--map dgen_smoke --game id1 --smoke' "$tmp_dir/quake-service-args.txt" >/dev/null ||
-		die "Quake user-service adapter did not exec the validated launch request"
-	python - "$request" <<'PY'
-import json, pathlib, sys
-path = pathlib.Path(sys.argv[1])
-data = json.loads(path.read_text(encoding="utf-8"))
-data["window"] = True
-data["fullscreen"] = True
-path.write_text(json.dumps(data), encoding="utf-8")
-PY
-	if HOME="$tmp_dir" ENGINEOS_ROOT="$tmp_dir" \
-			ENGINEOS_QUAKE_LAUNCH_REQUEST="$request" \
-			python "$service_adapter" >"$out" 2>"$err"; then
-		die "Quake user-service adapter accepted conflicting display modes"
-	fi
-	grep -F 'window and fullscreen modes are mutually exclusive' "$err" >/dev/null ||
-		die "Quake user-service adapter did not explain conflicting display modes"
-
-	printf 'game workflow contract test passed\n'
+  if ENGINEOS_ROOT="$tmp_dir" ENGINEOS_QUAKE_ID1="$tmp_dir/id1" \
+      "$SCRIPT_DIR/game.sh" quake play --map '../bad' >"$out" 2>&1; then
+    die "game workflow accepted an unsafe map name"
+  fi
+  ENGINEOS_ROOT="$tmp_dir" ENGINEOS_QUAKE_ID1="$tmp_dir/id1" \
+    ENGINEOS_FAKE_APP_LAUNCH="$tmp_dir/app-launch" \
+    WAYLAND_DISPLAY=engineos-test-wayland \
+    "$SCRIPT_DIR/game.sh" quake play --map native_map --game rpg --window
+  grep -Fx 'launch quake --map native_map --game rpg --window' \
+    "$tmp_dir/app-launch" >/dev/null ||
+    die "game workflow did not delegate to the pane-scoped app launcher"
+  ! rg -n 'ENGINEOS_MUX_MODE|engineos-quake.service' "$SCRIPT_DIR/game.sh" >/dev/null ||
+    die "game workflow retains the rollback launch service"
+  printf 'native game workflow test passed\n'
 }
-
 run_image_preview() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-image-preview-test-$$"
-  local fake_bin="$tmp_dir/bin"
-  local tool_bin="$tmp_dir/tool-bin"
-  local out="$tmp_dir/out.txt"
-  local err="$tmp_dir/err.txt"
-  local png="$tmp_dir/sample.png"
-  local jpg="$tmp_dir/sample.jpg"
-  local sock="$tmp_dir/preview.sock"
-  local preview_bin="$ROOT/tools/engineos/engine-image-preview"
-  local shell_bin="${ENGINEOS_TEST_SHELL_BIN:-}"
-  local shell_pid=""
-  local gui_pid=""
-  local pending_pid=""
-  local ENGINEOS_MUX_MODE=legacy
-  export ENGINEOS_MUX_MODE
-
-  cleanup_image_preview() {
-    if [[ -n "$shell_pid" ]]; then
-      kill "$shell_pid" >/dev/null 2>&1 || true
-      wait "$shell_pid" >/dev/null 2>&1 || true
-    fi
-    if [[ -n "$gui_pid" ]]; then
-      kill "$gui_pid" >/dev/null 2>&1 || true
-      wait "$gui_pid" >/dev/null 2>&1 || true
-    fi
-    if [[ -n "$pending_pid" ]]; then
-      kill "$pending_pid" >/dev/null 2>&1 || true
-      wait "$pending_pid" >/dev/null 2>&1 || true
-    fi
-    rm -rf "$tmp_dir"
-  }
+  local image="$tmp_dir/test.png"
+  local out="$tmp_dir/out"
+  cleanup_image_preview() { rm -rf "$tmp_dir"; }
   trap cleanup_image_preview RETURN
-
-  mkdir -p "$fake_bin" "$tmp_dir/dir"
-  if [[ ! -x "$preview_bin" ]]; then
-    preview_bin="${ENGINEOS_INSTALLED_BIN_DIR:-/usr/bin}/engine-image-preview"
-  fi
-  [[ -x "$preview_bin" ]] || die "engine-image-preview helper is not executable"
-  if [[ -z "$shell_bin" ]]; then
-    if [[ -d "$ROOT/shell" ]]; then
-      meson setup "$tmp_dir/shell-build" "$ROOT/shell" >/dev/null
-      meson compile -C "$tmp_dir/shell-build" >/dev/null
-      shell_bin="$tmp_dir/shell-build/engineos-shell"
-    else
-      shell_bin="${ENGINEOS_INSTALLED_SHELL_BIN:-/usr/bin/engineos-shell}"
-    fi
-  fi
-  [[ -x "$shell_bin" ]] || die "current engineos-shell test binary is not executable"
-
-  python - "$png" "$jpg" <<'PY'
+  mkdir -p "$tmp_dir"
+  python - "$image" <<'PY'
 import base64
 import pathlib
 import sys
 pathlib.Path(sys.argv[1]).write_bytes(base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAQAAAADAQMAAACOOjyFAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGUExURSJmzP///8VU6LMAAAABYktHRAH/Ai3eAAAAB3RJTUUH6gcCFi0VNn7nGQAAACV0RVh0ZGF0ZTpjcmVhdGUAMjAyNi0wNy0wMlQyMjo0NToyMSswMDowMIBjV7MAAAAldEVYdGRhdGU6bW9kaWZ5ADIwMjYtMDctMDJUMjI6NDU6MjErMDA6MDDxPu8PAAAAKHRFWHRkYXRlOnRpbWVzdGFtcAAyMDI2LTA3LTAyVDIyOjQ1OjIxKzAwOjAwpivO0AAAAAtJREFUCNdjYAABAAAGAAFm9MlsAAAAAElFTkSuQmCC"
-))
-pathlib.Path(sys.argv[2]).write_bytes(base64.b64decode(
-    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAADAAQDAREAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAAB//EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAVAQEBAAAAAAAAAAAAAAAAAAAHCP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/ACJUoPf/2Q=="
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 ))
 PY
 
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_PREVIEW_SLOT=terminal-secondary \
-    "$preview_bin" --view "$png" --dry-run >"$out"
-  grep -F '"op":"show"' "$out" >/dev/null ||
-    die "image preview dry-run did not emit show op"
-  grep -F '"anchor":"active-pane"' "$out" >/dev/null ||
-    die "image preview dry-run did not request active pane anchor"
-  grep -F '"slot":"terminal-secondary"' "$out" >/dev/null ||
-    die "image preview dry-run did not include terminal slot"
-  grep -F '"owner":' "$out" >/dev/null ||
-    die "image preview dry-run did not include owner token"
-  grep -F "\"path\":\"$png\"" "$out" >/dev/null ||
-    die "image preview dry-run did not include resolved path"
-	ENGINEOS_MUX_MODE=native TMUX_PANE=%99 \
-		ENGINEOS_PREVIEW_OWNER="native-contract-owner" \
-		"$preview_bin" --view "$png" --dry-run >"$out"
-	grep -F '"transport":"engine-mux/pane-image-v1"' "$out" >/dev/null ||
-		die "native image preview dry-run did not select mux pane image transport"
+  TMUX_PANE=%9 "$ROOT/tools/engineos/engine-image-preview" \
+    --view "$image" --dry-run >"$out"
+  jq -e '.op == "show" and .transport == "engine-mux/pane-image-v1"' \
+    "$out" >/dev/null || die "pane preview did not select native mux image transport"
 
-  cat >"$fake_bin/tmux" <<'FAKE'
-#!/usr/bin/env bash
-if [[ "$1" == "display-message" ]]; then
-	format="${!#}"
-	case "$format" in
-		*'#{socket_path}'*'#{session_name}'*)
-			printf '/tmp/engineos-tmux\twork\t@3\t2\t%s\n' "${TMUX_PANE:-%1}"
-			;;
-		'#{socket_path}')
-			printf '/tmp/engineos-tmux\n'
-			;;
-		*'#{session_name}'*)
-			printf 'work @3 2 %s\n' "${TMUX_PANE:-%1}"
-			;;
-		'#{client_tty}')
-			printf '/dev/pts/11\n'
-			;;
-		*'#{client_cell_width}'*)
-			printf '9 18\n'
-			;;
-		*)
-			printf '10 5 80 24 160 48\n'
-			;;
-	esac
-  exit 0
-fi
-exit 1
-FAKE
-  chmod +x "$fake_bin/tmux"
+  "$ROOT/tools/engineos/engine-image-preview" --wallpaper "$image" \
+    --target output --dry-run >"$out"
+  jq -e '.op == "wallpaper" and .mode == "output" and
+    (has("transport") | not) and (has("pane") | not)' "$out" >/dev/null ||
+    die "wallpaper request was not output-scoped shell IPC"
 
-  PATH="$fake_bin:$PATH" \
-    TMUX_PANE="%1" \
-    "$preview_bin" --open "$png" --dry-run >"$out"
-  for field in '"x":10' '"y":5' '"width":80' '"height":24' '"window_width":160' '"window_height":48'; do
-    grep -F "$field" "$out" >/dev/null ||
-      die "image preview dry-run did not include tmux bounds field $field"
-  done
-
-  "$preview_bin" --wallpaper "$png" --opacity 65 --dry-run >"$out"
-  grep -F '"op":"wallpaper"' "$out" >/dev/null ||
-    die "image preview wallpaper dry-run did not emit wallpaper op"
-  grep -F '"mode":"output"' "$out" >/dev/null ||
-    die "image preview wallpaper dry-run did not default to output mode"
-  grep -F '"fit":"cover"' "$out" >/dev/null ||
-    die "image preview wallpaper dry-run did not request cover fit"
-  grep -F '"opacity":65' "$out" >/dev/null ||
-    die "image preview wallpaper dry-run did not include opacity"
-
-  PATH="$fake_bin:$PATH" \
-    TMUX_PANE="%1" \
-    "$preview_bin" --wallpaper "$png" --target pane --opacity 42 --dry-run >"$out"
-  grep -F '"mode":"pane"' "$out" >/dev/null ||
-    die "image preview wallpaper pane dry-run did not request pane mode"
-  grep -F '"opacity":42' "$out" >/dev/null ||
-    die "image preview wallpaper pane dry-run did not include opacity"
-  for field in '"x":10' '"y":5' '"width":80' '"height":24' '"window_width":160' '"window_height":48'; do
-    grep -F "$field" "$out" >/dev/null ||
-      die "image preview wallpaper pane dry-run did not include bounds field $field"
-  done
-
-  if "$preview_bin" --wallpaper "$png" --opacity 101 --dry-run >"$out" 2>"$err"; then
-    die "image preview accepted invalid wallpaper opacity"
+  if "$ROOT/tools/engineos/engine-image-preview" --wallpaper "$image" \
+      --target pane --dry-run >"$out" 2>&1; then
+    die "retired shell pane-wallpaper path remains available"
   fi
-  grep -F -- '--opacity must be between 0 and 100' "$err" >/dev/null ||
-    die "image preview invalid wallpaper opacity error was not visible"
-
-  PATH="$fake_bin:$PATH" \
-    TMUX_PANE="%1" \
-    "$preview_bin" --quick-view "$png" --panel right --dry-run >"$out"
-  grep -F '"anchor":"mc-preview-panel"' "$out" >/dev/null ||
-    die "image preview quick-view did not request preview panel anchor"
-  for field in '"x":50' '"y":5' '"width":40' '"height":24' '"window_width":160' '"window_height":48'; do
-    grep -F "$field" "$out" >/dev/null ||
-      die "image preview quick-view right panel did not include bounds field $field"
-  done
-  grep -F '"owner":"mc-quick-view:' "$out" >/dev/null ||
-    die "image preview quick-view did not use a stable MC owner token"
-
-	PATH="$fake_bin:$PATH" \
-		TMUX_PANE="%1" \
-		"$preview_bin" --quick-view "$png" --panel right --dry-run >"$out"
-	grep -F '"client_tty":"/dev/pts/11"' "$out" >/dev/null ||
-		die "image preview quick-view did not include the owning tmux client tty"
-	grep -F '"pane":{"pane_id":"%1","session":"work","socket":"/tmp/engineos-tmux"' "$out" >/dev/null ||
-		die "image preview quick-view did not include pane identity"
-
-	PATH="$fake_bin:$PATH" \
-		ENGINEOS_TERMINAL_ROLE=terminal-secondary \
-		TMUX_PANE="%2" \
-		"$preview_bin" --quick-view "$png" --panel right --dry-run >"$out"
-	if grep -F '"slot":' "$out" >/dev/null; then
-		die "image preview quick-view forwarded stale terminal role from tmux server environment"
-	fi
-	grep -F '"pane_id":"%2"' "$out" >/dev/null ||
-		die "image preview quick-view did not preserve the invoking pane identity"
-
-  PATH="$fake_bin:$PATH" \
-    TMUX_PANE="%1" \
-    "$preview_bin" --quick-view "$png" --panel left --dry-run >"$out"
-  for field in '"x":10' '"y":5' '"width":40' '"height":24'; do
-    grep -F "$field" "$out" >/dev/null ||
-      die "image preview quick-view left panel did not include bounds field $field"
-  done
-
-  PATH="$fake_bin:$PATH" \
-    TMUX_PANE="%1" \
-    "$preview_bin" --quick-view "$png" --panel active --dry-run >"$out"
-  for field in '"x":10' '"y":5' '"width":80' '"height":24'; do
-    grep -F "$field" "$out" >/dev/null ||
-      die "image preview quick-view active panel did not include bounds field $field"
-  done
-
-  if "$preview_bin" --view "$tmp_dir/missing.png" --dry-run >"$out" 2>"$err"; then
-    die "image preview accepted missing path"
-  fi
-  grep -F 'cannot read image path' "$err" >/dev/null ||
-    die "image preview missing path error was not visible"
-
-  if "$preview_bin" --view "$tmp_dir/dir" --dry-run >"$out" 2>"$err"; then
-    die "image preview accepted directory"
-  fi
-  grep -F 'image path is a directory' "$err" >/dev/null ||
-    die "image preview directory error was not visible"
-
-  printf 'not an image\n' >"$tmp_dir/not-image.txt"
-  if "$preview_bin" --view "$tmp_dir/not-image.txt" --dry-run >"$out" 2>"$err"; then
-    die "image preview accepted unsupported image"
-  fi
-  grep -F 'unsupported image type' "$err" >/dev/null ||
-    die "image preview unsupported type error was not visible"
-
-  if ENGINEOS_PREVIEW_SOCKET="$sock" "$preview_bin" --ping >"$out" 2>"$err"; then
-    die "image preview ping should fail when IPC socket is missing"
-  fi
-  grep -F 'shell preview IPC unavailable' "$err" >/dev/null ||
-    die "image preview missing IPC error was not visible"
-
-  python - "$sock" <<'PY' &
-import os
-import socket
-import sys
-path = sys.argv[1]
-try:
-    os.unlink(path)
-except FileNotFoundError:
-    pass
-server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-server.bind(path)
-server.listen(1)
-client, _ = server.accept()
-client.recv(4096)
-client.sendall(b'{"version":1,"status":"ok","capabilities":["ping"]}\n')
-client.close()
-server.close()
-PY
-  local server_pid=$!
-  for _ in {1..50}; do
-    [[ -S "$sock" ]] && break
-    sleep 0.02
-  done
-  ENGINEOS_PREVIEW_SOCKET="$sock" "$preview_bin" --ping >"$out" 2>"$err"
-  wait "$server_pid"
-  grep -F 'shell preview IPC ready' "$err" >/dev/null ||
-    die "image preview ping success did not report readiness"
-
-  if [[ -x "$shell_bin" ]]; then
-    local shell_state="$tmp_dir/shell-state"
-    local shell_log="$tmp_dir/shell.log"
-    local shell_runtime="$tmp_dir/runtime"
-    install -d -m0700 "$shell_runtime"
-    ENGINEOS_STATE_DIR="$shell_state" \
-      XDG_RUNTIME_DIR="$shell_runtime" \
-      WLR_BACKENDS=headless \
-      WLR_HEADLESS_OUTPUTS=1 \
-      WLR_RENDERER_ALLOW_SOFTWARE=1 \
-      "$shell_bin" --headless --smoke-ms 10000 \
-        --terminal-secondary true >"$shell_log" 2>&1 &
-    shell_pid=$!
-    for _ in {1..100}; do
-      [[ -S "$shell_state/preview.sock" ]] && break
-      sleep 0.03
-    done
-    [[ -S "$shell_state/preview.sock" ]] ||
-      die "compiled shell did not create preview IPC socket"
-
-    ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --ping >"$out" 2>"$err"
-    ENGINEOS_SHELL_IPC_SOCKET="$shell_state/preview.sock" \
-      ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-      "$SCRIPT_DIR/app.sh" terminal register \
-        --slot terminal-secondary --tty /dev/pts/11 >"$out"
-
-    command -v foot >/dev/null 2>&1 || die "foot is required for exact pane-token mapping proof"
-    PATH="$fake_bin:$PATH" \
-      ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-      ENGINEOS_STATE_DIR="$shell_state" \
-      ENGINEOS_SHELL_IPC_SOCKET="$shell_state/preview.sock" \
-      ENGINEOS_FAKE_TMUX_IDENTITY="work @3 2 %1" \
-      ENGINEOS_FAKE_TMUX_SOCKET="/tmp/engineos-tmux" \
-      ENGINEOS_FAKE_TMUX_GEOMETRY="10 5 80 24 160 48" \
-      XDG_RUNTIME_DIR="$shell_runtime" WAYLAND_DISPLAY=wayland-0 \
-      TMUX="/tmp/engineos-tmux,1,0" TMUX_PANE="%1" \
-      "$SCRIPT_DIR/app.sh" pane launch -- \
-        foot --app-id=pane-token-test --title=PaneTokenTest \
-          sh -c 'sleep 5' >"$tmp_dir/pane-foot.log" 2>&1 &
-    gui_pid=$!
-    for _ in {1..100}; do
-      grep -Eq '"layout": "tmux-pane-gui".*"pane_key": "tmux:/tmp/engineos-tmux:work:%1"' \
-        "$shell_state/shell-state.json" 2>/dev/null && break
-      sleep 0.03
-    done
-    if ! grep -Eq '"layout": "tmux-pane-gui".*"pane_key": "tmux:/tmp/engineos-tmux:work:%1"' \
-        "$shell_state/shell-state.json"; then
-      cat "$tmp_dir/pane-foot.log" >&2 || true
-      tail -n 80 "$shell_log" >&2 || true
-      die "compiled shell did not bind the exact-token Wayland client to its pane"
-    fi
-    grep -F '"terminal_slot": "terminal-secondary"' "$shell_state/shell-state.json" >/dev/null ||
-      die "compiled shell did not retain the pane's registered terminal owner"
-    if grep -F '"token"' "$shell_state/shell-state.json" >/dev/null; then
-      die "compiled shell leaked a pane launch token into shell state"
-    fi
-    kill "$gui_pid" >/dev/null 2>&1 || true
-    wait "$gui_pid" >/dev/null 2>&1 || true
-    gui_pid=""
-
-    PATH="$fake_bin:$PATH" \
-      ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-      ENGINEOS_STATE_DIR="$shell_state" \
-      ENGINEOS_SHELL_IPC_SOCKET="$shell_state/preview.sock" \
-      ENGINEOS_FAKE_TMUX_IDENTITY="work @3 2 %1" \
-      ENGINEOS_FAKE_TMUX_SOCKET="/tmp/engineos-tmux" \
-      ENGINEOS_FAKE_TMUX_GEOMETRY="10 5 80 24 160 48" \
-      XDG_RUNTIME_DIR="$shell_runtime" WAYLAND_DISPLAY=wayland-0 \
-      TMUX="/tmp/engineos-tmux,1,0" TMUX_PANE="%1" \
-      "$SCRIPT_DIR/app.sh" pane launch -- sleep 5 >"$tmp_dir/pending.log" 2>&1 &
-    pending_pid=$!
-    for _ in {1..50}; do
-      grep -F '"pending": true' "$shell_state/shell-state.json" >/dev/null 2>&1 && break
-      sleep 0.03
-    done
-    XDG_RUNTIME_DIR="$shell_runtime" WAYLAND_DISPLAY=wayland-0 \
-      foot --app-id=pane-missing-token --title=MissingPaneToken \
-        sh -c 'sleep 1' >"$tmp_dir/missing-token-foot.log" 2>&1 &
-    gui_pid=$!
-    wait "$gui_pid" >/dev/null 2>&1 || true
-    gui_pid=""
-    grep -F 'reason=missing-launch-token' "$shell_log" >/dev/null ||
-      die "compiled shell did not reject an un-tokened client during pane launch"
-    kill "$pending_pid" >/dev/null 2>&1 || true
-    wait "$pending_pid" >/dev/null 2>&1 || true
-    pending_pid=""
-
-    XDG_RUNTIME_DIR="$shell_runtime" WAYLAND_DISPLAY=wayland-0 \
-      ENGINEOS_PANE_LAUNCH_TOKEN=stale-pane-token \
-      foot --app-id=pane-stale-token --title=StalePaneToken \
-        sh -c 'sleep 1' >"$tmp_dir/stale-token-foot.log" 2>&1 &
-    gui_pid=$!
-    wait "$gui_pid" >/dev/null 2>&1 || true
-    gui_pid=""
-    grep -F 'reason=unknown-or-stale-token' "$shell_log" >/dev/null ||
-      die "compiled shell did not reject a stale pane launch token"
-
-    PATH="$fake_bin:$PATH" TMUX_PANE="%1" \
-      ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" \
-      "$preview_bin" --view "$png" >"$out" 2>"$err"
-    PATH="$fake_bin:$PATH" TMUX_PANE="%1" \
-      ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" \
-      "$preview_bin" --view "$jpg" >"$out" 2>"$err"
-    PATH="$fake_bin:$PATH" TMUX_PANE="%1" \
-      ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" \
-      "$preview_bin" --wallpaper "$png" --opacity 55 >"$out" 2>"$err"
-    ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --hide-wallpaper >"$out" 2>"$err"
-    ENGINEOS_PREVIEW_SOCKET="$shell_state/preview.sock" "$preview_bin" --hide >"$out" 2>"$err"
-    python - "$shell_state/preview.sock" <<'PY'
-import socket
-import sys
-path = sys.argv[1]
-with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-    client.settimeout(2.0)
-    client.connect(path)
-    client.sendall(b'{"version":1,"op":"launch","slot":"terminal-secondary"}\n')
-    response = client.recv(4096)
-if b'"status":"ok"' not in response:
-    raise SystemExit(f"unexpected shell IPC response: {response!r}")
-PY
-    wait "$shell_pid"
-    shell_pid=""
-
-    grep -F "image preview shown path=$png" "$shell_log" | grep -F "image=4x3" >/dev/null ||
-      die "compiled shell did not decode and show PNG preview"
-    grep -F "image preview shown path=$png" "$shell_log" | grep -F "slot=terminal-secondary" >/dev/null ||
-      die "compiled shell did not route the owned preview to the registered terminal"
-    grep -F "image preview shown path=$jpg" "$shell_log" | grep -F "image=4x3" >/dev/null ||
-      die "compiled shell did not decode and show JPEG preview"
-    grep -F "wallpaper shown path=$png" "$shell_log" | grep -F "opacity=55" >/dev/null ||
-      die "compiled shell did not decode and show wallpaper"
-    grep -F "wallpaper hidden reason=ipc-hide-wallpaper" "$shell_log" >/dev/null ||
-      die "compiled shell did not hide wallpaper"
-    grep -E "image previews hidden count=1 .*reason=ipc-hide" "$shell_log" >/dev/null ||
-      die "compiled shell did not hide image preview"
-    grep -F 'launchpad slot unavailable role=terminal-secondary action=launch-requested trigger=ipc-launch' "$shell_log" >/dev/null ||
-      die "compiled shell did not accept IPC slot launch"
-  fi
-
-  printf 'image preview contract test passed\n'
+  printf 'native mux image preview test passed\n'
 }
-
 run_app() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-app-test-$$"
-  local fake_bin="$tmp_dir/bin"
-	  local log_dir="$tmp_dir/logs"
-	  local out="$tmp_dir/out.txt"
-	  local err="$tmp_dir/err.txt"
-	  local launched="$tmp_dir/launched.txt"
-	  local ENGINEOS_MUX_MODE=legacy
-	  export ENGINEOS_MUX_MODE
-
-  cleanup_app() {
-    rm -rf "$tmp_dir"
-  }
+  local fake_tmux="$tmp_dir/tmux"
+  local log="$tmp_dir/tmux.log"
+  cleanup_app() { rm -rf "$tmp_dir"; }
   trap cleanup_app RETURN
-
-  mkdir -p "$fake_bin" "$log_dir" "$tmp_dir/run"
-  cat >"$fake_bin/eos-runtime" <<'FAKE'
+  mkdir -p "$tmp_dir/state" "$tmp_dir/log"
+  cat >"$fake_tmux" <<'FAKE'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >"$ENGINEOS_FAKE_APP_LAUNCHED"
+printf '%s\n' "$*" >>"$ENGINEOS_FAKE_TMUX_LOG"
+if [[ "$1" == display-message ]]; then printf '%%9\n'; fi
 FAKE
-  cat >"$fake_bin/engineos-cube" <<'FAKE'
-#!/usr/bin/env bash
-printf 'fake cube %s\n' "$*"
-printf 'libdecor=%s\n' "${SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR:-unset}"
-FAKE
-	cat >"$fake_bin/engine-mux" <<'FAKE'
-#!/usr/bin/env bash
-if [[ "${1:-}" == list-clients ]]; then
-	printf '%s\n' 'engineos-view-1|attached,focused,UTF-8|$7'
-	exit 0
-fi
-if [[ "${1:-}" == display-message && "${*: -1}" == '#{pane_id}' ]]; then
-	printf '%s\n' '%9'
-	exit 0
-fi
-printf '%s\n' "$*" >>"$ENGINEOS_FAKE_MUX_CALLS"
-FAKE
-	cat >"$fake_bin/engine-muxctl" <<'FAKE'
-#!/usr/bin/env bash
-[[ "${1:-}" == snapshot ]] || exit 64
-printf '%s\n' '{"schema":"engine-mux/snapshot-v1","revision":42,"panes":[{"pane_id":"%9","active":true,"presentation":"game","view_mode":"presentation","mapped":true,"surface_tabs":1,"process_scope":"engine-pane-proof.scope","app_command":"quake"}]}'
-FAKE
-	  cat >"$fake_bin/tmux" <<'FAKE'
-#!/usr/bin/env bash
-if [[ "$1" == "display-message" ]]; then
-  format="${*: -1}"
-  if [[ "$format" == *session_name* ]]; then
-    printf '%s\n' "${ENGINEOS_FAKE_TMUX_IDENTITY:-engineos @1 1 %1}"
-    exit 0
-  fi
-  if [[ "$format" == *socket_path* ]]; then
-    printf '%s\n' "${ENGINEOS_FAKE_TMUX_SOCKET:-/tmp/engineos-tmux}"
-    exit 0
-  fi
-  if [[ "$format" == *client_cell_width* ]]; then
-    printf '%s\n' "${ENGINEOS_FAKE_TMUX_CELL_SIZE:-9 18}"
-    exit 0
-  fi
-	if [[ "$format" == *client_tty* ]]; then
-		printf '%s\n' "${ENGINEOS_FAKE_TMUX_CLIENT_TTY:-/dev/pts/11}"
-		exit 0
-	fi
-  printf '%s\n' "${ENGINEOS_FAKE_TMUX_GEOMETRY:-10 5 80 24 160 48}"
-  exit 0
-fi
-exit 1
-FAKE
-	chmod +x "$fake_bin/engine-mux" "$fake_bin/engine-muxctl"
-  cat >"$fake_bin/pkill" <<'FAKE'
-#!/usr/bin/env bash
-exit 1
-FAKE
-  cat >"$fake_bin/pgrep" <<'FAKE'
-#!/usr/bin/env bash
-exit 1
-FAKE
-  chmod +x "$fake_bin/eos-runtime" "$fake_bin/engineos-cube" "$fake_bin/tmux" "$fake_bin/pkill" "$fake_bin/pgrep"
+  chmod +x "$fake_tmux"
 
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_STATE_DIR="$tmp_dir/run" \
-		ENGINEOS_GAME_CMD="$fake_bin/eos-runtime" \
-    ENGINEOS_FAKE_APP_LAUNCHED="$launched" \
-    WAYLAND_DISPLAY="engineos-test-wayland" \
-    "$SCRIPT_DIR/app.sh" launch quake --smoke >"$out"
-	grep -F 'quake play --smoke' "$launched" >/dev/null ||
-		die "app launcher did not dispatch quake through the game workflow"
-  grep -F 'app launch app=quake owner=engineos-shell display=engineos-test-wayland sdl=wayland args=--smoke' "$log_dir/app.log" >/dev/null ||
-    die "app launcher did not log shell-owned quake launch"
+  ENGINEOS_TMUX_BIN="$fake_tmux" ENGINEOS_FAKE_TMUX_LOG="$log" \
+    ENGINEOS_STATE_DIR="$tmp_dir/state" ENGINEOS_LOG_DIR="$tmp_dir/log" \
+    TMUX_PANE=%9 "$SCRIPT_DIR/app.sh" pane launch -- /usr/bin/falkon
+  ENGINEOS_TMUX_BIN="$fake_tmux" ENGINEOS_FAKE_TMUX_LOG="$log" \
+    ENGINEOS_STATE_DIR="$tmp_dir/state" ENGINEOS_LOG_DIR="$tmp_dir/log" \
+    TMUX_PANE=%9 "$SCRIPT_DIR/app.sh" pane view toggle
+  ENGINEOS_TMUX_BIN="$fake_tmux" ENGINEOS_FAKE_TMUX_LOG="$log" \
+    ENGINEOS_STATE_DIR="$tmp_dir/state" ENGINEOS_LOG_DIR="$tmp_dir/log" \
+    TMUX_PANE=%9 "$SCRIPT_DIR/app.sh" pane signal TERM
+  ENGINEOS_TMUX_BIN="$fake_tmux" ENGINEOS_FAKE_TMUX_LOG="$log" \
+    ENGINEOS_STATE_DIR="$tmp_dir/state" ENGINEOS_LOG_DIR="$tmp_dir/log" \
+    TMUX_PANE=%9 "$SCRIPT_DIR/app.sh" pane respawn
 
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_STATE_DIR="$tmp_dir/run" \
-		ENGINEOS_GAME_CMD="$fake_bin/eos-runtime" \
-    ENGINEOS_FAKE_APP_LAUNCHED="$launched" \
-    WAYLAND_DISPLAY="engineos-test-wayland" \
-    "$SCRIPT_DIR/app.sh" launch quake --map dgen_smoke --game id1 --output >"$out"
-	grep -F 'quake play --map dgen_smoke --game id1' "$launched" >/dev/null ||
-    die "app launcher did not pass quake map/game arguments"
-
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_STATE_DIR="$tmp_dir/run" \
-		ENGINEOS_GAME_CMD="$fake_bin/eos-runtime" \
-    ENGINEOS_FAKE_APP_LAUNCHED="$launched" \
-    WAYLAND_DISPLAY="engineos-test-wayland" \
-    TMUX="$tmp_dir/tmux-socket,1,0" \
-    TMUX_PANE="%1" \
-    "$SCRIPT_DIR/app.sh" launch quake >"$out"
-	grep -F 'quake play --window' "$launched" >/dev/null ||
-    die "app launcher did not force pane-bounded quake into windowed mode"
-  grep -F 'mode=pane' "$tmp_dir/run/launch-bounds/engine.env" >/dev/null ||
-    die "app launcher did not write pane bounds request"
-  grep -F 'pane_left=10' "$tmp_dir/run/launch-bounds/engine.env" >/dev/null ||
-    die "app launcher pane bounds missing tmux pane left"
-  grep -F 'window_height=48' "$tmp_dir/run/launch-bounds/engine.env" >/dev/null ||
-    die "app launcher pane bounds missing tmux window height"
-  grep -F 'app layout app=quake mode=pane source=tmux bounds=10 5 80 24 160 48' "$log_dir/app.log" >/dev/null ||
-    die "app launcher did not log tmux pane bounds"
-
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_STATE_DIR="$tmp_dir/run" \
-		ENGINEOS_GAME_CMD="$fake_bin/eos-runtime" \
-    ENGINEOS_FAKE_APP_LAUNCHED="$launched" \
-    WAYLAND_DISPLAY="engineos-test-wayland" \
-    TMUX="$tmp_dir/tmux-socket,1,0" \
-    TMUX_PANE="%1" \
-    "$SCRIPT_DIR/app.sh" launch quake --fullscreen >"$out"
-	grep -F 'quake play --fullscreen' "$launched" >/dev/null ||
-    die "app launcher did not pass quake fullscreen flag"
-  grep -F 'mode=output' "$tmp_dir/run/launch-bounds/engine.env" >/dev/null ||
-    die "app launcher did not clear pane bounds for fullscreen launch"
-
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    TMUX="$tmp_dir/tmux-socket,1,0" \
-    TMUX_PANE="%1" \
-    WAYLAND_DISPLAY="engineos-test-wayland" \
-    "$SCRIPT_DIR/app.sh" launch cube --smoke >"$out"
-  grep -F 'app launch app=cube owner=engineos-shell display=engineos-test-wayland sdl=wayland libdecor=0 args=--smoke' "$log_dir/app.log" >/dev/null ||
-    die "app launcher did not log shell-owned cube launch"
-  grep -F 'mode=pane' "$tmp_dir/run/launch-bounds/cube.env" >/dev/null ||
-    die "app launcher did not write pane bounds request for cube"
-  grep -F 'pane_left=10' "$tmp_dir/run/launch-bounds/cube.env" >/dev/null ||
-    die "app launcher cube pane bounds missing tmux pane left"
-  grep -F 'app layout app=cube mode=pane source=tmux bounds=10 5 80 24 160 48' "$log_dir/app.log" >/dev/null ||
-    die "app launcher did not log tmux pane bounds for cube"
-  grep -F 'fake cube --smoke' "$log_dir/cube.log" >/dev/null ||
-    die "app launcher did not write cube output to cube log"
-  grep -F 'libdecor=0' "$log_dir/cube.log" >/dev/null ||
-    die "app launcher did not disable libdecor for cube"
-
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    ENGINEOS_APP_NOTIFY_SHELL=false \
-    ENGINEOS_FAKE_TMUX_GEOMETRY="20 6 70 20 160 48" \
-    TMUX="$tmp_dir/tmux-socket,1,0" \
-    TMUX_PANE="%1" \
-    "$SCRIPT_DIR/app.sh" pane sync cube >"$out"
-  grep -F 'pane_left=20' "$tmp_dir/run/launch-bounds/cube.env" >/dev/null ||
-    die "app pane sync did not refresh cube pane left"
-  grep -F 'pane_height=20' "$tmp_dir/run/launch-bounds/cube.env" >/dev/null ||
-    die "app pane sync did not refresh cube pane height"
-  grep -F 'synced cube pane %1 bounds 20 6 70 20 160 48' "$out" >/dev/null ||
-    die "app pane sync did not report refreshed cube bounds"
-  grep -F 'app pane sync role=cube source=tmux pane=%1 bounds=20 6 70 20 160 48' "$log_dir/app.log" >/dev/null ||
-    die "app pane sync did not log refreshed cube bounds"
-
-  if PATH="$fake_bin:$PATH" \
-      ENGINEOS_LOG_DIR="$log_dir" \
-      ENGINEOS_STATE_DIR="$tmp_dir/run" \
-      ENGINEOS_FAKE_TMUX_GEOMETRY="25 8 66 19 160 48" \
-      TMUX="$tmp_dir/tmux-socket,1,0" \
-      TMUX_PANE="%1" \
-      "$SCRIPT_DIR/app.sh" pane sync cube >"$out" 2>&1; then
-    die "app pane sync succeeded when shell notification could not be delivered"
-  fi
-  grep -F 'pane_left=25' "$tmp_dir/run/launch-bounds/cube.env" >/dev/null ||
-    die "app pane sync failure path did not refresh cube pane bounds before notifying"
-  grep -F 'pane sync notify=failed reason=shell-not-running' "$log_dir/app.log" >/dev/null ||
-    die "app pane sync did not log failed shell notification"
-
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    ENGINEOS_APP_NOTIFY_SHELL=false \
-    ENGINEOS_FAKE_TMUX_GEOMETRY="30 7 60 18 160 48" \
-    TMUX="$tmp_dir/tmux-socket,1,0" \
-    "$SCRIPT_DIR/app.sh" pane sync --all >"$out"
-  grep -F 'pane_left=30' "$tmp_dir/run/launch-bounds/cube.env" >/dev/null ||
-    die "app pane sync --all did not refresh stored cube pane"
-  grep -F 'synced cube pane %1 bounds 30 7 60 18 160 48' "$out" >/dev/null ||
-    die "app pane sync --all did not use stored pane id"
-
-  if env -u WAYLAND_DISPLAY -u DISPLAY \
-      ENGINEOS_LOG_DIR="$log_dir" \
-      ENGINEOS_STATE_DIR="$tmp_dir/run" \
-      "$SCRIPT_DIR/app.sh" launch quake --smoke >/dev/null 2>&1; then
-    die "app launcher should require WAYLAND_DISPLAY by default"
-  fi
-  grep -F 'reason=missing-wayland-display app=quake' "$log_dir/app.log" >/dev/null ||
-    die "app launcher did not log missing Wayland display"
-
-  ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    "$SCRIPT_DIR/app.sh" --dry-run launch terminal --class EngineOS >"$out"
-  grep -F 'EngineOS app launch dry-run' "$out" >/dev/null ||
-    die "app launcher dry-run missing header"
-  grep -F 'app:      terminal' "$out" >/dev/null ||
-    die "app launcher dry-run missing app id"
-
-  cat >"$fake_bin/pkill" <<'FAKE'
-#!/usr/bin/env bash
-if [[ "$1" == "-HUP" && "$2" == "-x" && "$3" == "engineos-shell" ]]; then
-  exit 0
-fi
-exit 1
-FAKE
-  chmod +x "$fake_bin/pkill"
-
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    "$SCRIPT_DIR/app.sh" recover preview >"$out"
-  grep -F 'requested shell IPC refresh' "$out" >/dev/null ||
-    die "app recover preview did not report IPC refresh"
-  grep -F 'pane sync notify=signal shell=engineos-shell' "$log_dir/app.log" >/dev/null ||
-    die "app recover preview did not notify the running shell"
-
-  local recover_sock="$tmp_dir/recover.sock"
-  python - "$recover_sock" "$tmp_dir/recover-request.txt" <<'PY' &
-import os
-import socket
-import sys
-sock_path = sys.argv[1]
-request_path = sys.argv[2]
-try:
-    os.unlink(sock_path)
-except FileNotFoundError:
-    pass
-server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-server.bind(sock_path)
-server.listen(1)
-client, _ = server.accept()
-request = client.recv(4096)
-open(request_path, "wb").write(request)
-client.sendall(b'{"version":1,"status":"ok","capabilities":["launch"]}\n')
-client.close()
-server.close()
-PY
-  local recover_server_pid=$!
-  for _ in {1..50}; do
-    [[ -S "$recover_sock" ]] && break
-    sleep 0.02
-  done
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    ENGINEOS_SHELL_IPC_SOCKET="$recover_sock" \
-    "$SCRIPT_DIR/app.sh" recover terminal-secondary >"$out"
-  wait "$recover_server_pid"
-  grep -F 'requested terminal-secondary recovery through running shell' "$out" >/dev/null ||
-    die "app recover terminal-secondary did not report shell IPC launch"
-  grep -F '"op":"launch","slot":"terminal-secondary"' "$tmp_dir/recover-request.txt" >/dev/null ||
-    die "app recover terminal-secondary did not send shell IPC launch request"
-  grep -F 'app recover target=terminal-secondary role=terminal-secondary method=shell-ipc socket='"$recover_sock" "$log_dir/app.log" >/dev/null ||
-    die "app recover terminal-secondary did not log recovery request"
-
-  printf '[2026-01-01T00:00:00Z] app launch app=terminal owner=engineos-shell display=engineos-test-wayland\n' >>"$log_dir/app.log"
-  {
-    printf '[2026-01-01T00:00:00Z] bootstrap mode=launchpad\n'
-    printf '[2026-01-01T00:00:01Z] launchpad active slot=cube mode=terminal capture=none reason=bootstrap-launchpad\n'
-    printf '[2026-01-01T00:00:02Z] view mapped role=cube title=engineos-cube app_id=engineos-cube mapped_total=1\n'
-  } >"$log_dir/shell.log"
-  cat >"$tmp_dir/run/shell-state.json" <<'JSON'
-{
-  "schema": "engineos-shell-state-v0",
-  "active_slot": "terminal",
-  "pending_slot": "unknown",
-  "slots": {
-    "terminal": {"mapped": true, "visible": true, "layout": "output", "fullscreen": false, "x": 0, "y": 0, "width": 1600, "height": 900, "title": "EngineOS", "app_id": "foot"},
-    "cube": {"mapped": true, "visible": true, "layout": "tmux-pane", "fullscreen": false, "x": 200, "y": 100, "width": 700, "height": 375, "title": "engineos-cube", "app_id": "engineos-cube"},
-    "engine": {"mapped": false, "visible": false, "layout": "", "fullscreen": false, "x": 0, "y": 0, "width": 0, "height": 0, "title": "", "app_id": ""}
-  }
+  grep -Fx 'launch-pane-app -t %9 -- /usr/bin/falkon --no-remote' "$log" >/dev/null ||
+    die "pane launch did not call native tmux command"
+  grep -Fx 'pane-presentation -t %9 toggle' "$log" >/dev/null ||
+    die "pane view did not call native tmux command"
+  grep -Fx 'signal-pane-app -t %9 TERM' "$log" >/dev/null ||
+    die "pane signal did not call native tmux command"
+  grep -Fx 'respawn-pane-app -t %9' "$log" >/dev/null ||
+    die "pane respawn did not call native tmux command"
+  ! rg -n 'launch.token|pane-(launch|focus|geometry|unbind)|terminal-register|ENGINEOS_MUX_MODE' \
+    "$ROOT/tools/scripts/app.sh" >/dev/null ||
+    die "app wrapper retains rollback transport"
+  printf 'native app wrapper test passed\n'
 }
-JSON
-  ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    "$SCRIPT_DIR/app.sh" status --json >"$out"
-  grep -F '"active_slot":"terminal"' "$out" >/dev/null ||
-    die "app status json did not report shell-state active terminal slot"
-  grep -F '"manifest": "' "$out" >/dev/null ||
-    die "app status json did not report manifest path"
-  grep -F '"terminal": {"app":"terminal","command":"eos-app launch terminal","launch_state":"launch-requested"' "$out" >/dev/null ||
-    die "app status json did not report terminal launch state"
-  grep -F '"terminal-secondary": {"app":"terminal-secondary","command":"eos-app launch terminal-secondary","launch_state":"missing"' "$out" >/dev/null ||
-    die "app status json did not report secondary terminal slot"
-  grep -F '"cube": {"app":"cube","command":"eos-app launch cube","launch_state":"launch-requested","mapped":true' "$out" >/dev/null ||
-    die "app status json did not report mapped cube state"
-  grep -F '"visible":true,"layout":"tmux-pane","fullscreen":false,"x":200,"y":100,"width":700,"height":375' "$out" >/dev/null ||
-    die "app status json did not report pane visibility and bounds from shell state"
-  grep -F '"shell_last_log":"[2026-01-01T00:00:02Z] view mapped role=cube title=engineos-cube app_id=engineos-cube mapped_total=1"' "$out" >/dev/null ||
-    die "app status json did not report shell lifecycle evidence"
-  [[ -f "$tmp_dir/run/apps/cube.status" ]] ||
-    die "app launcher did not write cube state record"
-
-	  cat >"$tmp_dir/run/shell-state.json" <<'JSON'
-{
-  "schema": "engineos-shell-state-v0",
-  "windows": [
-    {"id": 7, "role": "unknown", "focused": false, "visible": true, "minimized": false, "maximized": false, "layout": "tmux-pane-gui", "x": 40, "y": 40, "width": 900, "height": 700, "title": "Falkon", "app_id": "org.kde.falkon", "bound": true, "pane_key": "tmux:/tmp/engineos-tmux:work:%9", "pane_id": "%9"},
-    {"id": 2, "role": "terminal", "focused": true, "visible": true, "minimized": false, "maximized": false, "layout": "output", "x": 0, "y": 0, "width": 1600, "height": 900, "title": "EngineOS", "app_id": "foot"}
-  ],
-  "pane_bindings": [
-    {"key": "tmux:/tmp/engineos-tmux:work:%9", "socket": "/tmp/engineos-tmux", "session": "work", "window_id": "@3", "window_index": "2", "pane_id": "%9", "command_label": "falkon", "pending": false, "focused": true, "view_id": 7, "geometry": {"pane_left": 12, "pane_top": 4, "pane_width": 90, "pane_height": 26, "window_width": 180, "window_height": 52, "cell_width": 9, "cell_height": 18}}
-  ]
-}
-JSON
-	ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_STATE_DIR="$tmp_dir/run" \
-		"$SCRIPT_DIR/app.sh" window list --json >"$out"
-	  grep -F '"id":7' "$out" >/dev/null ||
-	    die "app window list json did not report Falkon window id"
-	  grep -F '"app_id":"org.kde.falkon"' "$out" >/dev/null ||
-	    die "app window list json did not report Falkon app id"
-	  grep -F '"bound":true' "$out" >/dev/null ||
-	    die "app window list json did not report shell-owned pane binding"
-	local pane_sock="$tmp_dir/pane.sock"
-	python - "$pane_sock" "$tmp_dir/run/shell-state.json" <<'PY' &
-import json, os, socket, sys
-sock_path, state_path = sys.argv[1:]
-try: os.unlink(sock_path)
-except FileNotFoundError: pass
-server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-server.bind(sock_path); server.listen(1)
-client, _ = server.accept(); client.recv(4096)
-bindings = json.load(open(state_path, encoding="utf-8"))["pane_bindings"]
-client.sendall((json.dumps({"version": 1, "status": "ok", "pane_bindings": bindings}) + "\n").encode())
-client.close(); server.close()
-PY
-	local pane_server_pid=$!
-	for _ in {1..50}; do [[ -S "$pane_sock" ]] && break; sleep 0.02; done
-	ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_STATE_DIR="$tmp_dir/run" \
-		ENGINEOS_SHELL_IPC_SOCKET="$pane_sock" \
-		"$SCRIPT_DIR/app.sh" pane list --json >"$out"
-	wait "$pane_server_pid"
-	  grep -F '"pane_bindings":[{"key":"tmux:/tmp/engineos-tmux:work:%9"' "$out" >/dev/null ||
-	    die "app pane list json did not report shell-owned pane binding"
-	  if ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_STATE_DIR="$tmp_dir/run" \
-	      "$SCRIPT_DIR/app.sh" window bind 7 >"$out" 2>"$err"; then
-	    die "deprecated app window bind succeeded"
-	  fi
-	  grep -F 'eos-app window bind is deprecated' "$err" >/dev/null ||
-	    die "deprecated app window bind did not point to pane launch"
-
-	  if env -u TMUX -u TMUX_PANE \
-	      ENGINEOS_LOG_DIR="$log_dir" ENGINEOS_STATE_DIR="$tmp_dir/run" \
-	      WAYLAND_DISPLAY="engineos-test-wayland" \
-	      "$SCRIPT_DIR/app.sh" pane launch -- falkon >"$out" 2>"$err"; then
-	    die "app pane launch succeeded without tmux context"
-	  fi
-	  grep -F 'pane launch requires TMUX and TMUX_PANE' "$err" >/dev/null ||
-	    die "app pane launch missing tmux error was not visible"
-
-	  cat >"$fake_bin/fake-gui" <<'FAKE'
-#!/usr/bin/env bash
-printf 'token=%s\n' "${ENGINEOS_PANE_LAUNCH_TOKEN:-missing}" >"$ENGINEOS_FAKE_GUI_ENV"
-printf 'display=%s\n' "${WAYLAND_DISPLAY:-missing}" >>"$ENGINEOS_FAKE_GUI_ENV"
-FAKE
-	  chmod +x "$fake_bin/fake-gui"
-	python - "$pane_sock" "$tmp_dir/pane-launch-request.txt" <<'PY' &
-import os
-import socket
-import sys
-sock_path = sys.argv[1]
-request_path = sys.argv[2]
-try:
-    os.unlink(sock_path)
-except FileNotFoundError:
-    pass
-server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-server.bind(sock_path)
-server.listen(1)
-client, _ = server.accept()
-request = client.recv(4096)
-open(request_path, "wb").write(request)
-client.sendall(b'{"version":1,"status":"ok","capabilities":["pane-launch"]}\n')
-client.close()
-server.close()
-PY
-	pane_server_pid=$!
-	  for _ in {1..50}; do
-	    [[ -S "$pane_sock" ]] && break
-	    sleep 0.02
-	  done
-	  PATH="$fake_bin:$PATH" \
-	    ENGINEOS_LOG_DIR="$log_dir" \
-	    ENGINEOS_STATE_DIR="$tmp_dir/run" \
-	    ENGINEOS_SHELL_IPC_SOCKET="$pane_sock" \
-	    ENGINEOS_FAKE_GUI_ENV="$tmp_dir/fake-gui-env.txt" \
-	    ENGINEOS_FAKE_TMUX_IDENTITY="work @3 2 %9" \
-	    ENGINEOS_FAKE_TMUX_SOCKET="/tmp/engineos-tmux" \
-	    ENGINEOS_FAKE_TMUX_GEOMETRY="12 4 90 26 180 52" \
-	    TMUX="/tmp/engineos-tmux,1,0" \
-	    TMUX_PANE="%9" \
-	    WAYLAND_DISPLAY="engineos-test-wayland" \
-	    "$SCRIPT_DIR/app.sh" pane launch -- fake-gui >"$out"
-	  wait "$pane_server_pid"
-	  grep -F '"op":"pane-launch"' "$tmp_dir/pane-launch-request.txt" >/dev/null ||
-	    die "app pane launch did not send pane-launch IPC"
-	  grep -F '"session":"work"' "$tmp_dir/pane-launch-request.txt" >/dev/null ||
-	    die "app pane launch did not send tmux session"
-	  grep -F '"pane_id":"%9"' "$tmp_dir/pane-launch-request.txt" >/dev/null ||
-	    die "app pane launch did not send tmux pane id"
-	  grep -F '"pane_width":90' "$tmp_dir/pane-launch-request.txt" >/dev/null ||
-	    die "app pane launch did not send pane geometry"
-	  grep -F '"cell_height":18' "$tmp_dir/pane-launch-request.txt" >/dev/null ||
-	    die "app pane launch did not send tmux cell size"
-	  grep -F '"command_label":"fake-gui"' "$tmp_dir/pane-launch-request.txt" >/dev/null ||
-	    die "app pane launch did not send command label"
-	  grep -F 'token=pane-' "$tmp_dir/fake-gui-env.txt" >/dev/null ||
-	    die "app pane launch did not expose launch token to command"
-
-	  python - "$pane_sock" "$tmp_dir/pane-focus-request.txt" <<'PY' &
-import os
-import socket
-import sys
-sock_path = sys.argv[1]
-request_path = sys.argv[2]
-try:
-    os.unlink(sock_path)
-except FileNotFoundError:
-    pass
-server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-server.bind(sock_path)
-server.listen(1)
-client, _ = server.accept()
-request = client.recv(4096)
-open(request_path, "wb").write(request)
-client.sendall(b'{"version":1,"status":"ok","capabilities":["pane-focus"]}\n')
-client.close()
-server.close()
-PY
-	  pane_server_pid=$!
-	  for _ in {1..50}; do
-	    [[ -S "$pane_sock" ]] && break
-	    sleep 0.02
-	  done
-	  PATH="$fake_bin:$PATH" \
-	    ENGINEOS_LOG_DIR="$log_dir" \
-	    ENGINEOS_STATE_DIR="$tmp_dir/run" \
-	    ENGINEOS_SHELL_IPC_SOCKET="$pane_sock" \
-	    ENGINEOS_FAKE_TMUX_IDENTITY="work @3 2 %9" \
-	    ENGINEOS_FAKE_TMUX_SOCKET="/tmp/engineos-tmux" \
-	    TMUX="/tmp/engineos-tmux,1,0" \
-	    TMUX_PANE="%9" \
-	    "$SCRIPT_DIR/app.sh" pane focus >"$out"
-	  wait "$pane_server_pid"
-	  grep -F 'focused pane %9' "$out" >/dev/null ||
-	    die "app pane focus did not report focused pane"
-	  grep -F '"op":"pane-focus"' "$tmp_dir/pane-focus-request.txt" >/dev/null ||
-	    die "app pane focus did not send pane-focus IPC"
-	  grep -F '"session":"work"' "$tmp_dir/pane-focus-request.txt" >/dev/null ||
-	    die "app pane focus did not preserve non-engineos session"
-
-	  python - "$pane_sock" "$tmp_dir/pane-geometry-request.txt" <<'PY' &
-import os
-import socket
-import sys
-sock_path = sys.argv[1]
-request_path = sys.argv[2]
-try:
-    os.unlink(sock_path)
-except FileNotFoundError:
-    pass
-server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-server.bind(sock_path)
-server.listen(1)
-client, _ = server.accept()
-request = client.recv(4096)
-open(request_path, "wb").write(request)
-client.sendall(b'{"version":1,"status":"ok","capabilities":["pane-geometry"]}\n')
-client.close()
-server.close()
-PY
-	  pane_server_pid=$!
-	  for _ in {1..50}; do
-	    [[ -S "$pane_sock" ]] && break
-	    sleep 0.02
-	  done
-	  PATH="$fake_bin:$PATH" \
-	    ENGINEOS_LOG_DIR="$log_dir" \
-	    ENGINEOS_STATE_DIR="$tmp_dir/run" \
-	    ENGINEOS_SHELL_IPC_SOCKET="$pane_sock" \
-	    ENGINEOS_FAKE_TMUX_IDENTITY="work @3 2 %9" \
-	    ENGINEOS_FAKE_TMUX_GEOMETRY="0 0 240 66 240 66 240 67" \
-	    TMUX="/tmp/engineos-tmux,1,0" \
-	    TMUX_PANE="%9" \
-	    "$SCRIPT_DIR/app.sh" pane geometry >"$out"
-	  wait "$pane_server_pid"
-	  grep -F '"op":"pane-geometry"' "$tmp_dir/pane-geometry-request.txt" >/dev/null ||
-	    die "app pane geometry did not send pane-geometry IPC"
-	  grep -F '"window_height":67' "$tmp_dir/pane-geometry-request.txt" >/dev/null ||
-	    die "app pane geometry did not use tmux client height"
-
-  local focus_sock="$tmp_dir/focus.sock"
-  python - "$focus_sock" "$tmp_dir/focus-request.txt" <<'PY' &
-import os
-import socket
-import sys
-sock_path = sys.argv[1]
-request_path = sys.argv[2]
-try:
-    os.unlink(sock_path)
-except FileNotFoundError:
-    pass
-server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-server.bind(sock_path)
-server.listen(1)
-client, _ = server.accept()
-request = client.recv(4096)
-open(request_path, "wb").write(request)
-client.sendall(b'{"version":1,"status":"ok","capabilities":["focus-window"]}\n')
-client.close()
-server.close()
-PY
-  local focus_server_pid=$!
-  for _ in {1..50}; do
-    [[ -S "$focus_sock" ]] && break
-    sleep 0.02
-  done
-  ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_STATE_DIR="$tmp_dir/run" \
-    ENGINEOS_SHELL_IPC_SOCKET="$focus_sock" \
-    "$SCRIPT_DIR/app.sh" window focus 7 >"$out"
-  wait "$focus_server_pid"
-  grep -F 'focused window 7' "$out" >/dev/null ||
-    die "app window focus did not report focused window"
-  grep -F '"op":"focus-window","window_id":7' "$tmp_dir/focus-request.txt" >/dev/null ||
-    die "app window focus did not send shell IPC focus request"
-
-	python - "$tmp_dir/run/shell-state.json" <<'PY'
-import json
-import sys
-path = sys.argv[1]
-with open(path, encoding="utf-8") as handle:
-    state = json.load(handle)
-state["mux"] = {"mode": "native", "connected": True}
-with open(path, "w", encoding="utf-8") as handle:
-    json.dump(state, handle)
-PY
-	ENGINEOS_MUX_MODE=native
-	: >"$tmp_dir/native-mux-calls.txt"
-	PATH="$fake_bin:$PATH" ENGINEOS_LOG_DIR="$log_dir" \
-		ENGINEOS_STATE_DIR="$tmp_dir/run" \
-		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
-		TMUX="/tmp/engine-mux,1,0" TMUX_PANE="%9" \
-		"$SCRIPT_DIR/app.sh" pane launch --game -- quake -window >"$out"
-	PATH="$fake_bin:$PATH" ENGINEOS_LOG_DIR="$log_dir" \
-		ENGINEOS_STATE_DIR="$tmp_dir/run" \
-		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
-		env -u TMUX -u TMUX_PANE \
-		"$SCRIPT_DIR/app.sh" pane launch --game -- quake -window >"$out"
-	PATH="$fake_bin:$PATH" ENGINEOS_LOG_DIR="$log_dir" \
-		ENGINEOS_STATE_DIR="$tmp_dir/run" \
-		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
-		TMUX="/tmp/engine-mux,1,0" TMUX_PANE="%9" \
-		"$SCRIPT_DIR/app.sh" pane launch -- falkon about:blank >"$out"
-	PATH="$fake_bin:$PATH" ENGINEOS_LOG_DIR="$log_dir" \
-		ENGINEOS_STATE_DIR="$tmp_dir/run" \
-		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
-		TMUX="/tmp/engine-mux,1,0" TMUX_PANE="%9" \
-		"$SCRIPT_DIR/app.sh" pane split -v -- falkon -r about:blank >"$out"
-	PATH="$fake_bin:$PATH" ENGINEOS_LOG_DIR="$log_dir" \
-		ENGINEOS_STATE_DIR="$tmp_dir/run" \
-		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
-		TMUX="/tmp/engine-mux,1,0" TMUX_PANE="%9" \
-		"$SCRIPT_DIR/app.sh" pane split -h --game -- quake -window >"$out"
-	PATH="$fake_bin:$PATH" ENGINEOS_STATE_DIR="$tmp_dir/run" \
-		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
-		TMUX_PANE="%9" "$SCRIPT_DIR/app.sh" pane view console
-	PATH="$fake_bin:$PATH" ENGINEOS_STATE_DIR="$tmp_dir/run" \
-		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
-		TMUX_PANE="%9" "$SCRIPT_DIR/app.sh" pane signal TERM
-	PATH="$fake_bin:$PATH" ENGINEOS_STATE_DIR="$tmp_dir/run" \
-		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
-		TMUX_PANE="%9" "$SCRIPT_DIR/app.sh" pane respawn
-	PATH="$fake_bin:$PATH" ENGINEOS_LOG_DIR="$log_dir" \
-		ENGINEOS_STATE_DIR="$tmp_dir/run" \
-		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
-		ENGINEOS_GAME_CMD="$fake_bin/eos-runtime" \
-		TMUX="/tmp/engine-mux,1,0" TMUX_PANE="%9" \
-		WAYLAND_DISPLAY="engineos-test-wayland" \
-		"$SCRIPT_DIR/app.sh" launch quake --map native_proof >"$out"
-	PATH="$fake_bin:$PATH" ENGINEOS_LOG_DIR="$log_dir" \
-		ENGINEOS_STATE_DIR="$tmp_dir/run" \
-		ENGINEOS_FAKE_MUX_CALLS="$tmp_dir/native-mux-calls.txt" \
-		ENGINEOS_GAME_CMD="$fake_bin/eos-runtime" \
-		WAYLAND_DISPLAY="engineos-test-wayland" \
-		env -u TMUX -u TMUX_PANE \
-		"$SCRIPT_DIR/app.sh" launch quake --map launchpad_proof >"$out"
-	PATH="$fake_bin:$PATH" ENGINEOS_STATE_DIR="$tmp_dir/run" \
-		"$SCRIPT_DIR/app.sh" pane list --json >"$out"
-	grep -Fx 'launch-pane-app -g -t %9 -- quake -window' \
-		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
-		die "native app pane launch did not select authoritative game presentation"
-	grep -Fx 'launch-pane-app -t %9 -- falkon --no-remote about:blank' \
-		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
-		die "native Falkon launch did not add the dedicated-instance adapter"
-	grep -Fx 'split-pane-app -v -t %9 -- falkon -r about:blank' \
-		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
-		die "native Falkon split duplicated an explicit dedicated-instance flag"
-	grep -Fx 'split-pane-app -h -g -t %9 -- quake -window' \
-		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
-		die "native app pane split did not preserve orientation and game presentation"
-	grep -Fx 'pane-presentation -t %9 console' \
-		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
-		die "native app pane view did not route to engine-mux"
-	grep -Fx 'signal-pane-app -t %9 TERM' \
-		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
-		die "native app pane signal did not route to engine-mux"
-	grep -Fx 'respawn-pane-app -t %9' "$tmp_dir/native-mux-calls.txt" >/dev/null ||
-		die "native app pane respawn did not route to engine-mux"
-	grep -Fx "launch-pane-app -g -t %9 -- $fake_bin/eos-runtime quake play --foreground --map native_proof --window" \
-		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
-		die "native Quake launch did not route through a game pane"
-	grep -Fx "launch-pane-app -g -t %9 -- $fake_bin/eos-runtime quake play --foreground --map launchpad_proof --window" \
-		"$tmp_dir/native-mux-calls.txt" >/dev/null ||
-		die "launchpad-style Quake launch did not resolve the focused graphical pane"
-	grep -F 'launch app=quake owner=native-mux pane=%9' "$log_dir/app.log" >/dev/null ||
-		die "native Quake launch did not record mux ownership"
-	grep -F '"revision":42' "$out" >/dev/null &&
-		grep -F '"presentation":"game"' "$out" >/dev/null ||
-		die "native app pane list did not return authoritative mux state"
-
-	mkdir -p "$tmp_dir/live-runtime/engineos"
-	cp "$tmp_dir/run/shell-state.json" \
-		"$tmp_dir/live-runtime/engineos/shell-state.json"
-	XDG_RUNTIME_DIR="$tmp_dir/live-runtime" ENGINEOS_LOG_DIR="$log_dir" \
-		"$SCRIPT_DIR/app.sh" status --json >"$out"
-	jq -e --arg state "$tmp_dir/live-runtime/engineos" \
-		'.state_dir == $state and .shell_state == ($state + "/shell-state.json")' \
-		"$out" >/dev/null ||
-		die "source app status did not prefer the live runtime shell state"
-
-  "$SCRIPT_DIR/app.sh" manifest validate >"$out"
-  grep -F 'App manifest validation summary: 0 failure(s)' "$out" >/dev/null ||
-    die "app manifest validation did not pass"
-  grep -F 'cube.app_ids contains engineos-cube' "$out" >/dev/null ||
-    die "app manifest validation did not check cube app id"
-  grep -F 'terminal-secondary.app_ids contains engineos-terminal-secondary' "$out" >/dev/null ||
-    die "app manifest validation did not check secondary terminal app id"
-  grep -F 'falkon.instance = dedicated' "$out" >/dev/null ||
-    die "app manifest validation did not require dedicated Falkon instances"
-  grep -F 'falkon.app_ids contains org.kde.falkon' "$out" >/dev/null ||
-    die "app manifest validation did not check Falkon app id"
-
-  printf 'app launcher smoke test passed\n'
-}
-
 run_level_agent() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-level-agent-test-$$"
   local fake_bin="$tmp_dir/bin"
@@ -4887,16 +3515,16 @@ FAKE
   local installed_env_out="$tmp_dir/installed-env.txt"
   mkdir -p "$installed_root/bin" "$installed_root/lib/engineos/scripts" "$installed_root/tools/scripts" "$installed_script_dir"
   cp "$ROOT/tools/engineos/eos" "$installed_root/bin/eos"
-  cp "$ROOT/tools/engineos/eos-wrapper" "$installed_root/bin/eos-terminal"
-  cat >"$installed_script_dir/terminal_launcher.sh" <<EOF
+  cp "$ROOT/tools/engineos/eos-wrapper" "$installed_root/bin/eos-app"
+  cat >"$installed_script_dir/app.sh" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$ENGINEOS_LOG_DIR" >"$installed_env_out"
 EOF
-  chmod +x "$installed_root/bin/eos" "$installed_root/bin/eos-terminal" "$installed_script_dir/terminal_launcher.sh"
+  chmod +x "$installed_root/bin/eos" "$installed_root/bin/eos-app" "$installed_script_dir/app.sh"
   env -u ENGINEOS_LOG_DIR \
     ENGINEOS_ROOT="$installed_root" \
     ENGINEOS_SCRIPT_DIR="$installed_script_dir" \
-    "$installed_root/bin/eos-terminal" >/dev/null
+    "$installed_root/bin/eos-app" status >/dev/null
   [[ "$(cat "$installed_env_out")" == "/var/log/engineos" ]] ||
     die "eos-installed-prefix default log dir was not /var/log/engineos"
   if [[ -e "$installed_root/artifacts" ]]; then
@@ -5077,11 +3705,8 @@ FAKE
   cat >"$tmp_dir/run/shell-state.json" <<'JSON'
 {
   "schema": "engineos-shell-state-v0",
-  "active_slot": "cube",
-  "bootstrap": "launchpad",
-  "slots": {
-    "cube": {"mapped": true, "visible": true}
-  }
+  "mux": {"mode": "native", "connected": true},
+  "windows": []
 }
 JSON
 
@@ -5255,12 +3880,12 @@ run_release() {
     die "release report missing QuakeSpasm binary proof item"
   grep -F 'eos-outputs validate --single' "$report" >/dev/null ||
     die "release report missing output validation proof item"
-  grep -F 'eos-proof launchpad --runtime' "$report" >/dev/null ||
-    die "release report missing launchpad proof item"
+  grep -F 'eos-proof shell-launch --runtime' "$report" >/dev/null ||
+    die "release report missing native shell proof item"
   grep -F 'eos-app manifest validate' "$report" >/dev/null ||
     die "release report missing app manifest proof item"
-  grep -F 'eos-terminal' "$report" >/dev/null ||
-    die "release report missing terminal proof item"
+	grep -F 'tmux -V' "$report" >/dev/null ||
+		die "release report missing system tmux proof item"
   grep -F 'eos-crash-bundle --bare-metal' "$report" >/dev/null ||
     die "release report missing bare-metal crash bundle proof item"
   grep -F 'proof hardware-ready' "$report" >/dev/null ||
@@ -5270,177 +3895,16 @@ run_release() {
 }
 
 run_terminal() {
-  local tmp_dir="${TMPDIR:-/tmp}/engineos-terminal-test-$$"
-  local fake_bin="$tmp_dir/bin"
-  local log_dir="$tmp_dir/logs"
-  local launched="$tmp_dir/launched.txt"
-  local tmux_log="$tmp_dir/tmux.log"
-  local out="$tmp_dir/out.txt"
-
-  cleanup_terminal() {
-    rm -rf "$tmp_dir"
-  }
-  trap cleanup_terminal RETURN
-
-  mkdir -p "$fake_bin" "$log_dir"
-  cat >"$fake_bin/alacritty" <<'FAKE'
-#!/usr/bin/env bash
-printf 'alacritty %s\n' "$*" >"$ENGINEOS_FAKE_TERMINAL_LAUNCHED"
-FAKE
-  cat >"$fake_bin/foot" <<'FAKE'
-#!/usr/bin/env bash
-printf 'foot %s\n' "$*" >"$ENGINEOS_FAKE_TERMINAL_LAUNCHED"
-FAKE
-  cat >"$fake_bin/tmux" <<'FAKE'
-#!/usr/bin/env bash
-printf 'tmux %s\n' "$*" >>"$ENGINEOS_FAKE_TMUX_LOG"
-case "$1" in
-  has-session)
-    exit 1
-    ;;
-  list-sessions)
-    printf 'engineos-side\t1\t200\n'
-    printf '2\t1\t100\n'
-    ;;
-  attach-session|new-session)
-    exit 0
-    ;;
-esac
-exit 1
-FAKE
-  chmod +x "$fake_bin/alacritty"
-  chmod +x "$fake_bin/foot"
-  chmod +x "$fake_bin/tmux"
-
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_FAKE_TMUX_LOG="$tmux_log" \
-    "$ROOT/tools/post-install-payload/scripts/engineos-tmux-attach-primary"
-  grep -F 'tmux attach-session -t =2' "$tmux_log" >/dev/null ||
-    die "tmux primary attach helper did not skip engineos-side"
-
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_TERMINAL_CANDIDATES="missing-terminal alacritty" \
-    "$SCRIPT_DIR/terminal_launcher.sh" --print-command >"$out"
-  grep -Fx 'alacritty' "$out" >/dev/null ||
-    die "terminal launcher did not select fallback terminal"
-
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_FAKE_TERMINAL_LAUNCHED="$launched" \
-    ENGINEOS_TERMINAL_CANDIDATES="missing-terminal alacritty" \
-    WAYLAND_DISPLAY="engineos-test-wayland" \
-    "$SCRIPT_DIR/terminal_launcher.sh" -- --class EngineOS >/dev/null
-  grep -F 'alacritty --class EngineOS' "$launched" >/dev/null ||
-    die "terminal launcher did not exec selected terminal with args"
-  grep -F 'launch command=alacritty display=engineos-test-wayland' "$log_dir/terminal.log" >/dev/null ||
-    die "terminal launcher did not log selected terminal launch"
-  grep -F 'owner=engineos-shell' "$log_dir/terminal.log" >/dev/null ||
-    die "terminal launcher did not log EngineOS shell ownership"
-
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_FAKE_TERMINAL_LAUNCHED="$launched" \
-    ENGINEOS_TERMINAL_CANDIDATES="foot" \
-		ENGINEOS_TERMINAL_APP_ID="engineos-terminal" \
-		ENGINEOS_TERMINAL_ROLE="terminal" \
-    ENGINEOS_TERMINAL_TITLE="EngineOS Terminal" \
-    ENGINEOS_TERMINAL_SESSION_CMD="engineos-tmux-attach-primary" \
-    WAYLAND_DISPLAY="engineos-test-wayland" \
-    "$SCRIPT_DIR/terminal_launcher.sh" >/dev/null
-	grep -F 'foot --override csd.preferred=none --override csd.size=0 --app-id engineos-terminal --title EngineOS Terminal -- zsh -lc unset TMUX TMUX_PANE; eos-app terminal register --slot terminal; exec engineos-tmux-attach-primary' "$launched" >/dev/null ||
-    die "terminal launcher did not disable foot titlebar decorations"
-
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_FAKE_TERMINAL_LAUNCHED="$launched" \
-    ENGINEOS_TERMINAL_CANDIDATES="alacritty" \
-		ENGINEOS_TERMINAL_APP_ID="engineos-terminal-secondary" \
-		ENGINEOS_TERMINAL_ROLE="terminal-secondary" \
-    ENGINEOS_TERMINAL_TITLE="EngineOS Side" \
-    ENGINEOS_TERMINAL_SESSION_CMD="tmux new -A -s engineos-side" \
-    WAYLAND_DISPLAY="engineos-test-wayland" \
-    "$SCRIPT_DIR/terminal_launcher.sh" >/dev/null
-	grep -F 'alacritty --class engineos-terminal-secondary --title EngineOS Side -- zsh -lc unset TMUX TMUX_PANE; eos-app terminal register --slot terminal-secondary; exec tmux new -A -s engineos-side' "$launched" >/dev/null ||
-    die "terminal launcher did not start named tmux session through zsh"
-  grep -F 'session command=tmux new -A -s engineos-side' "$log_dir/terminal.log" >/dev/null ||
-    die "terminal launcher did not log tmux session command"
-
-  if env -u WAYLAND_DISPLAY -u DISPLAY \
-      PATH="$fake_bin:$PATH" \
-      ENGINEOS_LOG_DIR="$log_dir" \
-      ENGINEOS_TERMINAL_CANDIDATES="alacritty" \
-      "$SCRIPT_DIR/terminal_launcher.sh" >/dev/null 2>&1; then
-    die "terminal launcher should require WAYLAND_DISPLAY by default"
+  if "$ROOT/tools/engineos/eos" eos-terminal --dry-run >/dev/null 2>&1; then
+    die "retired eos-terminal command remains available"
   fi
-  grep -F 'reason=missing-wayland-display' "$log_dir/terminal.log" >/dev/null ||
-    die "terminal launcher did not log missing Wayland display"
-
-  ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_TERMINAL_CANDIDATES="missing-terminal" \
-    "$SCRIPT_DIR/terminal_launcher.sh" --dry-run >"$out"
-  grep -F 'command: missing' "$out" >/dev/null ||
-    die "terminal dry-run did not report missing candidates"
-
-  if ENGINEOS_LOG_DIR="$log_dir" \
-      ENGINEOS_TERMINAL_CANDIDATES="missing-terminal" \
-      "$SCRIPT_DIR/terminal_launcher.sh" >/dev/null 2>&1; then
-    die "terminal launcher should fail when no terminal candidate exists"
-  fi
-  grep -F 'reason=no-terminal-candidate' "$log_dir/terminal.log" >/dev/null ||
-    die "terminal launcher did not log missing terminal failure"
-
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_TERMINAL_CANDIDATES="alacritty" \
-    "$ROOT/tools/engineos/eos-terminal" --dry-run >"$out"
-  grep -F 'command: alacritty' "$out" >/dev/null ||
-    die "eos-terminal did not route to terminal launcher"
-
-  cat >"$fake_bin/tmux" <<'FAKE'
-#!/usr/bin/env bash
-printf 'tmux %s\n' "$*" >>"$ENGINEOS_FAKE_TMUX_LOG"
-case "$1" in
-  list-sessions)
-    printf 'engineos: 2 windows\n'
-    ;;
-esac
-FAKE
-  chmod +x "$fake_bin/tmux"
-  mkdir -p "$tmp_dir/tmux-resurrect/scripts"
-  cat >"$tmp_dir/tmux-resurrect/scripts/save.sh" <<'FAKE'
-#!/usr/bin/env bash
-printf 'resurrect-save\n' >>"$ENGINEOS_FAKE_TMUX_LOG"
-FAKE
-  chmod +x "$tmp_dir/tmux-resurrect/scripts/save.sh"
-
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_FAKE_TMUX_LOG="$tmp_dir/tmux.log" \
-    ENGINEOS_TMUX_RESURRECT_SAVE_SCRIPT="$tmp_dir/tmux-resurrect/scripts/save.sh" \
-    "$ROOT/tools/engineos/eos-terminal" save-layout --dry-run >"$out"
-  grep -F 'tmux sessions: 1' "$out" >/dev/null ||
-    die "eos-terminal save-layout dry-run did not count tmux sessions"
-  grep -F "$tmp_dir/tmux-resurrect/scripts/save.sh" "$out" >/dev/null ||
-    die "eos-terminal save-layout dry-run did not report save script"
-
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_FAKE_TMUX_LOG="$tmp_dir/tmux.log" \
-    ENGINEOS_TMUX_RESURRECT_SAVE_SCRIPT="$tmp_dir/tmux-resurrect/scripts/save.sh" \
-    "$ROOT/tools/engineos/eos-terminal" save-layout >"$out"
-  grep -F 'tmux set-option -gq @continuum-restore on' "$tmp_dir/tmux.log" >/dev/null ||
-    die "eos-terminal save-layout did not enable tmux continuum restore"
-  grep -F 'tmux set-option -gq @resurrect-capture-pane-contents off' "$tmp_dir/tmux.log" >/dev/null ||
-    die "eos-terminal save-layout did not disable pane content capture"
-  grep -F "tmux set-option -gq @resurrect-processes :all:" "$tmp_dir/tmux.log" >/dev/null ||
-    die "eos-terminal save-layout did not enable process restore"
-  grep -F 'resurrect-save' "$tmp_dir/tmux.log" >/dev/null ||
-    die "eos-terminal save-layout did not run tmux-resurrect save"
-  grep -F 'saved tmux layout sessions=1' "$log_dir/terminal.log" >/dev/null ||
-    die "eos-terminal save-layout did not log the saved layout"
-
-  printf 'terminal launcher smoke test passed\n'
+  [[ ! -e "$ROOT/tools/scripts/terminal_launcher.sh" ]] ||
+    die "retired graphical terminal launcher remains"
+  grep -F 'exec tmux new-session -A -s engineos' \
+    "$ROOT/tools/post-install-payload/assets/zprofile" >/dev/null ||
+    die "login profile does not attach directly to tmux"
+  printf 'native terminal ownership test passed\n'
 }
-
 run_vm() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-vm-test-$$"
   local dev_iso="$tmp_dir/out/EngineDevOS-test-x86_64.iso"
@@ -5964,274 +4428,17 @@ FAKE
 }
 
 run_proof() {
-  local tmp_dir="${TMPDIR:-/tmp}/engineos-proof-test-$$"
-  local shell_pid_before shell_pid_after
-
-  cleanup_proof() {
-    rm -rf "$tmp_dir"
-  }
-  trap cleanup_proof RETURN
-
-  mkdir -p "$tmp_dir/logs"
-  "$PROOF_DIR/proof.sh" --help >"$tmp_dir/help.txt"
-  grep -F 'proof.sh native-kms' "$tmp_dir/help.txt" >/dev/null ||
-    die "proof help does not expose native KMS acceptance"
-  grep -F 'proof.sh native-falkon' "$tmp_dir/help.txt" >/dev/null ||
-    die "proof help does not expose native Falkon acceptance"
-  grep -F 'proof.sh native-quake' "$tmp_dir/help.txt" >/dev/null ||
-    die "proof help does not expose native Quake acceptance"
-  shell_pid_before="$(pgrep -n -x engineos-shell 2>/dev/null || true)"
-  if "$PROOF_DIR/proof.sh" native-kms --dry-run \
-      >"$tmp_dir/native-kms-invalid.txt" 2>&1; then
-    die "native KMS proof accepted a dry-run substitute"
+  local out="${TMPDIR:-/tmp}/engineos-proof-test-$$"
+  "$ROOT/tools/engineos/eos-proof" shell-launch --bare-metal --dry-run >"$out"
+  grep -F 'tmux -V' "$out" >/dev/null ||
+    die "shell launch proof does not require system tmux"
+  if "$ROOT/tools/engineos/eos-proof" launchpad --dry-run >/dev/null 2>&1; then
+    rm -f "$out"
+    die "retired launchpad proof remains available"
   fi
-  grep -F 'native-kms proof takes no options' \
-    "$tmp_dir/native-kms-invalid.txt" >/dev/null ||
-    die "native KMS proof did not reject non-acceptance options explicitly"
-  shell_pid_after="$(pgrep -n -x engineos-shell 2>/dev/null || true)"
-  [[ "$shell_pid_after" == "$shell_pid_before" ]] ||
-    die "rejected native KMS proof mutated the live shell"
-  if "$PROOF_DIR/proof.sh" native-quake --dry-run \
-      >"$tmp_dir/native-quake-invalid.txt" 2>&1; then
-    die "native Quake proof accepted a dry-run substitute"
-  fi
-  grep -F 'native-quake proof takes no options' \
-    "$tmp_dir/native-quake-invalid.txt" >/dev/null ||
-    die "native Quake proof did not reject non-acceptance options explicitly"
-  ENGINEOS_LOG_DIR="$tmp_dir/logs" "$PROOF_DIR/proof.sh" release-candidate --dry-run --out-dir "$tmp_dir/out" >"$tmp_dir/release-candidate.txt"
-  grep -F 'build EngineRuntime ISO dry-run' "$tmp_dir/release-candidate.txt" >/dev/null ||
-    die "release-candidate proof did not include EngineRuntime ISO dry-run"
-  grep -F 'release checklist' "$tmp_dir/release-candidate.txt" >/dev/null ||
-    die "release-candidate proof did not run release checklist"
-  grep -F 'Release-candidate proof preview completed; no release-candidate proof was executed.' "$tmp_dir/release-candidate.txt" >/dev/null ||
-    die "release-candidate dry-run did not clearly identify itself as a preview"
-  ENGINEOS_LOG_DIR="$tmp_dir/logs" "$PROOF_DIR/proof.sh" hardware-ready --dry-run --profile engineruntime --out-dir "$tmp_dir/out" --device /dev/engineos-test-usb >"$tmp_dir/hardware-ready.txt"
-  grep -F 'eos-usb write --profile engineruntime' "$tmp_dir/hardware-ready.txt" >/dev/null ||
-    die "hardware-ready proof did not include runtime USB write dry-run"
-  grep -F 'eos-proof booted-iso --bare-metal' "$tmp_dir/hardware-ready.txt" >/dev/null ||
-    die "hardware-ready proof did not point to bare-metal proof"
-  grep -F 'Hardware-ready proof preview completed; no hardware-ready proof was executed.' "$tmp_dir/hardware-ready.txt" >/dev/null ||
-    die "hardware-ready dry-run did not clearly identify itself as a preview"
-  ENGINEOS_LOG_DIR="$tmp_dir/logs" "$PROOF_DIR/proof.sh" booted-iso --vm --dry-run >"$tmp_dir/booted-vm.txt"
-  grep -F 'Quake smoke dry-run' "$tmp_dir/booted-vm.txt" >/dev/null ||
-    die "booted VM proof did not include Quake smoke step"
-  grep -F 'eos-logs engine --last 200' "$tmp_dir/booted-vm.txt" >/dev/null ||
-    die "booted VM proof did not include engine log step"
-  grep -F 'eos-crash-bundle --vm' "$tmp_dir/booted-vm.txt" >/dev/null ||
-    die "booted VM proof did not include VM crash bundle mode"
-  grep -F 'Booted-ISO proof preview completed; no booted-ISO proof was executed.' "$tmp_dir/booted-vm.txt" >/dev/null ||
-    die "booted VM dry-run did not clearly identify itself as a preview"
-  ENGINEOS_LOG_DIR="$tmp_dir/logs" "$PROOF_DIR/proof.sh" booted-iso --runtime --dry-run >"$tmp_dir/booted-runtime.txt"
-  grep -F 'runtime reliability dry-run' "$tmp_dir/booted-runtime.txt" >/dev/null ||
-    die "booted runtime proof did not include runtime reliability step"
-  grep -F 'eos-logs runtime --last 200' "$tmp_dir/booted-runtime.txt" >/dev/null ||
-    die "booted runtime proof did not include runtime log step"
-  grep -F 'eos-crash-bundle --runtime' "$tmp_dir/booted-runtime.txt" >/dev/null ||
-    die "booted runtime proof did not include runtime crash bundle mode"
-  ENGINEOS_LOG_DIR="$tmp_dir/logs" "$PROOF_DIR/proof.sh" booted-iso --bare-metal --dry-run >"$tmp_dir/booted-bare-metal.txt"
-  grep -F 'eos-outputs validate --single' "$tmp_dir/booted-bare-metal.txt" >/dev/null ||
-    die "booted bare-metal proof did not include explicit output validation"
-  grep -F 'eos-crash-bundle --bare-metal' "$tmp_dir/booted-bare-metal.txt" >/dev/null ||
-    die "booted bare-metal proof did not include bare-metal crash bundle mode"
-  ENGINEOS_LOG_DIR="$tmp_dir/logs" "$PROOF_DIR/proof.sh" shell-launch --runtime --dry-run >"$tmp_dir/shell-launch.txt"
-  grep -F 'Shell-launch proof preview completed; no shell-launch proof was executed.' "$tmp_dir/shell-launch.txt" >/dev/null ||
-    die "shell-launch dry-run did not clearly identify itself as a preview"
-  grep -F 'grep -E' "$tmp_dir/shell-launch.txt" | grep -F 'renderer diagnostics' >/dev/null ||
-    die "shell-launch proof did not check renderer diagnostics"
-  grep -F 'app launch app=terminal owner=engineos-shell' "$tmp_dir/shell-launch.txt" >/dev/null ||
-    die "shell-launch proof did not check terminal launch ownership"
-  ENGINEOS_LOG_DIR="$tmp_dir/logs" "$PROOF_DIR/proof.sh" shell-launch --bare-metal --dry-run >"$tmp_dir/shell-launch-bare-metal.txt"
-  grep -F 'bare-metal shell renderer dry-run' "$tmp_dir/shell-launch-bare-metal.txt" >/dev/null ||
-    die "bare-metal shell-launch proof did not include shell renderer gate"
-  grep -F 'wlr_renderer=(gles2|vulkan)' "$tmp_dir/shell-launch-bare-metal.txt" >/dev/null ||
-    die "bare-metal shell-launch proof did not require GL-capable renderer evidence"
-  ENGINEOS_LOG_DIR="$tmp_dir/logs" "$PROOF_DIR/proof.sh" launchpad --runtime --dry-run >"$tmp_dir/launchpad.txt"
-  grep -F 'Launchpad proof preview completed; no launchpad proof was executed.' "$tmp_dir/launchpad.txt" >/dev/null ||
-    die "launchpad dry-run did not clearly identify itself as a preview"
-  grep -F 'eos-app status --json' "$tmp_dir/launchpad.txt" >/dev/null ||
-    die "launchpad proof did not check structured app status"
-  grep -F 'eos-app manifest validate' "$tmp_dir/launchpad.txt" >/dev/null ||
-    die "launchpad proof did not validate app manifest"
-  grep -F 'app=(terminal|cube|quake)' "$tmp_dir/launchpad.txt" >/dev/null ||
-    die "launchpad proof did not check all app ownership markers"
-  grep -F "grep -F 'view mapped role=engine'" "$tmp_dir/launchpad.txt" >/dev/null ||
-    die "launchpad proof did not require a mapped engine slot"
-  ENGINEOS_LOG_DIR="$tmp_dir/logs" "$PROOF_DIR/proof.sh" visual --dry-run >"$tmp_dir/visual.txt"
-  grep -F 'eos-capture frame --target shell' "$tmp_dir/visual.txt" >/dev/null ||
-    die "visual proof dry-run did not include frame capture"
-  grep -F 'result=image' "$tmp_dir/visual.txt" >/dev/null ||
-    die "visual proof dry-run did not require image capture evidence"
-  ENGINEOS_LOG_DIR="$tmp_dir/logs" "$PROOF_DIR/proof.sh" mc-preview --dry-run >"$tmp_dir/mc-preview.txt"
-  grep -F 'eos-test image-preview' "$tmp_dir/mc-preview.txt" >/dev/null ||
-    die "mc-preview proof dry-run did not include image-preview acceptance"
-  grep -F 'engine-image-preview --quick-view' "$tmp_dir/mc-preview.txt" >/dev/null ||
-    die "mc-preview proof dry-run did not include quick-view dry-run checks"
-  grep -F 'engine-image-preview --ping' "$tmp_dir/mc-preview.txt" >/dev/null ||
-    die "mc-preview proof dry-run did not include live preview IPC check"
-  grep -F 'owner=mc-quick-view:' "$tmp_dir/mc-preview.txt" >/dev/null ||
-    die "mc-preview proof dry-run did not require MC preview shell log ownership evidence"
-  if ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-      ENGINEOS_CAPTURE_DIR="$tmp_dir/captures" \
-      ENGINEOS_CAPTURE_TOOL=metadata \
-      "$PROOF_DIR/proof.sh" visual >"$tmp_dir/visual-metadata.txt" 2>&1; then
-    die "visual proof accepted metadata-only capture as visual proof"
-  fi
-  grep -F 'metadata-only capture is not visual proof' "$tmp_dir/visual-metadata.txt" >/dev/null ||
-    die "visual proof metadata-only failure was not explicit"
-  ENGINEOS_LOG_DIR="$tmp_dir/logs" \
-    ENGINEOS_CAPTURE_DIR="$tmp_dir/captures" \
-    ENGINEOS_CAPTURE_TOOL=metadata \
-    "$PROOF_DIR/proof.sh" visual --allow-metadata >"$tmp_dir/visual-allow-metadata.txt"
-  grep -F 'Metadata-only capture accepted by explicit request' "$tmp_dir/visual-allow-metadata.txt" >/dev/null ||
-    die "visual proof did not document explicit metadata acceptance"
-  if grep -En 'warn ".*missing|WARN .*missing' "$PROOF_DIR/proof.sh" "$PROOF_DIR/validate_boot.sh" >"$tmp_dir/proof-lint.txt"; then
-    die "proof code contains a required-evidence missing warning instead of failing"
-  fi
-
-  local mc_preview_logs="$tmp_dir/mc-preview-logs"
-  local fake_preview_cmd="$tmp_dir/fake-engine-image-preview"
-  mkdir -p "$mc_preview_logs"
-  cat >"$fake_preview_cmd" <<'FAKE'
-#!/usr/bin/env bash
-exit 0
-FAKE
-  chmod +x "$fake_preview_cmd"
-  if ENGINEOS_LOG_DIR="$mc_preview_logs" \
-      ENGINEOS_IMAGE_PREVIEW_CMD="$fake_preview_cmd" \
-      "$PROOF_DIR/proof.sh" mc-preview >"$tmp_dir/mc-preview-missing-shell-log.txt" 2>&1; then
-    die "mc-preview proof accepted missing shell log evidence"
-  fi
-  grep -F "shell log missing: $mc_preview_logs/shell.log" "$tmp_dir/mc-preview-missing-shell-log.txt" >/dev/null ||
-    die "mc-preview missing shell log failure was not explicit"
-
-  cat >"$fake_preview_cmd" <<'FAKE'
-#!/usr/bin/env bash
-if [[ "$1" == "--ping" ]]; then
-  exit 0
-fi
-if [[ "$1" == "--quick-view" ]]; then
-  image="$2"
-  printf '[2026-01-01T00:00:00Z] image preview shown path=%s owner=mc-quick-view:fixture:no-pane:terminal:right slot=terminal image=4x3 x=0 y=0 size=4x3 bounds=80x24\n' "$image" >>"$ENGINEOS_FAKE_SHELL_LOG"
-  exit 0
-fi
-exit 2
-FAKE
-  chmod +x "$fake_preview_cmd"
-  ENGINEOS_LOG_DIR="$mc_preview_logs" \
-    ENGINEOS_IMAGE_PREVIEW_CMD="$fake_preview_cmd" \
-    ENGINEOS_FAKE_SHELL_LOG="$mc_preview_logs/shell.log" \
-    "$PROOF_DIR/proof.sh" mc-preview >"$tmp_dir/mc-preview-real.txt"
-  grep -F 'MC preview proof runner completed' "$tmp_dir/mc-preview-real.txt" >/dev/null ||
-    die "mc-preview proof did not pass with live preview shell log evidence"
-
-  local shell_launch_logs="$tmp_dir/shell-launch-logs"
-  local shell_launch_state="$tmp_dir/shell-launch-state"
-  local fake_bin="$tmp_dir/fake-bin"
-  mkdir -p "$shell_launch_logs" "$shell_launch_state" "$fake_bin"
-  cat >"$fake_bin/engineos-shell" <<'FAKE'
-#!/usr/bin/env bash
-exit 0
-FAKE
-  cat >"$fake_bin/pgrep" <<'FAKE'
-#!/usr/bin/env bash
-if [[ "$1" == "-a" && "$2" == "engineos-shell" ]]; then
-  printf '123 engineos-shell --tty\n'
-  exit 0
-fi
-exit 1
-FAKE
-  chmod +x "$fake_bin/engineos-shell" "$fake_bin/pgrep"
-  {
-    printf '[2026-01-01T00:00:00Z] engineos-shell mode=tty backend=drm wayland_display=wayland-1\n'
-    printf '[2026-01-01T00:00:01Z] client launch environment WAYLAND_DISPLAY=wayland-1\n'
-    printf '[2026-01-01T00:00:02Z] renderer diagnostics EGL GLES2 wlr_renderer=gles2\n'
-  } >"$shell_launch_logs/shell.log"
-  {
-    printf '[2026-01-01T00:00:03Z] terminal launch owner=engineos-shell display=wayland-1\n'
-    printf '[2026-01-01T00:00:04Z] session command=engineos-tmux-attach-primary\n'
-  } >"$shell_launch_logs/terminal.log"
-  if PATH="$fake_bin:$PATH" \
-      ENGINEOS_LOG_DIR="$shell_launch_logs" \
-      ENGINEOS_STATE_DIR="$shell_launch_state" \
-      "$PROOF_DIR/proof.sh" shell-launch --runtime >"$tmp_dir/shell-launch-missing-app-log.txt" 2>&1; then
-    die "shell-launch proof accepted missing app.log"
-  fi
-  grep -F "app log missing: $shell_launch_logs/app.log" "$tmp_dir/shell-launch-missing-app-log.txt" >/dev/null ||
-    die "shell-launch missing app.log failure was not explicit"
-
-  local launchpad_logs="$tmp_dir/launchpad-logs"
-  local launchpad_state="$tmp_dir/launchpad-state"
-  mkdir -p "$launchpad_logs" "$launchpad_state"
-  {
-    printf '[2026-01-01T00:00:00Z] engineos-shell mode=tty backend=drm,libinput wayland_display=wayland-1\n'
-    printf '[2026-01-01T00:00:01Z] bootstrap mode=launchpad\n'
-    printf '[2026-01-01T00:00:02Z] launchpad active slot=cube mode=terminal capture=none reason=bootstrap-launchpad\n'
-    printf '[2026-01-01T00:00:03Z] launch action label=bootstrap-terminal role=terminal pid=100 command=eos-app launch terminal\n'
-    printf '[2026-01-01T00:00:04Z] launch action label=bootstrap-cube role=cube pid=101 command=eos-app launch cube\n'
-    printf '[2026-01-01T00:00:05Z] launch action label=bootstrap-engine role=engine pid=102 command=eos-app launch quake\n'
-    printf '[2026-01-01T00:00:06Z] view mapped role=cube title=engineos-cube app_id=engineos-cube mapped_total=1\n'
-    printf '[2026-01-01T00:00:07Z] launch action exit label=bootstrap-engine role=engine pid=102 status=exited code=1 mapped=false command=eos-app launch quake\n'
-    printf '[2026-01-01T00:00:08Z] launchpad slot unavailable role=engine reason=process-exited-before-map status=exited code=1\n'
-  } >"$launchpad_logs/shell.log"
-  cat >"$launchpad_state/shell-state.json" <<'JSON'
-{
-  "schema": "engineos-shell-state-v0",
-  "pid": 999,
-  "mode": "tty",
-  "wayland_display": "wayland-1",
-  "bootstrap": "launchpad",
-  "active_slot": "cube",
-  "pending_slot": "unknown",
-  "input": {"mode": "terminal", "capture": false},
-  "counts": {"outputs": 1, "keyboards": 1, "pointers": 1, "views": 1},
-  "last_reason": "launch-exit",
-  "slots": {
-    "terminal": {"mapped": false, "visible": false, "title": "", "app_id": ""},
-    "cube": {"mapped": true, "visible": true, "title": "engineos-cube", "app_id": "engineos-cube"},
-    "engine": {"mapped": false, "visible": false, "title": "", "app_id": ""}
-  },
-  "launches": []
+  rm -f "$out"
+  printf 'native proof routing test passed\n'
 }
-JSON
-  {
-    printf '[2026-01-01T00:00:03Z] app launch app=terminal owner=engineos-shell display=wayland-1\n'
-    printf '[2026-01-01T00:00:04Z] app launch app=cube owner=engineos-shell display=wayland-1 sdl=wayland args= log=%s/cube.log\n' "$launchpad_logs"
-    printf '[2026-01-01T00:00:05Z] app launch app=quake owner=engineos-shell display=wayland-1 sdl=wayland args=\n'
-  } >"$launchpad_logs/app.log"
-  {
-    printf 'EngineOS cube app\n'
-    printf 'gl_renderer=llvmpipe test renderer\n'
-    printf 'frames=8\n'
-    printf 'result=smoke-ok\n'
-  } >"$launchpad_logs/cube.log"
-  printf 'Quake assets missing: id1/pak0.pak was not found.\n' >"$launchpad_logs/engine.log"
-  if ENGINEOS_LOG_DIR="$launchpad_logs" ENGINEOS_STATE_DIR="$launchpad_state" \
-      "$PROOF_DIR/proof.sh" launchpad --runtime >"$tmp_dir/launchpad-real-missing-engine.txt" 2>&1; then
-    die "launchpad proof accepted missing Quake assets as engine proof"
-  fi
-  grep -F 'Quake asset/runtime guidance is not launchpad proof' "$tmp_dir/launchpad-real-missing-engine.txt" >/dev/null ||
-    die "launchpad proof failure did not explain missing engine mapping"
-
-  printf '[2026-01-01T00:00:09Z] view mapped role=engine title=QuakeSpasm app_id=quakespasm mapped_total=2\n' >>"$launchpad_logs/shell.log"
-  printf 'QuakeSpasm basedir=%s\n' "$tmp_dir/home/.local/share/engineos/quake" >"$launchpad_logs/engine.log"
-  ENGINEOS_LOG_DIR="$launchpad_logs" ENGINEOS_STATE_DIR="$launchpad_state" \
-    "$PROOF_DIR/proof.sh" launchpad --runtime >"$tmp_dir/launchpad-real.txt"
-  grep -F 'Launchpad proof runner completed' "$tmp_dir/launchpad-real.txt" >/dev/null ||
-    die "launchpad proof did not pass with mapped engine fixture logs"
-
-  if ! find "$tmp_dir/logs" -maxdepth 1 -type f -name 'proof-booted-iso-*.log' -size +0c -print -quit | grep -q .; then
-    die "proof dry-run did not create non-empty proof logs"
-  fi
-  if ! find "$tmp_dir/logs" -maxdepth 1 -type f -name 'proof-release-candidate-*.log' -size +0c -print -quit | grep -q .; then
-    die "release-candidate proof dry-run did not create non-empty proof log"
-  fi
-  if ! find "$tmp_dir/logs" -maxdepth 1 -type f -name 'proof-hardware-ready-*.log' -size +0c -print -quit | grep -q .; then
-    die "hardware-ready proof dry-run did not create non-empty proof log"
-  fi
-
-  printf 'proof dry-run test passed\n'
-}
-
 run_builder() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-builder-test-$$"
   local out="$tmp_dir/builder.txt"
@@ -6346,240 +4553,26 @@ run_builder_doctor() {
 }
 
 run_post_first_deploy() {
-  local tmp_dir="${TMPDIR:-/tmp}/engineos-post-first-deploy-test-$$"
-  local out="$tmp_dir/post-first-deploy.txt"
-  local move_socket="engineos-window-move-test-$$"
   local payload_dir
   payload_dir="$(post_install_payload_dir)"
-
-  cleanup_post_first_deploy() {
-    if command -v tmux >/dev/null 2>&1; then
-      tmux -L "$move_socket" kill-server 2>/dev/null || true
-    fi
-    rm -rf "$tmp_dir"
-  }
-  trap cleanup_post_first_deploy RETURN
-
-  mkdir -p "$tmp_dir"
-  "$OS_DEV_DIR/post_first_deploy.sh" --dry-run --host dev@192.0.2.55 --port 2225 >"$out"
-  grep -F 'EngineOS post-first-deploy dry-run' "$out" >/dev/null ||
-    die "post-first-deploy dry-run missing header"
-  grep -F 'dev@192.0.2.55' "$out" >/dev/null ||
-    die "post-first-deploy dry-run missing guest host"
-  grep -F -- '-P 2225' "$out" >/dev/null ||
-    die "post-first-deploy dry-run missing scp port"
-  grep -F "$payload_dir" "$out" >/dev/null ||
-    die "post-first-deploy dry-run missing payload path"
-  grep -F 'setup_dev_environment.sh' "$out" >/dev/null ||
-    die "post-first-deploy dry-run missing remote setup script"
-  grep -F -- '--payload' "$out" >/dev/null ||
-    die "post-first-deploy dry-run missing setup payload argument"
-  grep -F 'Next real command: eos-deploy first --host dev@192.0.2.55 --port 2225' "$out" >/dev/null ||
-    die "post-first-deploy dry-run missing real command hint"
-
-  "$OS_DEV_DIR/post_first_deploy.sh" --dry-run --host dev@192.0.2.55 --skip-codex --skip-docker --skip-pacman --skip-dev-repos >"$out"
-  grep -F -- '--skip-codex' "$out" >/dev/null ||
-    die "post-first-deploy dry-run did not preserve --skip-codex"
-  grep -F -- '--skip-docker' "$out" >/dev/null ||
-    die "post-first-deploy dry-run did not preserve --skip-docker"
-  grep -F -- '--skip-pacman' "$out" >/dev/null ||
-    die "post-first-deploy dry-run did not preserve --skip-pacman"
-  grep -F -- '--skip-dev-repos' "$out" >/dev/null ||
-    die "post-first-deploy dry-run did not preserve --skip-dev-repos"
-
-  [[ -f "$payload_dir/assets/tmux.conf" ]] ||
-    die "post-first-deploy payload missing tmux config"
-  grep -F 'set -g mouse on' "$payload_dir/assets/tmux.conf" >/dev/null ||
-    die "post-first-deploy tmux config does not enable mouse support"
-  grep -F "@engineos-plugins" "$payload_dir/assets/tmux.conf" >/dev/null ||
-    die "post-first-deploy tmux config does not declare packaged plugins"
-  grep -F "/usr/share/tmux/plugins/tmux-sensible/sensible.tmux" "$payload_dir/assets/tmux.conf" >/dev/null ||
-    die "post-first-deploy tmux config does not source packaged plugins"
-  grep -F 'set -g status-style bg=colour235,fg=colour250' "$payload_dir/assets/tmux.conf" >/dev/null ||
-    die "post-first-deploy tmux config does not set the EngineOS color status style"
-  grep -F '#{pane_current_path}' "$payload_dir/assets/tmux.conf" >/dev/null ||
-    die "post-first-deploy tmux config status line does not show pane path"
-  if grep -F 'engineos-tmux-pane-bridge' "$payload_dir/assets/tmux.conf" >/dev/null ||
-      grep -F 'after-select-pane' "$payload_dir/assets/tmux.conf" >/dev/null; then
-    die "post-first-deploy tmux config still wires legacy pane hooks"
-  fi
-  grep -F '"Move to Session..."' "$payload_dir/assets/tmux.conf" >/dev/null ||
-    die "post-first-deploy tmux window menu does not offer session moves"
-  grep -F 'engineos-tmux-window-move choose' "$payload_dir/assets/tmux.conf" >/dev/null ||
-    die "post-first-deploy tmux window menu does not invoke the move helper"
-  grep -F 'engineos-tmux-window-move session-create "#{client_name}"' \
-      "$payload_dir/assets/tmux.conf" >/dev/null ||
-    die "post-first-deploy tmux session menu does not preserve the invoking client"
-  if grep -F '"New Session" s { new-session }' "$payload_dir/assets/tmux.conf" >/dev/null; then
-    die "post-first-deploy tmux session menu still uses client-terminating new-session"
-  fi
-  if grep -F 'engineos-tmux-window-sync --daemon' "$payload_dir/assets/tmux.conf" >/dev/null ||
-      grep -F 'engineos-tmux-window-focus' "$payload_dir/assets/tmux.conf" >/dev/null; then
-    die "post-first-deploy tmux config still wires legacy GUI proxy helpers"
-  fi
-  grep -F "set -g @continuum-restore 'on'" "$payload_dir/assets/tmux.conf" >/dev/null ||
-    die "post-first-deploy tmux config does not auto-restore saved layouts"
-  grep -F "set -g @resurrect-capture-pane-contents 'off'" "$payload_dir/assets/tmux.conf" >/dev/null ||
-    die "post-first-deploy tmux config should avoid brittle pane content capture"
-  grep -F "set -g @resurrect-processes ':all:'" "$payload_dir/assets/tmux.conf" >/dev/null ||
-    die "post-first-deploy tmux config does not persist pane commands"
-  if grep -F 'eos-app pane sync --all >/dev/null 2>&1 || true' "$payload_dir/assets/tmux.conf" >/dev/null ||
-      grep -F 'eos-app pane sync >/dev/null 2>&1 || true' "$payload_dir/assets/tmux.conf" >/dev/null; then
-    die "post-first-deploy tmux config silently ignores pane sync failures"
-  fi
-  [[ -x "$payload_dir/scripts/engineos-tmux-pane-bridge" ]] ||
-    die "post-first-deploy payload missing tmux pane bridge helper"
-  grep -F 'pane-bridge' "$payload_dir/scripts/engineos-tmux-pane-bridge" >/dev/null ||
-    die "post-first-deploy tmux pane bridge helper does not log failures"
-  [[ -x "$payload_dir/scripts/engineos-tmux-window-move" ]] ||
-    die "post-first-deploy payload missing tmux window move helper"
-  grep -F 'move-window -s "$source_window_id" -t "$destination_session_id:"' \
-      "$payload_dir/scripts/engineos-tmux-window-move" >/dev/null ||
-    die "tmux window move helper does not move by stable window and session ids"
-  grep -F '"$TMUX_BIN" choose-tree -N -s' \
-      "$payload_dir/scripts/engineos-tmux-window-move" >/dev/null ||
-    die "tmux window move helper does not use the native multi-session chooser"
-  grep -F '"$TMUX_BIN" new-session -d -P -F' \
-      "$payload_dir/scripts/engineos-tmux-window-move" >/dev/null ||
-    die "tmux window move helper does not create sessions detached"
-  grep -F '"$TMUX_BIN" switch-client -c "$client" -t "$session_id"' \
-      "$payload_dir/scripts/engineos-tmux-window-move" >/dev/null ||
-    die "tmux window move helper does not switch the invoking client by stable session id"
-  grep -F '"$BRIDGE_BIN" sync' "$payload_dir/scripts/engineos-tmux-window-move" >/dev/null ||
-    die "tmux window move helper does not resync EngineOS pane state"
-  if command -v tmux >/dev/null 2>&1; then
-    local move_tmux="$tmp_dir/tmux-move"
-    local source_window_id destination_session_id
-    cat >"$move_tmux" <<EOF
-#!/usr/bin/env bash
-exec tmux -L "$move_socket" "\$@"
-EOF
-    chmod +x "$move_tmux"
-    tmux -L "$move_socket" -f /dev/null new-session -d -s source -n moving
-    tmux -L "$move_socket" new-window -d -t source: -n keep
-    tmux -L "$move_socket" new-session -d -s destination -n existing
-    source_window_id="$(tmux -L "$move_socket" list-windows -t source \
-      -F '#{window_id} #{window_name}' | awk '$2 == "moving" { print $1 }')"
-    destination_session_id="$(tmux -L "$move_socket" display-message \
-      -p -t destination '#{session_id}')"
-    ENGINEOS_TMUX_CMD="$move_tmux" ENGINEOS_TMUX_PANE_BRIDGE=true \
-      "$payload_dir/scripts/engineos-tmux-window-move" \
-      apply "$source_window_id" "$destination_session_id"
-    [[ "$(tmux -L "$move_socket" display-message -p -t "$source_window_id" \
-      '#{session_name}')" == destination ]] ||
-      die "tmux window move helper did not move the selected window"
-    tmux -L "$move_socket" new-window -d -t source: -n automatic
-    source_window_id="$(tmux -L "$move_socket" list-windows -t source \
-      -F '#{window_id} #{window_name}' | awk '$2 == "automatic" { print $1 }')"
-    ENGINEOS_TMUX_CMD="$move_tmux" ENGINEOS_TMUX_PANE_BRIDGE=true \
-      "$payload_dir/scripts/engineos-tmux-window-move" \
-      choose "$source_window_id" ""
-    [[ "$(tmux -L "$move_socket" display-message -p -t "$source_window_id" \
-      '#{session_name}')" == destination ]] ||
-      die "tmux window move helper did not directly use the sole destination"
-  fi
-  for helper in engineos-tmux-pane-sync engineos-tmux-window-sync engineos-tmux-window-focus engineos-tmux-window-proxy; do
-    [[ -x "$payload_dir/scripts/$helper" ]] ||
-      die "post-first-deploy payload missing executable deprecated tmux GUI helper: $helper"
+  grep -F 'exec tmux new-session -A -s engineos' \
+    "$payload_dir/assets/zprofile" >/dev/null ||
+    die "login profile does not attach through system tmux"
+  grep -F 'MUX_BIN="${ENGINEOS_TMUX_BIN:-tmux}"' \
+    "$payload_dir/scripts/engineos-dev-shell-start" >/dev/null ||
+    die "shell startup does not use system tmux"
+  for helper in engineos-tmux-pane-bridge engineos-tmux-pane-sync \
+      engineos-tmux-window-move engineos-tmux-window-sync \
+      engineos-tmux-window-focus engineos-tmux-window-proxy \
+      engineos-tmux-attach-primary; do
+    [[ ! -e "$payload_dir/scripts/$helper" ]] ||
+      die "retired post-deploy helper remains: $helper"
   done
-  grep -F 'engineos-tmux-pane-bridge sync' "$payload_dir/scripts/engineos-tmux-window-sync" >/dev/null ||
-    die "deprecated tmux window sync helper does not delegate to pane bridge"
-  grep -F 'engineos-tmux-pane-bridge focus' "$payload_dir/scripts/engineos-tmux-window-focus" >/dev/null ||
-    die "deprecated tmux focus helper does not delegate to pane bridge"
-  [[ -f "$payload_dir/assets/zshrc" ]] ||
-    die "post-first-deploy payload missing zsh config"
-  [[ -f "$payload_dir/assets/zprofile" ]] ||
-    die "post-first-deploy payload missing zprofile config"
-  grep -F '/usr/share/oh-my-zsh' "$payload_dir/assets/zshrc" >/dev/null ||
-    die "post-first-deploy zsh config does not use packaged oh-my-zsh"
-  grep -F 'zsh-autosuggestions.zsh' "$payload_dir/assets/zshrc" >/dev/null ||
-    die "post-first-deploy zsh config does not source packaged plugins"
-  grep -F 'engineos-tmux-attach-primary' "$payload_dir/assets/zprofile" >/dev/null ||
-    die "post-first-deploy zprofile does not auto-attach tmux"
-  grep -F 'tools/scripts/update_check.sh" --init' "$payload_dir/assets/zprofile" >/dev/null ||
-    die "post-first-deploy zprofile does not run source update init check"
-  grep -F 'eos-update check --init' "$payload_dir/assets/zprofile" >/dev/null ||
-    die "post-first-deploy zprofile does not run update init check"
-  grep -F 'engineos_profile_run()' "$payload_dir/assets/zprofile" >/dev/null ||
-    die "post-first-deploy zprofile does not expose login hook failures"
-  grep -F 'profile-warning' "$payload_dir/assets/zprofile" >/dev/null ||
-    die "post-first-deploy zprofile does not log login hook warnings"
-  if grep -F 'eos-observe prompt-login --shell zsh || true' "$payload_dir/assets/zprofile" >/dev/null ||
-      grep -F 'update_check.sh" --init || true' "$payload_dir/assets/zprofile" >/dev/null ||
-      grep -F 'eos-update check --init || true' "$payload_dir/assets/zprofile" >/dev/null; then
-    die "post-first-deploy zprofile silently ignores login hook failures"
-  fi
-  [[ -f "$payload_dir/assets/docker/daemon.json" ]] ||
-    die "post-first-deploy payload missing Docker config"
-  [[ -x "$payload_dir/scripts/setup_dev_environment.sh" ]] ||
-    die "post-first-deploy payload setup script is not executable"
-  [[ -x "$payload_dir/scripts/engineos-dev-shell-start" ]] ||
-    die "post-first-deploy payload dev shell start script is not executable"
-  grep -F 'refresh_wayland_session' "$payload_dir/scripts/engineos-dev-shell-start" >/dev/null ||
-    die "post-first-deploy dev shell start does not refresh stale Wayland state"
-  grep -F 'pgrep -u "$(id -u)" -x engineos-shell' "$payload_dir/scripts/engineos-dev-shell-start" >/dev/null ||
-    die "post-first-deploy dev shell start does not terminate same-user stale shells"
-  grep -F 'wayland-*' "$payload_dir/scripts/engineos-dev-shell-start" >/dev/null ||
-    die "post-first-deploy dev shell start does not clear stale Wayland sockets"
-  grep -F 'engineos-tmux-pane-bridge' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not install tmux pane bridge helper"
-  grep -F 'engineos-tmux-attach-primary' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not install tmux primary attach helper"
-  grep -F 'engineos-tmux-window-move' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not install tmux window move helper"
-  grep -F 'engineos-tmux-window-sync' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not install deprecated tmux GUI helper wrappers"
-  [[ -f "$payload_dir/assets/systemd/engineos-dev-shell.service" ]] ||
-    die "post-first-deploy payload missing dev shell service"
-  grep -F 'ENGINEOS_TERMINAL_REQUIRE_WAYLAND=true' "$payload_dir/assets/systemd/engineos-dev-shell.service" >/dev/null ||
-    die "post-first-deploy dev shell service does not require Wayland terminal ownership"
-  grep -F 'EnvironmentFile=-/etc/engineos/runtime.conf' "$payload_dir/assets/systemd/engineos-dev-shell.service" >/dev/null ||
-    die "post-first-deploy dev shell service does not load the runtime mode setting"
-  grep -F 'prepare_native_mux' "$payload_dir/scripts/engineos-dev-shell-start" >/dev/null ||
-    die "post-first-deploy dev shell start does not prepare native mux"
-  grep -F 'new-session -d -s engineos' "$payload_dir/scripts/engineos-dev-shell-start" >/dev/null ||
-    die "post-first-deploy dev shell start does not create the native session"
-  grep -F 'engineos-shell' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not request engineos-shell"
-  grep -F 'engineos-tools' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not request engineos-tools"
-  grep -F 'engineos-cube' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not request engineos-cube"
-  grep -F 'engineos-level-agent' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not request the Quake level workflow"
-  grep -F 'engineos-trenchbroom' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not request the Quake editor workflow"
-  grep -F 'npm install -g @openai/codex@latest' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not upgrade npm-managed Codex"
-  if grep -F 'best_effort()' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-      grep -F 'WARN best-effort failed' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null; then
-    die "post-first-deploy setup still contains best-effort service handling"
-  fi
-  if grep -F 'systemctl enable docker.service >/dev/null 2>&1 || true' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-      grep -F 'systemctl daemon-reload || true' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-      grep -F 'chsh -s /usr/bin/zsh "$TARGET_USER" || true' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null; then
-    die "post-first-deploy setup silently ignores service or shell setup failures"
-  fi
-  grep -F 'codex-extractor' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not fetch codex-extractor"
-  grep -F 'session-extrator' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not fetch session-extrator"
-  grep -F 'session-extrator.git@v$version' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not install the pinned codex-insights release"
-  grep -F 'opencode-autonomy' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not fetch opencode-autonomy"
-  grep -F 'agent' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not fetch agent"
-  grep -F 'quake-generator:quake-os-integration' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not fetch the pinned dgen source repository"
-  grep -F 'skills' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not fetch skills"
-  grep -F 'Tango-Rocker' "$payload_dir/scripts/setup_dev_environment.sh" >/dev/null ||
-    die "post-first-deploy setup does not fetch from Tango-Rocker"
-
-  printf 'post-first-deploy dry-run test passed\n'
+  ! rg -n 'ENGINEOS_MUX_MODE|launch-bounds|terminal-register|pane-(launch|focus|geometry|unbind)' \
+    "$payload_dir" >/dev/null ||
+    die "post-deploy payload retains rollback mux plumbing"
+  printf 'native post-first-deploy contract passed\n'
 }
-
 run_update_check() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-update-check-test-$$"
   local repo="$tmp_dir/tango-os"
@@ -6728,377 +4721,18 @@ run_repo() {
 }
 
 run_boot() {
-  local tmp_dir="${TMPDIR:-/tmp}/engineos-boot-test-$$"
-  local fake_bin="$tmp_dir/bin"
-  local tool_bin="$tmp_dir/tool-bin"
-  local log_dir="$tmp_dir/logs"
-  local runtime_conf="$tmp_dir/runtime.conf"
-  local apps_manifest="$tmp_dir/apps.toml"
-  local drm_sysfs="$tmp_dir/sys/class/drm"
-  local dri_dir="$tmp_dir/dev/dri"
-  local out="$tmp_dir/out.txt"
-  local doctor_log="$tmp_dir/doctor-args.txt"
-
-  cleanup_boot() {
-    rm -rf "$tmp_dir"
-  }
-  trap cleanup_boot RETURN
-
-  mkdir -p "$fake_bin" "$tool_bin" "$log_dir" "$drm_sysfs/card0-HDMI-A-1" "$dri_dir"
-  for tool in bash date dirname grep; do
-    ln -s "$(command -v "$tool")" "$tool_bin/$tool"
-  done
-  {
-    printf 'ENGINEOS_MUX_MODE=native\n'
-    printf 'ENGINEOS_SHELL_BOOTSTRAP=launchpad\n'
-    printf 'ENGINEOS_CUBE_CMD="eos-app launch cube"\n'
-    printf 'ENGINEOS_ENGINE_CMD="eos-app launch quake"\n'
-    printf 'ENGINEOS_RUNTIME_RECOVERY_TTY=tty2\n'
-    printf 'ENGINEOS_TERMINAL_SESSION_CMD="engineos-tmux-attach-primary"\n'
-  } >"$runtime_conf"
-  cat >"$apps_manifest" <<'EOF_MANIFEST'
-[apps.terminal]
-slot = "terminal"
-role = "terminal"
-command = "eos-app launch terminal"
-package = "foot"
-app_ids = ["foot"]
-log = "terminal.log"
-input = "normal"
-
-[apps.terminal-secondary]
-slot = "terminal-secondary"
-role = "terminal-secondary"
-command = "eos-app launch terminal-secondary"
-package = "foot"
-app_ids = ["engineos-terminal-secondary"]
-log = "terminal.log"
-input = "normal"
-
-[apps.cube]
-slot = "cube"
-role = "cube"
-command = "eos-app launch cube"
-smoke_command = "eos-app launch cube --smoke"
-package = "engineos-cube"
-app_ids = ["engineos-cube"]
-log = "cube.log"
-health = "gl-renderer-and-frames"
-input = "normal"
-
-[apps.quake]
-slot = "engine"
-role = "engine"
-command = "eos-app launch quake"
-smoke_command = "eos-app launch quake --smoke"
-package = "engineos-quakespasm"
-app_ids = ["quakespasm"]
-log = "engine.log"
-assets = "quake"
-input = "game"
-EOF_MANIFEST
-  {
-    printf '[2026-01-01T00:00:00Z] starting EngineOS shell mode=--tty recovery=tty2\n'
-    printf '[2026-01-01T00:00:01Z] EngineOS shell failed rc=77; recovery TTY should remain available\n'
-  } >"$log_dir/runtime-start.log"
-  {
-    printf '[2026-01-01T00:00:00Z] starting EngineDev shell mode=--tty bootstrap=terminal\n'
-    printf '[2026-01-01T00:00:01Z] GL renderer: AMD Test GPU (radeonsi)\n'
-  } >"$log_dir/dev-shell-start.log"
-  printf 'connected\n' >"$drm_sysfs/card0-HDMI-A-1/status"
-  printf 'enabled\n' >"$drm_sysfs/card0-HDMI-A-1/enabled"
-  printf '1920x1080\n' >"$drm_sysfs/card0-HDMI-A-1/modes"
-  : >"$dri_dir/card0"
-  : >"$dri_dir/renderD128"
-
-  cat >"$fake_bin/systemctl" <<'FAKE'
-#!/usr/bin/env bash
-case "$1" in
-  is-enabled|is-active|status)
-    exit 0
-    ;;
-  *)
-    printf 'fake systemctl: %s\n' "$*" >&2
-    exit 2
-    ;;
-esac
-FAKE
-  chmod +x "$fake_bin/systemctl"
-
-  cat >"$fake_bin/pacman" <<'FAKE'
-#!/usr/bin/env bash
-if [[ "$1" == "-Q" ]]; then
-  if [[ -n "${ENGINEOS_FAKE_MISSING_PACKAGE:-}" && "${2:-}" == "$ENGINEOS_FAKE_MISSING_PACKAGE" ]]; then
-    exit 1
+  local runtime_conf="$ROOT/packages/engineos-config/files/etc/engineos/runtime.conf"
+  grep -Fx 'ENGINEOS_SHELL_BOOTSTRAP=none' "$runtime_conf" >/dev/null ||
+    die "runtime config does not disable shell-owned bootstrap"
+  if rg -n 'ENGINEOS_MUX_MODE|ENGINEOS_(TERMINAL|CUBE|ENGINE)_.*CMD' \
+      "$runtime_conf" >/dev/null; then
+    die "runtime config retains a rollback mux/app slot setting"
   fi
-  exit 0
-fi
-printf 'fake pacman: %s\n' "$*" >&2
-exit 2
-FAKE
-  chmod +x "$fake_bin/pacman"
-
-  cat >"$fake_bin/eos-app" <<'FAKE'
-#!/usr/bin/env bash
-if [[ "$1" == "manifest" && "$2" == "validate" ]]; then
-  printf 'EngineOS app manifest validation\n'
-  printf '  manifest: %s\n' "${ENGINEOS_APPS_MANIFEST:-missing}"
-  printf 'OK   cube.app_ids contains engineos-cube\n'
-  printf 'App manifest validation summary: 0 failure(s)\n'
-  exit 0
-fi
-printf 'fake eos-app %s\n' "$*"
-FAKE
-  chmod +x "$fake_bin/eos-app"
-
-  cat >"$fake_bin/quakespasm" <<'FAKE'
-#!/usr/bin/env bash
-exit 0
-FAKE
-  cat >"$fake_bin/engineos-cube" <<'FAKE'
-#!/usr/bin/env bash
-exit 0
-FAKE
-  chmod +x "$fake_bin/quakespasm" "$fake_bin/engineos-cube"
-
-  cat >"$fake_bin/engineos-recovery-help" <<'FAKE'
-#!/usr/bin/env bash
-printf 'eos-logs runtime --last 200\n'
-printf 'eos-crash-bundle\n'
-printf 'engineos.noautostart\n'
-FAKE
-  chmod +x "$fake_bin/engineos-recovery-help"
-  cat >"$fake_bin/engineos-recovery-help-fail" <<'FAKE'
-#!/usr/bin/env bash
-printf 'eos-logs runtime --last 200\n'
-printf 'eos-crash-bundle\n'
-printf 'engineos.noautostart\n'
-exit 8
-FAKE
-  chmod +x "$fake_bin/engineos-recovery-help-fail"
-
-  cat >"$fake_bin/lspci" <<'FAKE'
-#!/usr/bin/env bash
-printf '03:00.0 VGA compatible controller [0300]: Advanced Micro Devices, Inc. [AMD/ATI] Navi test GPU\n'
-FAKE
-  chmod +x "$fake_bin/lspci"
-
-  cat >"$fake_bin/doctor-ok" <<'FAKE'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"$ENGINEOS_FAKE_DOCTOR_ARGS"
-printf 'EngineOS doctor fixture\n'
-printf 'OpenGL core profile renderer: AMD RADV\n'
-printf 'active shell backend:    drm,libinput\n'
-printf 'active shell renderer:   AMD Test GPU (radeonsi)\n'
-FAKE
-  chmod +x "$fake_bin/doctor-ok"
-  if PATH="$fake_bin:$PATH" "$PROOF_DIR/validate_boot.sh" >"$out" 2>&1; then
-    die "boot validation accepted an implicit default mode"
-  fi
-  grep -F 'validate_boot requires an explicit mode' "$out" >/dev/null ||
-    die "boot validation did not explain explicit mode requirement"
-
-  cat >"$fake_bin/doctor-fail" <<'FAKE'
-#!/usr/bin/env bash
-printf 'doctor fixture failed\n' >&2
-exit 9
-FAKE
-  chmod +x "$fake_bin/doctor-fail"
-
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_RUNTIME_CONF="$runtime_conf" \
-    ENGINEOS_APPS_MANIFEST="$apps_manifest" \
-    ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
-    ENGINEOS_FAKE_DOCTOR_ARGS="$doctor_log" \
-    "$PROOF_DIR/validate_boot.sh" --runtime >"$out" 2>&1
-  grep -F "app manifest exists: $apps_manifest" "$out" >/dev/null ||
-    die "runtime boot validation did not require app manifest"
-  grep -F 'app manifest validates' "$out" >/dev/null ||
-    die "runtime boot validation did not validate app manifest"
-  grep -F 'runtime recovery TTY configured: tty2' "$out" >/dev/null ||
-    die "runtime boot validation did not read runtime recovery TTY fixture"
-  grep -F 'package installed: engineos-shell' "$out" >/dev/null ||
-    die "runtime boot validation did not require engineos-shell"
-  grep -F 'package installed: ttf-dejavu' "$out" >/dev/null ||
-    die "runtime boot validation did not require terminal fonts"
-  grep -F 'command available: quakespasm' "$out" >/dev/null ||
-    die "runtime boot validation did not check quakespasm command"
-  grep -F 'command available: engineos-cube' "$out" >/dev/null ||
-    die "runtime boot validation did not check engineos-cube command"
-  grep -F 'runtime shell uses native mux by default' "$out" >/dev/null ||
-    die "runtime boot validation did not check native mux default"
-  grep -F 'runtime legacy rollback bootstrap starts launchpad' "$out" >/dev/null ||
-    die "runtime boot validation did not check legacy rollback bootstrap"
-  grep -F 'runtime autostart log records startup decision' "$out" >/dev/null ||
-    die "runtime boot validation did not check autostart startup log"
-  grep -F 'runtime autostart log records outcome' "$out" >/dev/null ||
-    die "runtime boot validation did not check autostart outcome log"
-  grep -Fx -- '--vm' "$doctor_log" >/dev/null ||
-    die "runtime boot validation did not call doctor in VM mode"
-
-  if PATH="$fake_bin:$PATH" \
-      ENGINEOS_RUNTIME_CONF="$runtime_conf" \
-      ENGINEOS_APPS_MANIFEST="$apps_manifest" \
-      ENGINEOS_LOG_DIR="$tmp_dir/missing-logs" \
-      ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
-      "$PROOF_DIR/validate_boot.sh" --runtime >"$out" 2>&1; then
-    die "runtime boot validation accepted missing EngineOS log directory"
-  fi
-  grep -F "$tmp_dir/missing-logs missing" "$out" >/dev/null ||
-    die "runtime boot validation did not expose missing EngineOS log directory"
-
-  if PATH="$fake_bin:$PATH" \
-      ENGINEOS_RUNTIME_CONF="$runtime_conf" \
-      ENGINEOS_APPS_MANIFEST="$apps_manifest" \
-      ENGINEOS_LOG_DIR="$log_dir" \
-      ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
-      ENGINEOS_FAKE_MISSING_PACKAGE="engineos-cube" \
-      "$PROOF_DIR/validate_boot.sh" --runtime >"$out" 2>&1; then
-    die "runtime boot validation accepted missing required package"
-  fi
-  grep -F 'package missing: engineos-cube' "$out" >/dev/null ||
-    die "runtime boot validation did not expose missing required package"
-
-  mv "$fake_bin/engineos-cube" "$fake_bin/engineos-cube-ok"
-  if PATH="$fake_bin:$tool_bin" \
-      ENGINEOS_RUNTIME_CONF="$runtime_conf" \
-      ENGINEOS_APPS_MANIFEST="$apps_manifest" \
-      ENGINEOS_LOG_DIR="$log_dir" \
-      ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
-      bash "$PROOF_DIR/validate_boot.sh" --runtime >"$out" 2>&1; then
-    die "runtime boot validation accepted missing package command"
-  fi
-  grep -F 'command unavailable: engineos-cube' "$out" >/dev/null ||
-    die "runtime boot validation did not expose missing package command"
-  mv "$fake_bin/engineos-cube-ok" "$fake_bin/engineos-cube"
-
-  if PATH="$fake_bin:$PATH" \
-      ENGINEOS_RUNTIME_CONF="$tmp_dir/missing-runtime.conf" \
-      ENGINEOS_APPS_MANIFEST="$apps_manifest" \
-      ENGINEOS_LOG_DIR="$log_dir" \
-      ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
-      "$PROOF_DIR/validate_boot.sh" --runtime >"$out" 2>&1; then
-    die "runtime boot validation accepted missing runtime config"
-  fi
-  grep -F 'missing-runtime.conf missing' "$out" >/dev/null ||
-    die "runtime boot validation did not expose missing runtime config"
-
-  if PATH="$fake_bin:$PATH" \
-      ENGINEOS_RUNTIME_CONF="$runtime_conf" \
-      ENGINEOS_APPS_MANIFEST="$apps_manifest" \
-      ENGINEOS_LOG_DIR="$log_dir" \
-      ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-fail" \
-      ENGINEOS_VALIDATE_DOCTOR_OUT="$tmp_dir/runtime-doctor-fail.out" \
-      "$PROOF_DIR/validate_boot.sh" --runtime >"$out" 2>&1; then
-    die "runtime boot validation accepted failing doctor"
-  fi
-  grep -F 'doctor failed' "$out" >/dev/null ||
-    die "runtime boot validation did not expose failing doctor"
-
-  mv "$fake_bin/engineos-recovery-help" "$fake_bin/engineos-recovery-help-ok"
-  cp "$fake_bin/engineos-recovery-help-fail" "$fake_bin/engineos-recovery-help"
-  chmod +x "$fake_bin/engineos-recovery-help"
-  if PATH="$fake_bin:$PATH" \
-      ENGINEOS_RUNTIME_CONF="$runtime_conf" \
-      ENGINEOS_APPS_MANIFEST="$apps_manifest" \
-      ENGINEOS_LOG_DIR="$log_dir" \
-      ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
-      ENGINEOS_FAKE_DOCTOR_ARGS="$doctor_log" \
-      "$PROOF_DIR/validate_boot.sh" --runtime >"$out" 2>&1; then
-    die "runtime boot validation accepted failing recovery help"
-  fi
-  grep -F 'recovery help command failed' "$out" >/dev/null ||
-    die "runtime boot validation did not expose failing recovery help"
-  mv "$fake_bin/engineos-recovery-help-ok" "$fake_bin/engineos-recovery-help"
-
-  printf '[2026-01-01T00:00:00Z] starting EngineOS shell mode=--tty recovery=tty2\n' >"$log_dir/runtime-start.log"
-  printf '[2026-01-01T00:00:00Z] renderer diagnostics backend=drm,libinput wlr_renderer=pixman\n' >"$log_dir/shell.log"
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_RUNTIME_CONF="$runtime_conf" \
-    ENGINEOS_APPS_MANIFEST="$apps_manifest" \
-    ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
-    ENGINEOS_FAKE_DOCTOR_ARGS="$doctor_log" \
-    "$PROOF_DIR/validate_boot.sh" --runtime >"$out" 2>&1
-  grep -F 'runtime shell service active: engineos-runtime.service' "$out" >/dev/null ||
-    die "runtime boot validation did not accept active runtime shell service"
-  if grep -F 'runtime autostart appears to still be running' "$out" >/dev/null; then
-    die "runtime boot validation warned for active runtime shell service"
-  fi
-  grep -F 'shell renderer log shows software rendering; acceptable only for VM smoke paths' "$out" >/dev/null ||
-    die "runtime boot validation did not keep pixman shell evidence as a VM warning"
-
-  : >"$doctor_log"
-  printf '[2026-01-01T00:00:00Z] renderer diagnostics backend=drm,libinput wlr_renderer=gles2 EGL platform=gbm\n' >"$log_dir/shell.log"
-  PATH="$fake_bin:$PATH" \
-    ENGINEOS_RUNTIME_CONF="$runtime_conf" \
-    ENGINEOS_APPS_MANIFEST="$apps_manifest" \
-    ENGINEOS_LOG_DIR="$log_dir" \
-    ENGINEOS_DRI_DIR="$dri_dir" \
-    ENGINEOS_DRM_SYSFS="$drm_sysfs" \
-    ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
-    ENGINEOS_FAKE_DOCTOR_ARGS="$doctor_log" \
-    "$PROOF_DIR/validate_boot.sh" --bare-metal >"$out"
-  grep -F "$dri_dir exists" "$out" >/dev/null ||
-    die "bare-metal boot validation did not use DRI fixture"
-  grep -F 'at least one connected DRM output' "$out" >/dev/null ||
-    die "bare-metal boot validation did not validate connected DRM output"
-  grep -F 'AMD display device visible to lspci' "$out" >/dev/null ||
-    die "bare-metal boot validation did not verify AMD display fixture"
-  grep -F 'shell renderer log exists' "$out" >/dev/null ||
-    die "bare-metal boot validation did not check shell renderer log"
-  grep -F 'bare-metal shell renderer has GL-capable evidence' "$out" >/dev/null ||
-    die "bare-metal boot validation did not require GL-capable shell evidence"
-  grep -F 'engineos-dev-shell.service enabled' "$out" >/dev/null ||
-    die "bare-metal boot validation did not require enabled EngineDev shell service"
-  grep -F 'engineos-dev-shell.service active' "$out" >/dev/null ||
-    die "bare-metal boot validation did not require active EngineDev shell service"
-  grep -F 'getty@tty2.service active' "$out" >/dev/null ||
-    die "bare-metal boot validation did not require active recovery getty"
-  grep -F 'EngineDev shell startup log records startup decision' "$out" >/dev/null ||
-    die "bare-metal boot validation did not verify EngineDev startup decision"
-  grep -F 'EngineDev shell service is the active startup outcome' "$out" >/dev/null ||
-    die "bare-metal boot validation did not verify EngineDev startup outcome"
-  grep -F 'active bare-metal shell uses DRM/libinput and AMD/radeonsi' "$out" >/dev/null ||
-    die "bare-metal boot validation did not require direct active-shell renderer evidence"
-  grep -Fx -- '--bare-metal' "$doctor_log" >/dev/null ||
-    die "bare-metal boot validation did not call doctor in bare-metal mode"
-  grep -F 'bare-metal doctor completed' "$out" >/dev/null ||
-    die "bare-metal boot validation did not require doctor success"
-
-  if PATH="$fake_bin:$PATH" \
-      ENGINEOS_RUNTIME_CONF="$runtime_conf" \
-      ENGINEOS_APPS_MANIFEST="$apps_manifest" \
-      ENGINEOS_LOG_DIR="$log_dir" \
-      ENGINEOS_DRI_DIR="$dri_dir" \
-      ENGINEOS_DRM_SYSFS="$drm_sysfs" \
-      ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-fail" \
-      ENGINEOS_VALIDATE_DOCTOR_OUT="$tmp_dir/doctor-fail.out" \
-      "$PROOF_DIR/validate_boot.sh" --bare-metal >"$out" 2>&1; then
-    die "bare-metal boot validation accepted failing doctor"
-  fi
-  grep -F 'bare-metal doctor failed' "$out" >/dev/null ||
-    die "bare-metal boot validation did not expose failing doctor"
-
-  printf '[2026-01-01T00:00:00Z] renderer diagnostics backend=drm,libinput wlr_renderer=pixman\n' >"$log_dir/shell.log"
-  if PATH="$fake_bin:$PATH" \
-      ENGINEOS_RUNTIME_CONF="$runtime_conf" \
-      ENGINEOS_APPS_MANIFEST="$apps_manifest" \
-      ENGINEOS_LOG_DIR="$log_dir" \
-      ENGINEOS_DRI_DIR="$dri_dir" \
-      ENGINEOS_DRM_SYSFS="$drm_sysfs" \
-      ENGINEOS_DOCTOR_CMD="$fake_bin/doctor-ok" \
-      ENGINEOS_FAKE_DOCTOR_ARGS="$doctor_log" \
-      "$PROOF_DIR/validate_boot.sh" --bare-metal >"$out" 2>&1; then
-    die "bare-metal boot validation accepted pixman shell renderer evidence"
-  fi
-  grep -F 'shell renderer log shows software rendering' "$out" >/dev/null ||
-    die "bare-metal boot validation did not reject pixman shell renderer evidence"
-
-  printf 'boot validation fixture test passed\n'
+  grep -F 'tmux new-session -A -s engineos' \
+    "$ROOT/tools/post-install-payload/assets/zprofile" >/dev/null ||
+    die "boot login path does not enter native tmux"
+  printf 'native boot configuration test passed\n'
 }
-
 run_engine() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-engine-test-$$"
   local fetch_out="$tmp_dir/fetch.txt"

@@ -118,7 +118,7 @@ Test VM:
 eos-proof booted-iso --vm
 eos-proof booted-iso --runtime
 eos-app manifest validate
-eos-proof launchpad --runtime
+eos-proof shell-launch --runtime
 ```
 
 Bare-metal AMD:
@@ -128,7 +128,7 @@ eos-doctor --bare-metal
 eos-outputs validate --single
 eos-runtime shell --tty
 eos-app launch terminal
-eos-terminal
+tmux -V
 eos-assets check quake
 eos-runtime quake
 eos-proof booted-iso --bare-metal
@@ -145,10 +145,10 @@ eos-crash-bundle --bare-metal
 - `engineos-cube` must build through the local package repo and provide `/usr/bin/engineos-cube`.
 - `engineos-quakespasm` must build through the local package repo and provide `/usr/bin/quakespasm`.
 - App registry validation must pass through `eos-app manifest validate`.
-- Launchpad bootstrap must pass through `eos-proof launchpad --runtime`.
+- Native shell/mux ownership must pass through `eos-proof shell-launch --runtime`.
 - QuakeSpasm must launch with user-provided assets through `eos-runtime quake`.
 - DRM output validation must pass through `eos-outputs validate --single`.
-- Terminal launch fallback must be checked through `eos-terminal`.
+- The installed EngineOS tmux fork must report `tmux 3.6b`.
 - Bare-metal crash bundles must be collected with `eos-crash-bundle --bare-metal`.
 - Hardware handoff must run through `eos-proof hardware-ready` before USB boot testing.
 - Input capture/release and recovery TTY must be manually confirmed on hardware.

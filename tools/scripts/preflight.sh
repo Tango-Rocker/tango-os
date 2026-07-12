@@ -222,7 +222,6 @@ check_package_inputs() {
       require_file "tools/scripts/validate_engine.sh"
       require_file "tools/scripts/validate_shell.sh"
       require_file "tools/scripts/app.sh"
-      require_file "tools/scripts/terminal_launcher.sh"
       require_file "tools/scripts/outputs.sh"
       require_file "tools/scripts/shell_runner.sh"
       require_file "tools/scripts/assets.sh"
@@ -281,7 +280,6 @@ check_package_inputs() {
 		require_file "mux/include/engine-mux-protocol.h"
 		require_file "mux/src/engine-muxctl.c"
 		require_file "packages/engineos-mux/PKGBUILD"
-		require_file "packages/engineos-mux/0001-engine-mux-default-socket.patch"
 		require_file "packages/engineos-mux/0002-engine-mux-in-server-frontend.patch"
 		require_file "packages/engineos-mux/0003-engine-mux-graphical-client.patch"
 		require_file "packages/engineos-mux/engine-mux-frontend.c"
@@ -446,7 +444,6 @@ check_scripts() {
   require_file "tools/scripts/artifacts.sh"
   require_file "tools/scripts/release.sh"
   require_file "tools/scripts/installation_guide.sh"
-  require_file "tools/scripts/terminal_launcher.sh"
   require_file "tools/scripts/capture_frame.sh"
   require_file "tools/scripts/doctor.sh"
 	require_file "tools/scripts/game.sh"
@@ -501,7 +498,6 @@ check_scripts() {
   check_bash_syntax "tools/scripts/artifacts.sh"
   check_bash_syntax "tools/scripts/release.sh"
   check_bash_syntax "tools/scripts/installation_guide.sh"
-  check_bash_syntax "tools/scripts/terminal_launcher.sh"
   check_bash_syntax "tools/scripts/capture_frame.sh"
   check_bash_syntax "tools/scripts/doctor.sh"
   check_bash_syntax "tools/scripts/recovery_help.sh"
@@ -605,7 +601,6 @@ check_iso() {
   fi
 
   if [[ "$PROFILE" == "enginedev" ]]; then
-    require_profile_package "$profile_dir" "foot"
     require_profile_package "$profile_dir" "ttf-dejavu"
     require_profile_package "$profile_dir" "engineos-cube"
     require_profile_package "$profile_dir" "engineos-shell"
@@ -675,11 +670,10 @@ check_iso() {
       ok "$profile_dir customize_airootfs fails closed for required setup"
     fi
     if grep -F 'systemctl enable engineos-dev-shell.service' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
-        grep -F 'ENGINEOS_TERMINAL_REQUIRE_WAYLAND=true' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-dev-shell.service" >/dev/null &&
-        grep -F 'ENGINEOS_TERMINAL_SESSION_CMD=engineos-tmux-attach-primary' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-dev-shell.service" >/dev/null; then
-      ok "$profile_dir dev shell autostarts tmux on shell-owned Wayland"
+        grep -F 'ExecStart=/usr/local/bin/engineos-dev-shell-start' "$ROOT/$profile_dir/airootfs/etc/systemd/system/engineos-dev-shell.service" >/dev/null; then
+      ok "$profile_dir dev shell autostarts the native mux compositor"
     else
-      fail "$profile_dir dev shell autostart is not configured for shell-owned tmux"
+      fail "$profile_dir dev shell autostart is not configured for native mux"
     fi
     if grep -F 'systemctl enable engineos-live-codex-setup.service' "$ROOT/$profile_dir/airootfs/root/customize_airootfs.sh" >/dev/null &&
         grep -F 'https://chatgpt.com/codex/install.sh' "$ROOT/$profile_dir/airootfs/usr/local/bin/engineos-live-codex-setup" >/dev/null &&
@@ -724,7 +718,6 @@ check_iso() {
       fail "$profile_dir device udev rules do not cover input and audio"
     fi
   elif [[ "$PROFILE" == "engineruntime" ]]; then
-    require_profile_package "$profile_dir" "foot"
     require_profile_package "$profile_dir" "ttf-dejavu"
     require_profile_package "$profile_dir" "engineos-cube"
     require_profile_package "$profile_dir" "engineos-shell"

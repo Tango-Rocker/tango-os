@@ -31,9 +31,10 @@ build/reinstall loop.
 
 ## Live Development
 
-The shell and tmux pane bridge are event-driven. Tmux reports exact client tty,
-pane identity, focus, and geometry; `engineos-shell` owns GUI binding, layout,
-clipping, rendering, and focus.
+The EngineOS tmux 3.6b fork is the system `tmux` and the only session, window,
+pane, PTY, grid, command, presentation, and layout authority. `engineos-shell`
+is its native graphical frontend and owns DRM/KMS, GPU composition, clipping,
+outputs, focus, input, and Wayland surfaces.
 
 ```bash
 eos-runtime shell refresh-user
@@ -43,20 +44,19 @@ eos-app pane launch -- falkon
 eos-app pane list --json
 ```
 
-The primary shell terminal reattaches the most relevant existing tmux session.
-The second output uses the reserved `engineos-side` session. Both clients share
-one tmux server; shell restarts do not create proxy GUI windows.
+Login attaches directly with `tmux new-session -A -s engineos`. Each EngineOS
+output registers a graphical tmux view; ordinary local or SSH tmux clients
+remain compatible text clients.
 
 Right-click a tmux window name and select `Move to Session...` to send that
 window to another session without recreating its panes or processes.
 
-MC image previews carry the invoking tmux pane and client tty. The shell draws
-them only on the registered terminal output; ambiguous pane ownership is an
-error instead of a guessed screen.
+MC image previews use the native pane-image command and are keyed by pane,
+generation, and graphical view lease.
 
 ## Quake Workflow
 
-Quake runs as a per-user service. The level agent uses the installed,
+Quake runs as a tmux game-pane presentation. The level agent uses the installed,
 commit-pinned `dgen` release and a separate Codex MCP client per job.
 
 ```bash

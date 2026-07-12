@@ -38,7 +38,7 @@ repeatable workflows and safety rules.
 Project-status/docs MCP has been removed. Do not add MCP tools just to mirror
 local commands that are already scriptable, documented, and safe through the
 CLI. Future EngineOS MCP work is reserved for read-only live runtime state, such
-as shell state, app slots, service status, recent log summaries, and crash
+as shell state, mux pane presentation state, service status, recent log summaries, and crash
 bundle indexes. Runtime MCP v0 must not execute CLI commands, sudo, package
 operations, or window control.
 

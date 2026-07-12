@@ -1,6 +1,6 @@
 pkgname=engineos-mux
 pkgver=3.6b
-pkgrel=41
+pkgrel=42
 _commit=0623d1e968423ad0c192e0d8debf1258671063d5
 pkgdesc="EngineOS tmux 3.6b graphical frontend protocol foundation"
 arch=('x86_64')
@@ -8,10 +8,11 @@ url="https://example.invalid/engineos"
 license=('ISC' 'custom:EngineOS-TBD')
 depends=('libevent' 'ncurses' 'libutempter' 'systemd-libs' 'json-c')
 makedepends=('meson' 'ninja' 'pkgconf' 'gcc' 'systemd' 'autoconf' 'automake')
-provides=('engine-mux')
+provides=('tmux=3.6_b')
+conflicts=('tmux')
+replaces=('tmux')
 source=(
   "tmux-3.6b-$_commit.tar.gz::https://github.com/tmux/tmux/archive/$_commit.tar.gz"
-  '0001-engine-mux-default-socket.patch'
   '0002-engine-mux-in-server-frontend.patch'
   '0003-engine-mux-graphical-client.patch'
   '0004-engine-pane-presentations.patch'
@@ -25,7 +26,6 @@ source=(
   'engine-pane-host.c'
 )
 sha256sums=('2c212f7ee2d925b01ec20ab5bb3a906c17b6a8652fe521fcaaf498f800b4d1fa'
-            '377d8420eb6bf2103bfc429829d90ed542fd9e9202c6780d122cb5ce4665cb5f'
             'c7f3fbcd68f53f4227614e03cfb7e5f91d3069b68ad03dccf4ead6c13c742e11'
             '1d8d061eaa8aca3df1ab4d0517c6fad2d62b7e8fe60e6aac637ed6b1e68febdf'
             '492a467aac874af3b49791e37be5bb572bfcf5eace28574aa514c15d7bc734b9'
@@ -33,7 +33,7 @@ sha256sums=('2c212f7ee2d925b01ec20ab5bb3a906c17b6a8652fe521fcaaf498f800b4d1fa'
             'c98a0184cde19f14e32f61595f622748f064f2294a1a285adb920eb03eaba593'
             'e0120b1a3121da735ded8d83d797ae16eeb807174d50f0f91a1483a40d967fe2'
             'aa5af5738e4498e967b1c6c0f50b3b25b157a811b51f6e2a8bc6e173fe609636'
-            'a4b4e0255d132361882b74b3a3390bb51610fef4a5fab305977342f4cd237dd6'
+            '0107a9e5402328d2a75fd0b52305a08d25b6d757b3b2e9a20013001bc88bd9f4'
             'cdad7a4fb6c706fb77863825c42218351cc1d4ab37131a835fc81a7d92967b1a'
             '4a94b8db1a630f41201e218bf7d8cda3b45b820a1059f52216bc9b806b264399'
             'baaaa7bbb1ab42a407818fbf0d23f2467d00d7ed7d66553f5fb78faaf270c211')
@@ -43,7 +43,6 @@ prepare() {
   local _source_dir="$srcdir/tmux-$_commit"
   _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
 
-	patch -d "$_source_dir" -Np1 -i "$startdir/0001-engine-mux-default-socket.patch"
 	patch -d "$_source_dir" -Np1 -i "$startdir/0002-engine-mux-in-server-frontend.patch"
 	patch -d "$_source_dir" -Np1 -i "$startdir/0003-engine-mux-graphical-client.patch"
 	patch -d "$_source_dir" -Np1 -i "$startdir/0004-engine-pane-presentations.patch"
@@ -82,9 +81,9 @@ package() {
   local _source_dir="$srcdir/tmux-$_commit"
   _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
 
-	install -Dm755 "$_source_dir/tmux" "$pkgdir/usr/bin/engine-mux"
+	install -Dm755 "$_source_dir/tmux" "$pkgdir/usr/bin/tmux"
 	install -Dm755 "$srcdir/engine-pane-host" "$pkgdir/usr/bin/engine-pane-host"
-	install -Dm644 "$_source_dir/tmux.1" "$pkgdir/usr/share/man/man1/engine-mux.1"
+	install -Dm644 "$_source_dir/tmux.1" "$pkgdir/usr/share/man/man1/tmux.1"
 	install -Dm644 "$_source_dir/COPYING" "$pkgdir/usr/share/licenses/$pkgname/COPYING.tmux"
   DESTDIR="$pkgdir" meson install -C "$srcdir/mux-build"
   install -Dm644 "$_engineos_root/LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

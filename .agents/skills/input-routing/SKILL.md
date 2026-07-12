@@ -27,7 +27,7 @@ traces before changing routing policy.
 For runtime validation:
 
 ```bash
-eos-proof launchpad --runtime
+eos-proof native-kms
 eos-logs shell --last 200
 ```
 

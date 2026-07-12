@@ -18,7 +18,7 @@ and commercial assets must stay outside the repo and ISO.
 ./tools/engineos/eos-logs engine --last 200
 ```
 
-For Runtime launchpad routing:
+For native mux pane routing:
 
 ```bash
 ./tools/engineos/eos-app manifest validate

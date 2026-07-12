@@ -1,13 +1,12 @@
 # Engine Mux protocol foundation
 
-This directory is migration stage 1 for the graphical tmux design. The
-`engineos-mux` package builds the official tmux 3.6b baseline as the
-side-by-side `engine-mux` fork and patches its default socket label to
-`engine-mux`; it does not replace `/usr/bin/tmux`. The fork server owns the
-versioned frontend boundary and derives snapshots directly from its canonical
-session, window, and pane structures.
+This directory contains the EngineOS graphical frontend protocol for the
+system tmux fork. The `engineos-mux` package builds the pinned tmux 3.6b
+baseline, installs it as `/usr/bin/tmux`, and replaces the upstream Arch tmux
+package. The fork uses tmux's normal default socket and derives frontend
+snapshots directly from its canonical session, window, and pane structures.
 
-`engine-mux` exposes a private `SOCK_SEQPACKET` socket at
+The default tmux server exposes a private `SOCK_SEQPACKET` socket at
 `$XDG_RUNTIME_DIR/engineos/mux.sock`. Frames have a fixed network-byte-order
 header and a bounded payload. The implemented v1 messages are handshake,
 complete layout snapshot, full binary terminal-grid snapshot, sparse grid
@@ -65,6 +64,6 @@ The native contract also attaches ordinary local and SSH PTY-backed tmux
 clients beside the graphical views, verifies backing-console and presentation
 metadata, drives `prefix+v`, and proves the smaller ttys cannot replace
 graphical canonical sizing. The SSH leg authenticates generated keys to an
-isolated loopback OpenSSH server and forces the remote `engine-mux` command to
+isolated loopback OpenSSH server and forces the remote `tmux` command to
 own a PTY. Direct-KMS split, resize, and zoom clipping now passes through
-`eos-proof native-kms`; real Falkon and Quake pane sessions are next.
+`eos-proof native-kms`; Falkon and Quake run as scoped pane presentations.

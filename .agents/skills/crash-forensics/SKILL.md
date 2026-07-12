@@ -17,11 +17,11 @@ Collect evidence before guessing.
 ./tools/engineos/eos-crash-bundle
 ```
 
-Inside a booted ISO, use the mode that matches the session:
+Inside a live EngineOS session:
 
 ```bash
-eos-proof booted-iso --vm
-eos-proof launchpad --runtime
+eos-proof shell-launch
+eos-proof native-kms
 eos-crash-bundle --runtime
 eos-logs runtime --last 200
 eos-logs shell --last 200

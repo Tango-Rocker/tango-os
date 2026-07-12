@@ -49,8 +49,7 @@ DEV_SHELL_UNIT="${ENGINEOS_DEV_SHELL_UNIT:-engineos-dev-shell.service}"
 DEV_SHELL_START="${ENGINEOS_DEV_SHELL_START:-engineos-dev-shell-start}"
 PROC_DIR="${ENGINEOS_PROC_DIR:-/proc}"
 KILL_CMD="${ENGINEOS_KILL_CMD:-kill}"
-TMUX_CMD="${ENGINEOS_TMUX_CMD:-engine-mux}"
-TMUX_HELPER_DIR="${ENGINEOS_TMUX_HELPER_DIR:-/usr/local/bin}"
+TMUX_CMD="${ENGINEOS_TMUX_CMD:-tmux}"
 USER_HOME="${ENGINEOS_USER_HOME:-${HOME:-}}"
 PAYLOAD_DIR="${ENGINEOS_POST_INSTALL_PAYLOAD:-}"
 if [[ -z "$PAYLOAD_DIR" ]]; then
@@ -61,39 +60,6 @@ if [[ -z "$PAYLOAD_DIR" ]]; then
   fi
 fi
 
-eos_app_cmd_string() {
-  if [[ -x "$ROOT/tools/engineos/eos-app" ]]; then
-    printf '%q' "$ROOT/tools/engineos/eos-app"
-  else
-    printf 'eos-app'
-  fi
-}
-
-EOS_APP_CMD_STRING="$(eos_app_cmd_string)"
-APPS_MANIFEST="$(engineos_apps_manifest "$ROOT")"
-
-manifest_command_or_default() {
-  local app="$1"
-  local fallback="$2"
-  local command=""
-
-  command="$(engineos_app_manifest_value "$APPS_MANIFEST" "$app" command || true)"
-  if [[ -z "$command" ]]; then
-    printf '%s\n' "$fallback"
-    return
-  fi
-  if [[ "$command" == engineos\ app* ]]; then
-    printf '%s%s\n' "$EOS_APP_CMD_STRING" "${command#engineos app}"
-  else
-    printf '%s\n' "$command"
-  fi
-}
-
-DEFAULT_TERMINAL="${ENGINEOS_TERMINAL_SLOT_CMD:-$(manifest_command_or_default terminal "$EOS_APP_CMD_STRING launch terminal")}"
-DEFAULT_TERMINAL_SECONDARY="${ENGINEOS_TERMINAL_SECONDARY_SLOT_CMD:-$(manifest_command_or_default terminal-secondary "$EOS_APP_CMD_STRING launch terminal-secondary")}"
-DEFAULT_CUBE="${ENGINEOS_CUBE_CMD:-$(manifest_command_or_default cube "$EOS_APP_CMD_STRING launch cube")}"
-DEFAULT_ENGINE="${ENGINEOS_ENGINE_CMD:-$(manifest_command_or_default quake "$EOS_APP_CMD_STRING launch quake")}"
-
 usage() {
   cat <<'HELP'
 Usage: shell_runner.sh --headless
@@ -102,13 +68,12 @@ Usage: shell_runner.sh --headless
        shell_runner.sh restart-live [--dry-run] [--timeout SECONDS] [--allow-partial]
        shell_runner.sh refresh-user [--dry-run] [--force-config]
 
-Run the EngineOS shell path. Headless and nested can smoke locally. TTY is
-the Runtime graphical entry point and bootstraps the launchpad slots by
-default when the real shell binary is installed.
+Run the native EngineOS mux compositor. Headless and nested can smoke locally;
+TTY is the direct DRM graphical entry point.
 
 restart-live restarts engineos-dev-shell.service and verifies that a new
-engineos-shell PID appears. refresh-user removes retired bridge helpers and
-sources the managed configuration in the native mux server.
+engineos-shell PID appears. refresh-user installs and sources the managed tmux
+configuration in the authoritative server.
 HELP
 }
 
@@ -429,18 +394,6 @@ run_refresh_user() {
     printf '  result:     failed reason=install-zsh-config-failed\n'
     return 1
   fi
-  for helper in engineos-tmux-attach-primary engineos-tmux-pane-bridge \
-      engineos-tmux-pane-sync engineos-tmux-window-move \
-      engineos-tmux-window-sync engineos-tmux-window-focus \
-      engineos-tmux-window-proxy; do
-		if [[ "$dry_run" == true ]]; then
-			printf '  would_remove: %s\n' "$TMUX_HELPER_DIR/$helper"
-		else
-			rm -f "$TMUX_HELPER_DIR/$helper" 2>/dev/null ||
-				sudo -n rm -f "$TMUX_HELPER_DIR/$helper"
-		fi
-  done
-
   if ! have_executable "$TMUX_CMD"; then
     printf '  mux:        unavailable; native config source skipped\n'
     printf '  result:     partial reason=tmux-unavailable\n'
@@ -468,25 +421,8 @@ run_refresh_user() {
 run_real_shell_if_available() {
   local mode="$1"
   local smoke_args=()
-  local startup_args=()
-  local launch_args=()
-  local bootstrap_args=()
   if [[ "${ENGINEOS_SHELL_SMOKE:-false}" == "true" ]]; then
     smoke_args+=(--smoke)
-  fi
-  launch_args+=(--terminal "$DEFAULT_TERMINAL")
-  launch_args+=(--terminal-secondary "$DEFAULT_TERMINAL_SECONDARY")
-  launch_args+=(--cube "$DEFAULT_CUBE")
-  launch_args+=(--engine "$DEFAULT_ENGINE")
-  if [[ -n "${ENGINEOS_SHELL_STARTUP:-}" ]]; then
-    startup_args+=(--startup "$ENGINEOS_SHELL_STARTUP")
-  elif [[ -z "${ENGINEOS_SHELL_BOOTSTRAP:-}" && "$mode" == "nested" && "${ENGINEOS_SHELL_AUTO_STARTUP:-true}" == "true" ]]; then
-    startup_args+=(--startup "$DEFAULT_TERMINAL")
-  fi
-  if [[ -n "${ENGINEOS_SHELL_BOOTSTRAP:-}" ]]; then
-    bootstrap_args+=(--bootstrap "$ENGINEOS_SHELL_BOOTSTRAP")
-  elif [[ "$mode" == "tty" ]]; then
-    bootstrap_args+=(--bootstrap launchpad)
   fi
 
   if command -v "$SHELL_BIN" >/dev/null 2>&1; then
@@ -494,13 +430,13 @@ run_real_shell_if_available() {
     tee_shell_output
     case "$mode" in
       headless)
-        WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS="${WLR_HEADLESS_OUTPUTS:-1}" exec "$SHELL_BIN" --headless "${smoke_args[@]}" "${startup_args[@]}" "${launch_args[@]}" "${bootstrap_args[@]}"
+        WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS="${WLR_HEADLESS_OUTPUTS:-1}" exec "$SHELL_BIN" --headless "${smoke_args[@]}"
         ;;
       nested)
-        exec "$SHELL_BIN" --nested "${smoke_args[@]}" "${startup_args[@]}" "${launch_args[@]}" "${bootstrap_args[@]}"
+        exec "$SHELL_BIN" --nested "${smoke_args[@]}"
         ;;
       tty)
-        exec "$SHELL_BIN" --tty "${smoke_args[@]}" "${startup_args[@]}" "${launch_args[@]}" "${bootstrap_args[@]}"
+        exec "$SHELL_BIN" --tty "${smoke_args[@]}"
         ;;
     esac
   fi
