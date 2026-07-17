@@ -350,7 +350,6 @@ proc_uid_matches() {
 run_refresh_user() {
   local dry_run=false
   local force_config=false
-  local helper
   local refresh_result="refreshed"
   local refresh_reason="none"
   local tmux_conf
@@ -381,7 +380,6 @@ run_refresh_user() {
   printf '  root:       %s\n' "$ROOT"
   printf '  payload:    %s\n' "$PAYLOAD_DIR"
   printf '  home:       %s\n' "$USER_HOME"
-  printf '  helper_dir: %s\n' "$TMUX_HELPER_DIR"
   printf '  dry_run:    %s\n' "$dry_run"
 
   if [[ -z "$USER_HOME" ]]; then

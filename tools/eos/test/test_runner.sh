@@ -3135,6 +3135,13 @@ FAKE
     die "shell runner passed a removed rollback/bootstrap option"
   fi
 
+  mkdir -p "$tmp_dir/home"
+  ENGINEOS_USER_HOME="$tmp_dir/home" \
+    "$SCRIPT_DIR/shell_runner.sh" refresh-user --dry-run \
+    >"$tmp_dir/refresh-user.out"
+  grep -F 'result:     preview' "$tmp_dir/refresh-user.out" >/dev/null ||
+    die "shell runner user refresh dry-run did not complete"
+
   for helper in engineos-tmux-pane-bridge engineos-tmux-pane-sync \
       engineos-tmux-window-move engineos-tmux-window-sync \
       engineos-tmux-window-focus engineos-tmux-window-proxy \

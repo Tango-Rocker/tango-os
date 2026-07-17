@@ -110,7 +110,7 @@ The checkout and tty1 deployment now have a versioned terminal-theme contract fo
 
 Meson tests, package builds for `engineos-shell` and `engineos-tools`, and the
 full headless GLES2 native-mux contract pass. On 2026-07-17 the tty1 deployment
-was upgraded to `engineos-shell 0.1.0-80` and `engineos-tools 0.1.0-58`, the
+was upgraded to `engineos-shell 0.1.0-80` and `engineos-tools 0.1.0-59`, the
 live shell was restarted while retaining tmux server PID 690, and
 `gruvbox-dark` was applied in flight as generation 2. The live state reports
 foreground `#ebdbb2`, background `#282828`, renderer
