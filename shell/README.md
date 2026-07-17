@@ -43,14 +43,20 @@ tmux by pane ID, generation, image ID, and client-view lease.
 
 ## IPC And State
 
-The shell preview socket is limited to observability ping, output wallpaper,
-wallpaper removal, diagnostic window focus, and relayout. Pane apps and pane
-images are tmux commands, not shell IPC.
+The shell preview socket is limited to observability ping, live terminal-theme
+changes, output wallpaper, wallpaper removal, diagnostic window focus, and
+relayout. Pane apps and pane images are tmux commands, not shell IPC.
 
 shell-state.json is observational. It reports mux revisions, output views,
 terminal render evidence, presentation leases, mapped surfaces, renderer,
-focus, input, wallpaper, and frame commits. It is never a source of layout or
-identity.
+focus, input, the active terminal theme, wallpaper, and frame commits. It is
+never a source of layout or identity.
+
+Terminal themes are versioned JSON files under `shell/themes` in the checkout
+and `/usr/share/engineos-shell/themes` when installed. Each theme defines the
+default foreground/background and all 16 ANSI colors. Applying a valid theme
+updates existing pane and tmux-UI renderers in flight; malformed themes are
+rejected without changing the active palette.
 
 ## Commands
 
@@ -64,6 +70,11 @@ identity.
     eos-app pane view toggle
     eos-app pane signal TERM
     eos-app pane list --json
+
+    eos-runtime shell theme list
+    eos-runtime shell theme current
+    eos-runtime shell theme apply gruvbox-dark
+    eos-runtime shell theme apply --file ~/.config/engineos/my-theme.json
 
 ## Validation
 

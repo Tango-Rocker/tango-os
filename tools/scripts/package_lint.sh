@@ -310,6 +310,21 @@ lint_pkgbuild() {
         return
       fi
       ;;
+    engineos-wargus)
+      if ! grep -q 'usr/bin/engineos-wargus' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: Wargus launcher adapter is not installed"
+        return
+      fi
+      if ! grep -q 'ENGINEOS_WARGUS_LAUNCHER' "$pkg_dir/engineos-wargus" ||
+          ! grep -q '/home/dev/wargus/launch-linux.sh' "$pkg_dir/engineos-wargus"; then
+        fail "$pkg: adapter does not expose the repo-owned launcher contract"
+        return
+      fi
+      if ! grep -q '^source=()$' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: integration package must not fetch or bundle game assets"
+        return
+      fi
+      ;;
     engineos-ericw-tools)
       for tool in qbsp vis light bspinfo bsputil; do
         if ! grep -q "$tool" "$pkg_dir/PKGBUILD"; then

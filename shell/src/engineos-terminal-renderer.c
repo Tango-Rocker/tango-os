@@ -4,6 +4,7 @@
 
 #include "engineos-image.h"
 #include "engineos-mux-client.h"
+#include "engineos-terminal-theme.h"
 
 #include <arpa/inet.h>
 #include <drm_fourcc.h>
@@ -24,32 +25,11 @@
 #include <wlr/render/wlr_texture.h>
 #include <wlr/types/wlr_buffer.h>
 
-#define COLOUR_FLAG_256 0x01000000
-#define COLOUR_FLAG_RGB 0x02000000
 #define GRID_ATTR_REVERSE 0x10
 
-static uint32_t palette_colour(int value, bool foreground) {
-	static const uint32_t palette[16] = {
-		0x1d1f21, 0xcc342b, 0x198844, 0xfba922,
-		0x3971ed, 0xa36ac7, 0x3971ed, 0xc5c8c6,
-		0x969896, 0xcc342b, 0x198844, 0xfba922,
-		0x3971ed, 0xa36ac7, 0x3971ed, 0xffffff,
-	};
-	if (value & COLOUR_FLAG_RGB) return (uint32_t)value & 0xffffff;
-	int index = value & 0xff;
-	if (value & COLOUR_FLAG_256) {
-		if (index < 16) return palette[index];
-		if (index < 232) {
-			index -= 16;
-			int r = index / 36, g = index / 6 % 6, b = index % 6;
-			return (uint32_t)((r ? r * 40 + 55 : 0) << 16 |
-				(g ? g * 40 + 55 : 0) << 8 | (b ? b * 40 + 55 : 0));
-		}
-		int gray = 8 + (index - 232) * 10;
-		return (uint32_t)(gray << 16 | gray << 8 | gray);
-	}
-	if (index == 8 || index == 9) return foreground ? 0xd8dee9 : 0x101419;
-	return palette[index & 15];
+static uint32_t palette_colour(const struct engineos_terminal_theme *theme,
+		int value, bool foreground) {
+	return engineos_terminal_theme_resolve(theme, value, foreground);
 }
 
 static uint32_t next_codepoint(const uint8_t *text, size_t length,
@@ -170,6 +150,7 @@ static const struct engineos_mux_ui_span *ui_span_at(
 
 static void render_ui_rows(uint8_t *pixels, int image_width, int image_height,
 		struct fcft_font *font, int cell_width, int cell_height, int baseline,
+		const struct engineos_terminal_theme *theme,
 		const struct engineos_mux_ui_row *rows, size_t row_count,
 		uint32_t columns, uint32_t origin_x, uint32_t origin_y,
 		uint32_t *glyph_cells) {
@@ -177,7 +158,8 @@ static void render_ui_rows(uint8_t *pixels, int image_width, int image_height,
 		const struct engineos_mux_ui_row *row = &rows[row_index];
 		for (size_t span_index = 0; span_index < row->span_count; span_index++) {
 			const struct engineos_mux_ui_span *span = &row->spans[span_index];
-			uint32_t background = palette_colour(span->background, false);
+			uint32_t background =
+				palette_colour(theme, span->background, false);
 			fill_rect(pixels, image_width, image_height,
 				(int)(origin_x + span->start) * cell_width,
 				(int)(origin_y + row_index) * cell_height,
@@ -205,7 +187,7 @@ static void render_ui_rows(uint8_t *pixels, int image_width, int image_height,
 				blend_glyph(pixels, image_width, image_height, glyph,
 					(int)(origin_x + glyph_column) * cell_width,
 					(int)(origin_y + row_index) * cell_height + baseline,
-					palette_colour(foreground, true));
+					palette_colour(theme, foreground, true));
 				(*glyph_cells)++;
 			}
 			if (advance > 0) column += (uint32_t)advance;
@@ -227,7 +209,8 @@ bool engineos_terminal_cell_metrics(int *cell_width, int *cell_height,
 }
 
 struct wlr_buffer *engineos_terminal_render(
-		const struct engineos_mux_client *client, int *width, int *height,
+		const struct engineos_mux_client *client,
+		const struct engineos_terminal_theme *theme, int *width, int *height,
 		uint32_t *glyph_cells, char *error, size_t error_size) {
 	struct fcft_font *font = create_terminal_font(error, error_size);
 	if (font == NULL) return NULL;
@@ -255,7 +238,8 @@ struct wlr_buffer *engineos_terminal_render(
 		const struct engine_mux_grid_cell *cell = &client->grid_cells[(size_t)y * client->grid_columns + x];
 		int fg_value = (int32_t)ntohl(cell->foreground), bg_value = (int32_t)ntohl(cell->background);
 		if (ntohs(cell->attributes) & GRID_ATTR_REVERSE) { int swap = fg_value; fg_value = bg_value; bg_value = swap; }
-		uint32_t fg = palette_colour(fg_value, true), bg = palette_colour(bg_value, false);
+		uint32_t fg = palette_colour(theme, fg_value, true);
+		uint32_t bg = palette_colour(theme, bg_value, false);
 		fill_rect(pixels, *width, *height, (int)x * cell_width, (int)y * cell_height, cell_width, cell_height, bg);
 		if ((cell->flags & ENGINE_MUX_GRID_CELL_PADDING) || cell->text_length == 0) continue;
 		size_t offset = 0; bool drew = false;
@@ -273,12 +257,13 @@ struct wlr_buffer *engineos_terminal_render(
 	}
 	if (client->ui_status_y >= 0 && client->ui_status_row_count != 0) {
 		render_ui_rows(pixels, *width, *height, font, cell_width, cell_height,
-			baseline, client->ui_status_rows, client->ui_status_row_count,
+			baseline, theme, client->ui_status_rows,
+			client->ui_status_row_count,
 			client->ui_columns, 0, (uint32_t)client->ui_status_y, glyph_cells);
 	}
 	if (client->ui_menu_active && client->ui_menu_row_count != 0) {
 		render_ui_rows(pixels, *width, *height, font, cell_width, cell_height,
-			baseline, client->ui_menu_rows, client->ui_menu_row_count,
+			baseline, theme, client->ui_menu_rows, client->ui_menu_row_count,
 			client->ui_menu_width, client->ui_menu_x, client->ui_menu_y,
 			glyph_cells);
 	}
@@ -299,6 +284,8 @@ struct engineos_atlas_entry {
 struct engineos_terminal_renderer {
 	struct wlr_renderer *renderer;
 	struct wlr_allocator *allocator;
+	struct engineos_terminal_theme theme;
+	bool theme_changed;
 	struct wlr_buffer *buffer;
 	struct wlr_buffer *gpu_buffers[2];
 	struct wlr_texture *gpu_buffer_textures[2];
@@ -390,7 +377,7 @@ static bool atlas_require_grid_cell(struct engineos_terminal_renderer *terminal,
 	if (ntohs(cell->attributes) & GRID_ATTR_REVERSE) {
 		int32_t swap = foreground; foreground = background; background = swap;
 	}
-	uint32_t colour = palette_colour(foreground, true);
+	uint32_t colour = palette_colour(&terminal->theme, foreground, true);
 	size_t offset = 0;
 	while (offset < cell->text_length) {
 		uint32_t codepoint = next_codepoint(cell->text, cell->text_length, &offset);
@@ -418,7 +405,8 @@ static bool atlas_require_ui_row(struct engineos_terminal_renderer *terminal,
 			int32_t swap = foreground; foreground = background; background = swap;
 		}
 		if (!atlas_require(terminal, codepoint,
-				palette_colour(foreground, true), changed, error, error_size))
+				palette_colour(&terminal->theme, foreground, true), changed,
+				error, error_size))
 			return false;
 		if (advance > 0) column += (uint32_t)advance;
 	}
@@ -562,7 +550,8 @@ static void pass_grid_background(struct engineos_terminal_renderer *terminal,
 	}
 	pass_rect(pass, (int)x * terminal->cell_width,
 		(int)y * terminal->cell_height, terminal->cell_width,
-		terminal->cell_height, palette_colour(background, false), 1.0f, NULL);
+		terminal->cell_height,
+		palette_colour(&terminal->theme, background, false), 1.0f, NULL);
 }
 
 static void pass_grid_glyph(struct engineos_terminal_renderer *terminal,
@@ -575,7 +564,7 @@ static void pass_grid_glyph(struct engineos_terminal_renderer *terminal,
 	if (ntohs(cell->attributes) & GRID_ATTR_REVERSE) {
 		int32_t swap = foreground; foreground = background; background = swap;
 	}
-	uint32_t colour = palette_colour(foreground, true);
+	uint32_t colour = palette_colour(&terminal->theme, foreground, true);
 	size_t offset = 0;
 	while (offset < cell->text_length) {
 		uint32_t codepoint = next_codepoint(cell->text, cell->text_length, &offset);
@@ -596,7 +585,8 @@ static void pass_ui_rows(struct engineos_terminal_renderer *terminal,
 			pass_rect(pass, (int)(origin_x + span->start) * terminal->cell_width,
 				(int)(origin_y + row_index) * terminal->cell_height,
 				(int)(span->end - span->start) * terminal->cell_width,
-				terminal->cell_height, palette_colour(span->background, false),
+				terminal->cell_height,
+				palette_colour(&terminal->theme, span->background, false),
 				1.0f, clip);
 		}
 	}
@@ -617,7 +607,7 @@ static void pass_ui_rows(struct engineos_terminal_renderer *terminal,
 				int32_t swap = foreground; foreground = background; background = swap;
 			}
 			ssize_t entry = atlas_find(terminal, codepoint,
-				palette_colour(foreground, true));
+				palette_colour(&terminal->theme, foreground, true));
 			if (entry >= 0) pass_glyph(terminal, pass, (size_t)entry,
 				(int)(origin_x + glyph_column) * terminal->cell_width,
 				(int)(origin_y + row_index) * terminal->cell_height, clip);
@@ -732,7 +722,7 @@ static bool readback_nonblank_pixels(struct engineos_terminal_renderer *terminal
 		snprintf(error, error_size, "failed to read GPU terminal target");
 		return false;
 	}
-	uint32_t background = palette_colour(9, false);
+	uint32_t background = palette_colour(&terminal->theme, 9, false);
 	*nonblank = 0;
 	for (int y = 0; y < height; y++) {
 		for (int x = 0; x < width; x++) {
@@ -751,8 +741,9 @@ static bool gpu_update(struct engineos_terminal_renderer *terminal,
 	int width, height;
 	if (!terminal_dimensions(client, terminal->cell_width, terminal->cell_height,
 			&width, &height, error, error_size)) return false;
-	bool full = terminal->gpu_buffers[0] == NULL || client->grid_full_damage ||
-		client->ui_changed || width != terminal->stats.width ||
+	bool full = terminal->gpu_buffers[0] == NULL || terminal->theme_changed ||
+		client->grid_full_damage || client->ui_changed ||
+		width != terminal->stats.width ||
 		height != terminal->stats.height;
 	bool reallocated = terminal->gpu_buffers[0] == NULL ||
 		width != terminal->stats.width || height != terminal->stats.height;
@@ -777,6 +768,16 @@ static bool gpu_update(struct engineos_terminal_renderer *terminal,
 		if (client->grid_flags & ENGINE_MUX_GRID_CURSOR_VISIBLE)
 			mark_cell(mask, client->grid_columns, client->grid_rows,
 				client->grid_cursor_x, client->grid_cursor_y);
+	}
+	if (terminal->theme_changed) {
+		if (terminal->atlas != NULL) {
+			wlr_texture_destroy(terminal->atlas);
+			terminal->atlas = NULL;
+		}
+		free(terminal->entries);
+		terminal->entries = NULL;
+		terminal->entry_count = 0;
+		terminal->entry_capacity = 0;
 	}
 	bool atlas_changed = false;
 	if (!atlas_require_client(terminal, client, mask, full, &atlas_changed,
@@ -833,7 +834,7 @@ static bool gpu_update(struct engineos_terminal_renderer *terminal,
 	if (full) {
 		bool ui_overlay = client->grid_columns == 0 && client->grid_rows == 0;
 		pass_rect(pass, 0, 0, width, height,
-			ui_overlay ? 0 : palette_colour(9, false),
+			ui_overlay ? 0 : palette_colour(&terminal->theme, 9, false),
 			ui_overlay ? 0.0f : 1.0f, NULL);
 	}
 	else
@@ -857,7 +858,8 @@ static bool gpu_update(struct engineos_terminal_renderer *terminal,
 			client->grid_cursor_y < client->grid_rows) {
 		pass_rect(pass, (int)client->grid_cursor_x * terminal->cell_width,
 			(int)client->grid_cursor_y * terminal->cell_height,
-			terminal->cell_width, terminal->cell_height, 0xffffff, 0.35f, NULL);
+			terminal->cell_width, terminal->cell_height,
+			terminal->theme.foreground, 0.35f, NULL);
 	}
 	const pixman_region32_t *clip = full ? NULL : &terminal->damage;
 	if (client->ui_status_y >= 0 && client->ui_status_row_count != 0) {
@@ -889,6 +891,7 @@ static bool gpu_update(struct engineos_terminal_renderer *terminal,
 	terminal->stats.atlas_entries = (uint32_t)terminal->entry_count;
 	terminal->stats.damaged_cells = damaged_cells;
 	terminal->stats.frame++;
+	terminal->theme_changed = false;
 	return true;
 }
 
@@ -896,8 +899,8 @@ static bool cpu_update(struct engineos_terminal_renderer *terminal,
 		const struct engineos_mux_client *client, char *error, size_t error_size) {
 	int width = 0, height = 0;
 	uint32_t glyph_cells = 0;
-	struct wlr_buffer *buffer = engineos_terminal_render(client, &width, &height,
-		&glyph_cells, error, error_size);
+	struct wlr_buffer *buffer = engineos_terminal_render(client,
+		&terminal->theme, &width, &height, &glyph_cells, error, error_size);
 	if (buffer == NULL) return false;
 	if (terminal->buffer != NULL) wlr_buffer_drop(terminal->buffer);
 	terminal->buffer = buffer;
@@ -910,12 +913,15 @@ static bool cpu_update(struct engineos_terminal_renderer *terminal,
 	terminal->stats.atlas_entries = 0;
 	terminal->stats.damaged_cells = client->grid_columns * client->grid_rows;
 	terminal->stats.frame++;
+	terminal->theme_changed = false;
 	return true;
 }
 
 struct engineos_terminal_renderer *engineos_terminal_renderer_create(
 		struct wlr_renderer *renderer, struct wlr_allocator *allocator,
-		const struct engineos_mux_client *client, char *error, size_t error_size) {
+		const struct engineos_mux_client *client,
+		const struct engineos_terminal_theme *theme, char *error,
+		size_t error_size) {
 	struct engineos_terminal_renderer *terminal = calloc(1, sizeof(*terminal));
 	if (terminal == NULL) {
 		snprintf(error, error_size, "out of memory creating terminal renderer");
@@ -923,6 +929,11 @@ struct engineos_terminal_renderer *engineos_terminal_renderer_create(
 	}
 	terminal->renderer = renderer;
 	terminal->allocator = allocator;
+	if (theme != NULL)
+		terminal->theme = *theme;
+	else
+		engineos_terminal_theme_default(&terminal->theme);
+	terminal->theme_changed = true;
 	pixman_region32_init(&terminal->damage);
 	if (wlr_renderer_is_pixman(renderer)) {
 		strcpy(terminal->mode, "cpu-pixman-smoke");
@@ -958,6 +969,15 @@ struct engineos_terminal_renderer *engineos_terminal_renderer_create(
 fail:
 	engineos_terminal_renderer_destroy(terminal);
 	return NULL;
+}
+
+void engineos_terminal_renderer_set_theme(
+		struct engineos_terminal_renderer *terminal,
+		const struct engineos_terminal_theme *theme) {
+	if (terminal == NULL || theme == NULL)
+		return;
+	terminal->theme = *theme;
+	terminal->theme_changed = true;
 }
 
 bool engineos_terminal_renderer_update(

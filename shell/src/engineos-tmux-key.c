@@ -72,3 +72,16 @@ size_t engineos_tmux_key_name(xkb_keysym_t sym, uint32_t modifiers,
 	memcpy(key_name + used, special, special_length + 1);
 	return used + special_length;
 }
+
+bool engineos_tmux_key_repeats(const struct wlr_keyboard *keyboard,
+		uint32_t keycode) {
+	return keyboard != NULL && keyboard->repeat_info.rate > 0 &&
+		keyboard->keymap != NULL &&
+		xkb_keymap_key_repeats(keyboard->keymap, keycode);
+}
+
+int engineos_tmux_key_repeat_interval_ms(int32_t rate_hz) {
+	if (rate_hz <= 0) return 0;
+	int interval = 1000 / rate_hz;
+	return interval > 0 ? interval : 1;
+}

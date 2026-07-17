@@ -9,6 +9,13 @@ SHELL_SOURCE="$ROOT/shell/src/engineos-shell.c"
 fail() { printf 'FAIL %s\n' "$*" >&2; exit 1; }
 ok() { printf 'OK   %s\n' "$*"; }
 
+if ! pkg-config --exists wlroots-0.19 &&
+		! pkg-config --exists wlroots-0.18 &&
+		! pkg-config --exists wlroots; then
+	fail 'wlroots pkg-config modules unavailable'
+fi
+ok 'wlroots pkg-config modules available'
+
 for marker in \
   'engineos_mux_client_connect' \
   'setup_native_terminal_scene' \

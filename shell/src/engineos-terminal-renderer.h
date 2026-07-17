@@ -7,6 +7,7 @@
 #include <pixman.h>
 
 struct engineos_mux_client;
+struct engineos_terminal_theme;
 struct wlr_allocator;
 struct wlr_buffer;
 struct wlr_drm_syncobj_timeline;
@@ -28,12 +29,18 @@ bool engineos_terminal_cell_metrics(int *cell_width, int *cell_height,
 	char *error, size_t error_size);
 
 struct wlr_buffer *engineos_terminal_render(
-	const struct engineos_mux_client *client, int *width, int *height,
+	const struct engineos_mux_client *client,
+	const struct engineos_terminal_theme *theme, int *width, int *height,
 	uint32_t *glyph_cells, char *error, size_t error_size);
 
 struct engineos_terminal_renderer *engineos_terminal_renderer_create(
 	struct wlr_renderer *renderer, struct wlr_allocator *allocator,
-	const struct engineos_mux_client *client, char *error, size_t error_size);
+	const struct engineos_mux_client *client,
+	const struct engineos_terminal_theme *theme, char *error,
+	size_t error_size);
+void engineos_terminal_renderer_set_theme(
+	struct engineos_terminal_renderer *terminal,
+	const struct engineos_terminal_theme *theme);
 bool engineos_terminal_renderer_update(
 	struct engineos_terminal_renderer *terminal,
 	const struct engineos_mux_client *client, char *error, size_t error_size);

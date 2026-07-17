@@ -56,6 +56,7 @@ executable(
     'src/engineos-image.c',
     'src/engineos-mux-client.c',
     'src/engineos-terminal-renderer.c',
+    'src/engineos-terminal-theme.c',
     'src/engineos-tmux-key.c',
     xdg_shell_protocol_header,
     pointer_constraints_protocol_header,
@@ -86,6 +87,22 @@ tmux_key_test = executable(
   dependencies: [wlroots_dep, xkbcommon_dep],
 )
 test('tmux-key-name', tmux_key_test)
+
+terminal_theme_test = executable(
+  'engineos-terminal-theme-test',
+  [
+    'tests/terminal-theme.c',
+    'src/engineos-terminal-theme.c',
+  ],
+  include_directories: [include_directories('src')],
+  dependencies: [json_c_dep],
+)
+test('terminal-theme', terminal_theme_test)
+
+install_subdir(
+  'themes',
+  install_dir: get_option('datadir') / 'engineos-shell',
+)
 
 mux_client_pane_race_test = executable(
   'engineos-mux-client-pane-race-test',

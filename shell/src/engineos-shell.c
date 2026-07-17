@@ -54,6 +54,7 @@
 #include "engineos-image.h"
 #include "engineos-mux-client.h"
 #include "engineos-terminal-renderer.h"
+#include "engineos-terminal-theme.h"
 #include "engineos-tmux-key.h"
 
 #ifndef XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION
@@ -166,6 +167,7 @@ struct engineos_shell_server {
 	struct wlr_scene_buffer *mux_terminal_scene;
 	struct wlr_buffer *mux_terminal_buffer;
 	struct engineos_terminal_renderer *mux_terminal_renderer;
+	struct engineos_terminal_theme terminal_theme;
 	int mux_terminal_width;
 	int mux_terminal_height;
 	uint32_t mux_terminal_glyph_cells;
@@ -244,6 +246,10 @@ struct engineos_shell_keyboard {
 	struct engineos_shell_server *server;
 	struct wlr_input_device *device;
 	struct wlr_keyboard *keyboard;
+	struct wl_event_source *terminal_repeat_timer;
+	uint32_t terminal_repeat_keycode;
+	xkb_keysym_t terminal_repeat_sym;
+	uint32_t terminal_repeat_modifiers;
 	struct wl_listener modifiers;
 	struct wl_listener key;
 	struct wl_listener destroy;
@@ -1433,7 +1439,7 @@ static bool create_mux_pane_output_scene(
 	}
 	output_scene->renderer = engineos_terminal_renderer_create(
 		output->server->renderer, output->server->allocator, &render_client,
-		error, error_size);
+		&output->server->terminal_theme, error, error_size);
 	if (output_scene->renderer == NULL) {
 		free(output_scene);
 		return false;
@@ -1495,7 +1501,8 @@ static bool create_mux_output_scene(struct engineos_shell_output *output,
 	struct engineos_mux_client ui_client;
 	view_ui_render_client(server, &output->mux_snapshot.ui, &ui_client);
 	output->mux_ui_renderer = engineos_terminal_renderer_create(server->renderer,
-		server->allocator, &ui_client, error, error_size);
+		server->allocator, &ui_client, &server->terminal_theme, error,
+		error_size);
 	if (output->mux_ui_renderer == NULL)
 		return false;
 	engineos_terminal_renderer_stats(output->mux_ui_renderer,
@@ -2490,7 +2497,7 @@ static void preview_write_response(int client_fd, const char *status,
 	char response[1024];
 	if (strcmp(status, "ok") == 0) {
 		snprintf(response, sizeof(response),
-			"{\"version\":1,\"status\":\"ok\",\"capabilities\":[\"ping\",\"wallpaper\",\"hide-wallpaper\",\"focus-window\",\"relayout-windows\",\"png\",\"jpeg\",\"cover\",\"opacity\"]}\n");
+			"{\"version\":1,\"status\":\"ok\",\"capabilities\":[\"ping\",\"terminal-theme\",\"wallpaper\",\"hide-wallpaper\",\"focus-window\",\"relayout-windows\",\"png\",\"jpeg\",\"cover\",\"opacity\"]}\n");
 	} else {
 		char escaped[768];
 		size_t used = 0;
@@ -2516,6 +2523,54 @@ static void preview_write_response(int client_fd, const char *status,
 	}
 }
 
+static void set_terminal_theme_on_renderers(
+		struct engineos_shell_server *server,
+		const struct engineos_terminal_theme *theme) {
+	struct engineos_mux_pane_scene *pane_scene;
+	wl_list_for_each(pane_scene, &server->mux_pane_scenes, link) {
+		struct engineos_mux_pane_output_scene *output_scene;
+		wl_list_for_each(output_scene, &pane_scene->output_scenes, link)
+			engineos_terminal_renderer_set_theme(output_scene->renderer, theme);
+	}
+	struct engineos_shell_output *output;
+	wl_list_for_each(output, &server->outputs, link) {
+		engineos_terminal_renderer_set_theme(output->mux_ui_renderer, theme);
+		output->mux_snapshot.ui.changed = true;
+	}
+}
+
+static bool apply_terminal_theme(struct engineos_shell_server *server,
+		struct json_object *object, char *error, size_t error_size) {
+	struct engineos_terminal_theme theme;
+	if (!engineos_terminal_theme_parse(&theme, object, error, error_size))
+		return false;
+
+	struct engineos_terminal_theme previous = server->terminal_theme;
+	theme.generation = previous.generation == UINT64_MAX ?
+		1 : previous.generation + 1;
+	server->terminal_theme = theme;
+	set_terminal_theme_on_renderers(server, &server->terminal_theme);
+	if (!refresh_native_terminal_scene(server, "terminal-theme-changed")) {
+		server->terminal_theme = previous;
+		set_terminal_theme_on_renderers(server, &server->terminal_theme);
+		if (!refresh_native_terminal_scene(server, "terminal-theme-rollback")) {
+			snprintf(error, error_size,
+				"terminal theme render and rollback both failed");
+			server->mux_client.ready = false;
+			wl_display_terminate(server->display);
+			return false;
+		}
+		snprintf(error, error_size, "terminal theme render failed");
+		return false;
+	}
+	wlr_log(WLR_INFO,
+		"terminal theme changed name=%s generation=%llu foreground=#%06x background=#%06x",
+		server->terminal_theme.name,
+		(unsigned long long)server->terminal_theme.generation,
+		server->terminal_theme.foreground, server->terminal_theme.background);
+	return true;
+}
+
 static void handle_preview_request_json(struct engineos_shell_server *server,
 		int client_fd, struct json_object *request) {
 	char op[32] = {0};
@@ -2525,6 +2580,21 @@ static void handle_preview_request_json(struct engineos_shell_server *server,
 	}
 
 	if (strcmp(op, "ping") == 0) {
+		preview_write_response(client_fd, "ok", NULL);
+		return;
+	}
+	if (strcmp(op, "terminal-theme") == 0) {
+		struct json_object *theme = NULL;
+		if (!json_object_object_get_ex(request, "theme", &theme)) {
+			preview_write_response(client_fd, "error", "missing theme");
+			return;
+		}
+		char error[512] = {0};
+		if (!apply_terminal_theme(server, theme, error, sizeof(error))) {
+			preview_write_response(client_fd, "error",
+				error[0] != '\0' ? error : "terminal theme failed");
+			return;
+		}
 		preview_write_response(client_fd, "ok", NULL);
 		return;
 	}
@@ -2802,6 +2872,18 @@ static void write_shell_state(struct engineos_shell_server *server,
 	json_write_string(file, getenv("WAYLAND_DISPLAY"));
 	fprintf(file, ",\n  \"screencopy\": %s",
 		server->screencopy_mgr != NULL ? "true" : "false");
+	fprintf(file, ",\n  \"terminal_theme\": {\"name\": ");
+	json_write_string(file, server->terminal_theme.name);
+	fprintf(file,
+		", \"generation\": %llu, \"foreground\": \"#%06x\", \"background\": \"#%06x\", \"colors\": [",
+		(unsigned long long)server->terminal_theme.generation,
+		server->terminal_theme.foreground, server->terminal_theme.background);
+	for (size_t index = 0;
+			index < ENGINEOS_TERMINAL_THEME_COLOR_COUNT; index++) {
+		fprintf(file, "%s\"#%06x\"", index == 0 ? "" : ",",
+			server->terminal_theme.colors[index]);
+	}
+	fprintf(file, "]}");
 	fprintf(file, ",\n  \"mux\": {\"mode\": ");
 	json_write_string(file, "native");
 	fprintf(file, ", \"connected\": %s, \"revision\": %llu, \"socket\": ",
@@ -4215,14 +4297,15 @@ static void keyboard_handle_modifiers(struct wl_listener *listener, void *data) 
 		&keyboard->keyboard->modifiers);
 }
 
-static bool route_native_terminal_key(struct engineos_shell_server *server,
-		struct wlr_keyboard *keyboard, struct wlr_keyboard_key_event *event,
-		xkb_keysym_t sym, uint32_t keycode, uint32_t modifiers) {
-	(void)keyboard;
-	(void)keycode;
-	if (!server->mux_client.ready ||
-			server->input_mode != ENGINEOS_INPUT_TERMINAL) return false;
-	if (event->state != WL_KEYBOARD_KEY_STATE_PRESSED) return true;
+static void cancel_native_terminal_key_repeat(
+		struct engineos_shell_keyboard *keyboard) {
+	keyboard->terminal_repeat_keycode = 0;
+	if (keyboard->terminal_repeat_timer != NULL)
+		wl_event_source_timer_update(keyboard->terminal_repeat_timer, 0);
+}
+
+static bool send_native_terminal_key(struct engineos_shell_server *server,
+		const char *key_name) {
 	struct engineos_shell_output *output = focused_mux_output(server);
 	struct engineos_mux_pane_model *pane = focused_mux_pane(server);
 	if (output == NULL || pane == NULL) {
@@ -4230,11 +4313,8 @@ static bool route_native_terminal_key(struct engineos_shell_server *server,
 			"native tmux key has no authoritative focused output model");
 		server->mux_client.ready = false;
 		wl_display_terminate(server->display);
-		return true;
+		return false;
 	}
-	char key_name[64];
-	size_t length = engineos_tmux_key_name(sym, modifiers, key_name);
-	if (length == 0) return true;
 	bool grid_changed = false;
 	char error[256] = {0};
 	if (!engineos_mux_client_send_key(&server->mux_client,
@@ -4243,13 +4323,13 @@ static bool route_native_terminal_key(struct engineos_shell_server *server,
 		if (server->mux_client.last_request_rejected) {
 			wlr_log(WLR_ERROR,
 				"native tmux key rejected key=%s: %s", key_name, error);
-			return true;
+			return false;
 		}
 		wlr_log(WLR_ERROR, "native tmux key transport failed key=%s: %s",
 			key_name, error);
 		server->mux_client.ready = false;
 		wl_display_terminate(server->display);
-		return true;
+		return false;
 	}
 	bool ui_grid_changed = false;
 	if (!engineos_mux_client_request_view_ui(&server->mux_client,
@@ -4259,23 +4339,86 @@ static bool route_native_terminal_key(struct engineos_shell_server *server,
 			key_name, error);
 		server->mux_client.ready = false;
 		wl_display_terminate(server->display);
-		return true;
+		return false;
 	}
 	if (!refresh_native_output_snapshots(server, &grid_changed, error,
 			sizeof(error))) {
 		wlr_log(WLR_ERROR,
-			"native graphical prefix output refresh failed key=%s: %s",
+			"native terminal output refresh failed key=%s: %s",
 			key_name, error);
 		server->mux_client.ready = false;
 		wl_display_terminate(server->display);
-		return true;
+		return false;
 	}
 	if (!refresh_native_terminal_scene(server,
 			grid_changed || ui_grid_changed ?
 			"native-input-grid-and-ui-damage" : "native-input-ui-damage")) {
 		server->mux_client.ready = false;
 		wl_display_terminate(server->display);
+		return false;
 	}
+	return true;
+}
+
+static int native_terminal_key_repeat(void *data) {
+	struct engineos_shell_keyboard *keyboard = data;
+	struct engineos_shell_server *server = keyboard->server;
+	if (keyboard->terminal_repeat_keycode == 0 ||
+			!server->mux_client.ready ||
+			server->input_mode != ENGINEOS_INPUT_TERMINAL) {
+		cancel_native_terminal_key_repeat(keyboard);
+		return 0;
+	}
+
+	char key_name[64];
+	if (engineos_tmux_key_name(keyboard->terminal_repeat_sym,
+			keyboard->terminal_repeat_modifiers, key_name) == 0 ||
+			!send_native_terminal_key(server, key_name)) {
+		cancel_native_terminal_key_repeat(keyboard);
+		return 0;
+	}
+
+	int interval = engineos_tmux_key_repeat_interval_ms(
+		keyboard->keyboard->repeat_info.rate);
+	if (interval <= 0) {
+		cancel_native_terminal_key_repeat(keyboard);
+		return 0;
+	}
+	wl_event_source_timer_update(keyboard->terminal_repeat_timer, interval);
+	return 0;
+}
+
+static void start_native_terminal_key_repeat(
+		struct engineos_shell_keyboard *keyboard, xkb_keysym_t sym,
+		uint32_t keycode, uint32_t modifiers) {
+	if (keyboard->terminal_repeat_timer == NULL ||
+			!engineos_tmux_key_repeats(keyboard->keyboard, keycode)) return;
+	keyboard->terminal_repeat_keycode = keycode;
+	keyboard->terminal_repeat_sym = sym;
+	keyboard->terminal_repeat_modifiers = modifiers;
+	int delay = keyboard->keyboard->repeat_info.delay;
+	if (delay <= 0)
+		delay = engineos_tmux_key_repeat_interval_ms(
+			keyboard->keyboard->repeat_info.rate);
+	wl_event_source_timer_update(keyboard->terminal_repeat_timer, delay);
+}
+
+static bool route_native_terminal_key(struct engineos_shell_keyboard *keyboard,
+		struct wlr_keyboard_key_event *event, xkb_keysym_t sym,
+		uint32_t keycode, uint32_t modifiers) {
+	struct engineos_shell_server *server = keyboard->server;
+	if (!server->mux_client.ready ||
+			server->input_mode != ENGINEOS_INPUT_TERMINAL) return false;
+	if (event->state == WL_KEYBOARD_KEY_STATE_RELEASED) {
+		if (keyboard->terminal_repeat_keycode == keycode)
+			cancel_native_terminal_key_repeat(keyboard);
+		return true;
+	}
+	if (event->state != WL_KEYBOARD_KEY_STATE_PRESSED) return true;
+	char key_name[64];
+	if (engineos_tmux_key_name(sym, modifiers, key_name) == 0) return true;
+	if (!send_native_terminal_key(server, key_name)) return true;
+	start_native_terminal_key_repeat(keyboard, sym, keycode, modifiers);
 	return true;
 }
 
@@ -4395,8 +4538,8 @@ static void keyboard_handle_key(struct wl_listener *listener, void *data) {
 			keyboard->keyboard, event, syms[0], keycode, modifiers);
 	}
 	if (!handled && nsyms > 0) {
-		handled = route_native_terminal_key(server, keyboard->keyboard, event,
-			syms[0], keycode, modifiers);
+		handled = route_native_terminal_key(keyboard, event, syms[0], keycode,
+			modifiers);
 	}
 
 	if (!handled && server->input_mode != ENGINEOS_INPUT_SHELL) {
@@ -4422,6 +4565,8 @@ static void keyboard_destroy(struct wl_listener *listener, void *data) {
 	if (server->keyboard_count > 0) {
 		server->keyboard_count--;
 	}
+	if (keyboard->terminal_repeat_timer != NULL)
+		wl_event_source_remove(keyboard->terminal_repeat_timer);
 	update_seat_capabilities(server);
 	free(keyboard);
 }
@@ -4456,6 +4601,14 @@ static void server_new_keyboard(struct engineos_shell_server *server,
 	xkb_keymap_unref(keymap);
 	xkb_context_unref(context);
 	wlr_keyboard_set_repeat_info(keyboard->keyboard, 25, 600);
+	struct wl_event_loop *event_loop = wl_display_get_event_loop(server->display);
+	keyboard->terminal_repeat_timer = wl_event_loop_add_timer(event_loop,
+		native_terminal_key_repeat, keyboard);
+	if (keyboard->terminal_repeat_timer == NULL) {
+		wlr_log(WLR_ERROR, "failed to create native terminal key repeat timer");
+		free(keyboard);
+		return;
+	}
 
 	keyboard->modifiers.notify = keyboard_handle_modifiers;
 	wl_signal_add(&keyboard->keyboard->events.modifiers, &keyboard->modifiers);
@@ -6459,6 +6612,7 @@ int main(int argc, char **argv) {
 	setlocale(LC_CTYPE, "");
 	enum engineos_shell_mode mode = ENGINEOS_SHELL_AUTO;
 	struct engineos_shell_server server = {0};
+	engineos_terminal_theme_default(&server.terminal_theme);
 	server.preview_socket_fd = -1;
 	server.mux_client.fd = -1;
 	wl_list_init(&server.mux_pane_scenes);

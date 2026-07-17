@@ -408,6 +408,8 @@ cmd_runtime() {
 Usage:
   eos-runtime quake [--smoke]
   eos-runtime shell --headless|--nested|--tty|restart-live|refresh-user
+  eos-runtime shell theme list|current|apply NAME
+  eos-runtime shell theme apply --file PATH
   eos game quake play|reload|status|stop
 HELP
       ;;

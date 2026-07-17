@@ -1039,6 +1039,48 @@ PY
 		tail -80 "$fixture/shell-native.log" >&2 || true
 		die "engineos-shell did not publish native grid state"
 	}
+	local initial_theme_frame initial_theme_frame_sum
+	initial_theme_frame="$(jq -er '.mux.grid.frame' \
+		"$fixture/engineos/shell-state.json")"
+	initial_theme_frame_sum="$(jq -er \
+		'[.output_views[] | .selected_renderer_frame + .ui.frame] | add' \
+		"$fixture/engineos/shell-state.json")"
+	XDG_RUNTIME_DIR="$fixture" ENGINEOS_STATE_DIR="$fixture/engineos" \
+		ENGINEOS_PREVIEW_SOCKET="$fixture/engineos/preview.sock" \
+		"$SCRIPT_DIR/shell_runner.sh" theme apply gruvbox-dark \
+		>"$fixture/theme-apply.out"
+	for _ in {1..100}; do
+		jq -e --argjson frame "$initial_theme_frame" \
+			--argjson frame_sum "$initial_theme_frame_sum" \
+			'.terminal_theme.name == "gruvbox-dark" and
+			 .terminal_theme.generation == 2 and
+			 .terminal_theme.foreground == "#ebdbb2" and
+			 .terminal_theme.background == "#282828" and
+			 .mux.grid.frame > $frame and
+			 ([.output_views[] |
+			    .selected_renderer_frame + .ui.frame] | add) > $frame_sum' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --argjson frame "$initial_theme_frame" \
+		--argjson frame_sum "$initial_theme_frame_sum" \
+		'.terminal_theme.name == "gruvbox-dark" and
+		 .terminal_theme.generation == 2 and
+		 .terminal_theme.foreground == "#ebdbb2" and
+		 .terminal_theme.background == "#282828" and
+		 .mux.grid.frame > $frame and
+		 ([.output_views[] |
+		    .selected_renderer_frame + .ui.frame] | add) > $frame_sum' \
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		cat "$fixture/theme-apply.out" >&2 || true
+		jq '{terminal_theme,mux:{grid:.mux.grid},output_views,last_reason}' \
+			"$fixture/engineos/shell-state.json" >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
+		die "live terminal theme did not redraw pane and tmux UI renderers"
+	}
+	grep -F 'terminal theme applied: gruvbox-dark' \
+		"$fixture/theme-apply.out" >/dev/null ||
+		die "terminal theme command did not report the applied theme"
 	jq -e '.mux.session_id | startswith("$")' \
 		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "shell state did not identify the attached mux session"
@@ -3169,7 +3211,12 @@ PY
 run_app() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-app-test-$$"
   local fake_tmux="$tmp_dir/tmux"
+  local fake_wargus_launcher="$tmp_dir/wargus-launcher"
   local log="$tmp_dir/tmux.log"
+  local manifest_out="$tmp_dir/manifest.out"
+  local status_out="$tmp_dir/status.json"
+  local wrapper_log="$tmp_dir/wargus-wrapper.log"
+  local wrapper_out="$tmp_dir/wargus-wrapper.out"
   cleanup_app() { rm -rf "$tmp_dir"; }
   trap cleanup_app RETURN
   mkdir -p "$tmp_dir/state" "$tmp_dir/log"
@@ -3178,7 +3225,51 @@ run_app() {
 printf '%s\n' "$*" >>"$ENGINEOS_FAKE_TMUX_LOG"
 if [[ "$1" == display-message ]]; then printf '%%9\n'; fi
 FAKE
-  chmod +x "$fake_tmux"
+  cat >"$fake_wargus_launcher" <<'FAKE'
+#!/usr/bin/env bash
+printf '<%s>\n' "$@" >"$ENGINEOS_FAKE_WARGUS_LOG"
+FAKE
+  chmod +x "$fake_tmux" "$fake_wargus_launcher"
+
+  ENGINEOS_APPS_MANIFEST="$ROOT/packages/engineos-config/files/etc/engineos/apps.toml" \
+    "$SCRIPT_DIR/app.sh" manifest validate >"$manifest_out"
+  grep -F 'OK   wargus.app_ids contains stratagus' "$manifest_out" >/dev/null ||
+    die "app manifest did not validate the Stratagus app id"
+  grep -F 'App manifest validation summary: 0 failure(s)' "$manifest_out" >/dev/null ||
+    die "source app manifest validation did not pass"
+
+  ENGINEOS_WARGUS_LAUNCHER="$fake_wargus_launcher" \
+    ENGINEOS_FAKE_WARGUS_LOG="$wrapper_log" \
+    bash "$ROOT/packages/engineos-wargus/engineos-wargus" \
+    --check 'maps/Horde mission.smp'
+  grep -Fx '<--check>' "$wrapper_log" >/dev/null ||
+    die "Wargus adapter did not preserve its first launcher argument"
+  grep -Fx '<maps/Horde mission.smp>' "$wrapper_log" >/dev/null ||
+    die "Wargus adapter did not preserve an argument containing spaces"
+  ENGINEOS_WARGUS_LAUNCHER="$fake_wargus_launcher" \
+    ENGINEOS_FAKE_WARGUS_LOG="$wrapper_log" \
+    bash "$ROOT/packages/engineos-wargus/engineos-wargus" \
+    --smoke --extra-smoke-argument
+  grep -Fx '<-r>' "$wrapper_log" >/dev/null ||
+    die "Wargus adapter smoke did not request rapid startup"
+  grep -Fx '<-W>' "$wrapper_log" >/dev/null ||
+    die "Wargus adapter smoke did not request a windowed launch"
+  grep -Fx '<1280x720>' "$wrapper_log" >/dev/null ||
+    die "Wargus adapter smoke did not preserve its acceptance resolution"
+  grep -Fx '<-c>' "$wrapper_log" >/dev/null ||
+    die "Wargus adapter smoke did not select a configuration script"
+  grep -Fx '<tools/eos-gameplay-smoke.lua>' "$wrapper_log" >/dev/null ||
+    die "Wargus adapter smoke did not select the Horde smoke script"
+  grep -Fx '<--extra-smoke-argument>' "$wrapper_log" >/dev/null ||
+    die "Wargus adapter smoke did not preserve trailing arguments"
+  if ENGINEOS_WARGUS_LAUNCHER="$tmp_dir/missing-launcher" \
+      bash "$ROOT/packages/engineos-wargus/engineos-wargus" \
+      >"$wrapper_out" 2>&1; then
+    die "Wargus adapter accepted a missing repo launcher"
+  fi
+  grep -F "Wargus launcher is not executable: $tmp_dir/missing-launcher" \
+    "$wrapper_out" >/dev/null ||
+    die "Wargus adapter missing-launcher failure was not actionable"
 
   ENGINEOS_TMUX_BIN="$fake_tmux" ENGINEOS_FAKE_TMUX_LOG="$log" \
     ENGINEOS_STATE_DIR="$tmp_dir/state" ENGINEOS_LOG_DIR="$tmp_dir/log" \
@@ -3192,6 +3283,11 @@ FAKE
   ENGINEOS_TMUX_BIN="$fake_tmux" ENGINEOS_FAKE_TMUX_LOG="$log" \
     ENGINEOS_STATE_DIR="$tmp_dir/state" ENGINEOS_LOG_DIR="$tmp_dir/log" \
     TMUX_PANE=%9 "$SCRIPT_DIR/app.sh" pane respawn
+  ENGINEOS_TMUX_BIN="$fake_tmux" ENGINEOS_FAKE_TMUX_LOG="$log" \
+    ENGINEOS_STATE_DIR="$tmp_dir/state" ENGINEOS_LOG_DIR="$tmp_dir/log" \
+    TMUX_PANE=%9 "$SCRIPT_DIR/app.sh" launch wargus --smoke
+  ENGINEOS_STATE_DIR="$tmp_dir/state" ENGINEOS_LOG_DIR="$tmp_dir/log" \
+    "$SCRIPT_DIR/app.sh" status --json >"$status_out"
 
   grep -Fx 'launch-pane-app -t %9 -- /usr/bin/falkon --no-remote' "$log" >/dev/null ||
     die "pane launch did not call native tmux command"
@@ -3201,6 +3297,10 @@ FAKE
     die "pane signal did not call native tmux command"
   grep -Fx 'respawn-pane-app -t %9' "$log" >/dev/null ||
     die "pane respawn did not call native tmux command"
+  grep -Fx 'launch-pane-app -g -t %9 -- engineos-wargus --smoke' "$log" >/dev/null ||
+    die "named Wargus app did not request a native game presentation"
+  grep -F '"wargus":"launch-requested"' "$status_out" >/dev/null ||
+    die "app status did not report the Wargus launch request"
   ! rg -n 'launch.token|pane-(launch|focus|geometry|unbind)|terminal-register|ENGINEOS_MUX_MODE' \
     "$ROOT/tools/scripts/app.sh" >/dev/null ||
     die "app wrapper retains rollback transport"

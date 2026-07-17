@@ -59,6 +59,31 @@ if [[ -z "$PAYLOAD_DIR" ]]; then
     PAYLOAD_DIR="/usr/share/engineos/post-install-payload"
   fi
 fi
+if [[ -n "${ENGINEOS_TERMINAL_THEME_DIR:-}" ]]; then
+  TERMINAL_THEME_DIR="$ENGINEOS_TERMINAL_THEME_DIR"
+elif engineos_is_source_root "$ROOT"; then
+  TERMINAL_THEME_DIR="$ROOT/shell/themes"
+else
+  TERMINAL_THEME_DIR="/usr/share/engineos-shell/themes"
+fi
+terminal_theme_state_dir() {
+  local runtime_dir
+  local live_state_dir
+
+  if [[ -n "$CALLER_ENGINEOS_STATE_DIR" ]]; then
+    printf '%s\n' "$STATE_DIR"
+    return
+  fi
+
+  runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  live_state_dir="$runtime_dir/engineos"
+  if [[ -r "$live_state_dir/shell-state.json" || -S "$live_state_dir/preview.sock" ]]; then
+    printf '%s\n' "$live_state_dir"
+    return
+  fi
+
+  printf '%s\n' "$STATE_DIR"
+}
 
 usage() {
   cat <<'HELP'
@@ -67,13 +92,16 @@ Usage: shell_runner.sh --headless
        shell_runner.sh --tty
        shell_runner.sh restart-live [--dry-run] [--timeout SECONDS] [--allow-partial]
        shell_runner.sh refresh-user [--dry-run] [--force-config]
+       shell_runner.sh theme list|current|apply NAME
+       shell_runner.sh theme apply --file PATH
 
 Run the native EngineOS mux compositor. Headless and nested can smoke locally;
 TTY is the direct DRM graphical entry point.
 
 restart-live restarts engineos-dev-shell.service and verifies that a new
 engineos-shell PID appears. refresh-user installs and sources the managed tmux
-configuration in the authoritative server.
+configuration in the authoritative server. theme applies a terminal palette to
+the running shell without restarting tmux or the compositor.
 HELP
 }
 
@@ -418,6 +446,102 @@ run_refresh_user() {
   fi
 }
 
+run_terminal_theme() {
+  local action="${1:-current}"
+  local theme_state_dir
+  local theme_preview_socket
+  [[ $# -eq 0 ]] || shift
+
+  theme_state_dir="$(terminal_theme_state_dir)"
+  theme_preview_socket="${ENGINEOS_PREVIEW_SOCKET:-$theme_state_dir/preview.sock}"
+
+  case "$action" in
+    list)
+      [[ -d "$TERMINAL_THEME_DIR" ]] ||
+        die "terminal theme directory is unavailable: $TERMINAL_THEME_DIR"
+      local theme_file
+      for theme_file in "$TERMINAL_THEME_DIR"/*.json; do
+        [[ -f "$theme_file" ]] || continue
+        basename "$theme_file" .json
+      done | sort
+      ;;
+    current)
+      local state_file="$theme_state_dir/shell-state.json"
+      [[ -r "$state_file" ]] ||
+        die "shell state is unavailable: $state_file"
+      jq -er \
+        '.terminal_theme | select(type == "object") |
+         "\(.name) generation=\(.generation) foreground=\(.foreground) background=\(.background)"' \
+        "$state_file"
+      ;;
+    apply)
+      local theme_file
+      if [[ "${1:-}" == "--file" ]]; then
+        shift
+        theme_file="${1:-}"
+        [[ -n "$theme_file" ]] || die "theme apply --file requires a path"
+        shift
+      else
+        local theme_name="${1:-}"
+        [[ "$theme_name" =~ ^[A-Za-z0-9_-]+$ ]] ||
+          die "theme name must contain only letters, numbers, - or _"
+        theme_file="$TERMINAL_THEME_DIR/$theme_name.json"
+        shift || true
+      fi
+      [[ $# -eq 0 ]] || die "theme apply received unexpected arguments"
+      [[ -r "$theme_file" ]] ||
+        die "terminal theme is unavailable: $theme_file"
+      python - "$theme_preview_socket" "$theme_file" <<'PY'
+import json
+import socket
+import sys
+
+socket_path, theme_path = sys.argv[1:]
+try:
+    with open(theme_path, encoding="utf-8") as handle:
+        theme = json.load(handle)
+except (OSError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"terminal theme cannot be read: {exc}")
+
+payload = json.dumps(
+    {"version": 1, "op": "terminal-theme", "theme": theme},
+    separators=(",", ":"),
+).encode("utf-8") + b"\n"
+try:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(5.0)
+        client.connect(socket_path)
+        client.sendall(payload)
+        response = b""
+        while b"\n" not in response:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            response += chunk
+except OSError as exc:
+    raise SystemExit(f"shell theme IPC unavailable at {socket_path}: {exc}")
+
+try:
+    result = json.loads(response.split(b"\n", 1)[0].decode("utf-8"))
+except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"shell theme IPC returned invalid JSON: {exc}")
+if result.get("status") != "ok":
+    raise SystemExit(str(result.get("error") or "shell rejected terminal theme"))
+print(
+    f"terminal theme applied: {theme.get('name', 'unnamed')} "
+    f"socket={socket_path}"
+)
+PY
+      ;;
+    help|--help|-h)
+      usage
+      ;;
+    *)
+      die "unknown terminal theme action: $action"
+      ;;
+  esac
+}
+
 run_real_shell_if_available() {
   local mode="$1"
   local smoke_args=()
@@ -449,6 +573,9 @@ case "$MODE" in
     ;;
   refresh-user)
     run_refresh_user "$@"
+    ;;
+  theme)
+    run_terminal_theme "$@"
     ;;
   --headless)
     if run_real_shell_if_available headless; then
@@ -482,6 +609,6 @@ case "$MODE" in
     usage
     ;;
   *)
-    die "shell runner expected --headless, --nested, --tty, restart-live, or refresh-user"
+    die "shell runner expected --headless, --nested, --tty, restart-live, refresh-user, or theme"
     ;;
 esac

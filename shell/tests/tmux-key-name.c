@@ -32,5 +32,24 @@ int main(void) {
 	failed |= expect_key("ctrl-space", XKB_KEY_space, WLR_MODIFIER_CTRL,
 		"C-Space");
 	failed |= expect_key("unicode", XKB_KEY_udiaeresis, 0, "ü");
+
+	struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+	struct xkb_keymap *keymap = context == NULL ? NULL :
+		xkb_keymap_new_from_names(context, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS);
+	if (keymap == NULL) {
+		fprintf(stderr, "failed to construct XKB keymap for repeat checks\n");
+		failed = 1;
+	} else {
+		struct wlr_keyboard keyboard = {0};
+		keyboard.keymap = keymap;
+		keyboard.repeat_info.rate = 25;
+		failed |= !engineos_tmux_key_repeats(&keyboard, 119); /* evdev Delete + 8 */
+		failed |= engineos_tmux_key_repeats(&keyboard, 50); /* evdev Left Shift + 8 */
+		keyboard.repeat_info.rate = 0;
+		failed |= engineos_tmux_key_repeats(&keyboard, 119);
+		failed |= engineos_tmux_key_repeat_interval_ms(25) != 40;
+		xkb_keymap_unref(keymap);
+	}
+	if (context != NULL) xkb_context_unref(context);
 	return failed;
 }

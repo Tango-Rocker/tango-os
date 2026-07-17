@@ -40,6 +40,7 @@ Usage: app.sh launch terminal [args...]
        app.sh launch terminal-secondary [args...]
        app.sh launch cube [--smoke]
        app.sh launch quake [--smoke] [--pane|--fullscreen|--output] [--map NAME] [--game MOD]
+	   app.sh launch wargus [--smoke] [STRATAGUS_ARGS...]
 	   app.sh launch chroma [args...]
 	   app.sh recover preview
        app.sh pane launch [--game] [--pane TMUX_PANE] -- COMMAND [ARG...]
@@ -703,6 +704,11 @@ run_launch() {
         "$(game_cmd_string)" quake play --foreground \
         "${QUAKE_LAUNCH_ARGS[@]}"
       ;;
+    wargus)
+      write_app_state "$app" "launch-requested" "" "$@"
+      log_line "launch app=wargus owner=tmux command=engineos-wargus args=$(quote_cmd "$@")"
+      run_pane_launch --game -- engineos-wargus "$@"
+      ;;
     chroma)
       local launcher="${ENGINEOS_CHROMA_LAUNCHER:-/home/dev/stable-diffusion.cpp-pipefusion/scripts/chroma_launcher_qt.py}"
       [[ -r "$launcher" ]] || die "Chroma launcher not found: $launcher"
@@ -741,6 +747,8 @@ run_status_json() {
   json_string "$(app_launch_state cube)"
   printf ',"quake":'
   json_string "$(app_launch_state quake)"
+  printf ',"wargus":'
+  json_string "$(app_launch_state wargus)"
   printf ',"chroma":'
   json_string "$(app_launch_state chroma)"
   printf '}}\n'
@@ -766,6 +774,7 @@ run_status() {
   printf '  terminal-secondary: %s\n' "$(app_launch_state terminal-secondary)"
   printf '  cube: %s\n' "$(app_launch_state cube)"
   printf '  quake: %s\n' "$(app_launch_state quake)"
+  printf '  wargus: %s\n' "$(app_launch_state wargus)"
   printf '  chroma: %s\n' "$(app_launch_state chroma)"
 }
 manifest_get() {
@@ -843,6 +852,18 @@ run_manifest_validate() {
   manifest_expect_value quake assets quake
   manifest_expect_value quake input game
   manifest_expect_value quake instance dedicated
+
+  manifest_expect_value wargus slot pane
+  manifest_expect_value wargus role presentation
+  manifest_expect_value wargus command "eos-app launch wargus"
+  manifest_expect_value wargus smoke_command "eos-app launch wargus --smoke"
+  manifest_expect_value wargus package engineos-wargus
+  manifest_expect_app_id wargus stratagus
+  manifest_expect_value wargus log launcher.log
+  manifest_expect_value wargus health pane-presentation
+  manifest_expect_value wargus input game
+  manifest_expect_value wargus capture optional
+  manifest_expect_value wargus instance dedicated
 
   manifest_expect_value falkon slot pane
 	manifest_expect_value falkon role presentation

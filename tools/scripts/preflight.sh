@@ -311,6 +311,11 @@ check_package_inputs() {
 		require_file "tools/game/engineos_quake_service.py"
 		require_file "packages/engineos-quakespasm/files/usr/lib/systemd/user/engineos-quake.service"
       ;;
+    engineos-wargus)
+      require_file "packages/engineos-wargus/PKGBUILD"
+      require_file "packages/engineos-wargus/engineos-wargus"
+      require_file "packages/engineos-wargus/README.md"
+      ;;
     engineos-quake-template)
       require_file "packages/engineos-quake-template/assets.toml"
       require_file "engines/quakespasm/engineos/build.sh"

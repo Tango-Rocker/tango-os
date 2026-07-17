@@ -31,6 +31,19 @@ input = "game"
 capture = "optional"
 instance = "dedicated"
 
+[apps.wargus]
+slot = "pane"
+role = "presentation"
+command = "eos-app launch wargus"
+smoke_command = "eos-app launch wargus --smoke"
+package = "engineos-wargus"
+app_ids = ["stratagus"]
+log = "launcher.log"
+health = "pane-presentation"
+input = "game"
+capture = "optional"
+instance = "dedicated"
+
 [apps.falkon]
 slot = "pane"
 role = "presentation"

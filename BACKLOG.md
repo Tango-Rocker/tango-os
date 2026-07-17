@@ -11,6 +11,16 @@ This is the place for useful tangents. Add ideas here instead of expanding the c
 
 ## Later Ideas
 
+### Pixman Nonfocused Presentation Timing
+
+Why: the live terminal-theme assertion passes under both Pixman and GLES2, and
+the full GLES2 mux contract passes, but repeated full Pixman runs later time out
+while routing a second nonfocused presentation even though state shows it bound
+to the intended retained output. This needs a focused timing/RCA pass separate
+from terminal theming.
+
+Likely phase: current native-mux hardening after the live radeonsi theme proof.
+
 ### Native Ctrl+C Teardown Safety
 
 Why: an unsupported graphical `Ctrl+C` key currently terminates the native

@@ -1,0 +1,16 @@
+pkgname=engineos-wargus
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="EngineOS Wargus pane-launch adapter for a user-managed source checkout"
+arch=('any')
+url="https://github.com/Wargus/wargus"
+license=('custom:EngineOS-TBD')
+depends=('bash')
+source=()
+sha256sums=()
+
+package() {
+  install -Dm755 "$startdir/engineos-wargus" "$pkgdir/usr/bin/engineos-wargus"
+  install -Dm644 "$startdir/README.md" "$pkgdir/usr/share/engineos-wargus/README.md"
+  install -Dm644 "$startdir/../../LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

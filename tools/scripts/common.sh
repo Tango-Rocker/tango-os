@@ -143,6 +143,7 @@ engineos_packages() {
     engineos-level-agent \
     engineos-trenchbroom \
     engineos-quakespasm \
+    engineos-wargus \
     engineos-quake-template
 }
 
