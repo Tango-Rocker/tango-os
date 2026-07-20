@@ -3399,6 +3399,7 @@ PY
     >/dev/null
   python - "$tmp_dir/spotify" <<'PY'
 import pathlib
+import re
 import sys
 import tomllib
 root = pathlib.Path(sys.argv[1])
@@ -3410,8 +3411,14 @@ assert app["enable_audio_visualization"] is True
 assert app["layout"]["playback_window_height"] == 10
 assert app["layout"]["playback_window_position"] == "Top"
 assert theme.count("# BEGIN ENGINEOS GRUVBOX DARK") == 1
-assert any(item["name"] == "engineos-gruvbox-dark"
-           for item in tomllib.loads(theme)["themes"])
+managed = next(item for item in tomllib.loads(theme)["themes"]
+               if item["name"] == "engineos-gruvbox-dark")
+for style in managed["component_style"].values():
+    for field in ("fg", "bg"):
+        if field in style:
+            assert re.fullmatch(r"#[0-9a-fA-F]{6}", style[field]), (
+                field, style[field]
+            )
 PY
 
   python "$ROOT/tests/chroma-worker-test.py" >/dev/null

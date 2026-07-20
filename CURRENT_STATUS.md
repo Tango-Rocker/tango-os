@@ -153,7 +153,7 @@ correction and is installed on tty1:
 
 Installed package revisions are `engineos-config 0.1.0-10`,
 `engineos-mux 3.6b-44`, `engineos-shell 0.1.0-83`,
-`engineos-tools 0.1.0-65`, and `engineos-mc 4.8.33-1`. The native mux contract,
+`engineos-tools 0.1.0-66`, and `engineos-mc 4.8.33-1`. The native mux contract,
 image-preview test, app/Chroma/Spotify test, and all shell Meson renderer/theme
 tests pass. The mux proof also covers the transient-systemd-scope respawn race:
 scope signals reconcile the short registration window, and accepted TERM/KILL
@@ -232,6 +232,16 @@ three output reservations. The new Qt client mapped in pane `%8`, and live UI
 acceptance confirmed that the reconnect works. Runtime validation inspected
 only socket metadata, process state, and path existence; no live log contents
 were read.
+
+A Spotify follow-up installed `engineos-tools 0.1.0-66` after
+`spotify_player 0.23.0` rejected lowercase palette keys such as
+`bright_yellow` when used as component-style colors. Palette table keys remain
+lowercase, while every managed component foreground/background now uses its
+exact Gruvbox `#RRGGBB` value as required by the upstream style parser. The app
+contract rejects non-hex managed component colors, the real 0.23.0 binary
+accepted a synthetic migrated config and advanced to its normal startup path,
+and the live managed theme was migrated without replacing credentials or
+unrelated settings.
 
 ## Remaining Acceptance Work
 

@@ -22,14 +22,14 @@ bright_cyan = "#8ec07c"
 bright_white = "#ebdbb2"
 
 [themes.component_style]
-block_title = { fg = "bright_yellow", modifiers = ["Bold"] }
-border = { fg = "bright_black" }
-playback_track = { fg = "bright_green", modifiers = ["Bold"] }
-playback_artists = { fg = "bright_cyan" }
-playback_album = { fg = "bright_yellow" }
-playback_metadata = { fg = "bright_black" }
-playback_progress_bar = { bg = "bright_black", fg = "bright_green" }
-current_playing = { fg = "bright_green", modifiers = ["Bold"] }
-page_desc = { fg = "bright_cyan", modifiers = ["Bold"] }
-table_header = { fg = "bright_blue", modifiers = ["Bold"] }
-selection = { bg = "blue", fg = "bright_white", modifiers = ["Bold"] }
+block_title = { fg = "#fabd2f", modifiers = ["Bold"] }
+border = { fg = "#928374" }
+playback_track = { fg = "#b8bb26", modifiers = ["Bold"] }
+playback_artists = { fg = "#8ec07c" }
+playback_album = { fg = "#fabd2f" }
+playback_metadata = { fg = "#928374" }
+playback_progress_bar = { bg = "#928374", fg = "#b8bb26" }
+current_playing = { fg = "#b8bb26", modifiers = ["Bold"] }
+page_desc = { fg = "#8ec07c", modifiers = ["Bold"] }
+table_header = { fg = "#83a598", modifiers = ["Bold"] }
+selection = { bg = "#458588", fg = "#ebdbb2", modifiers = ["Bold"] }
