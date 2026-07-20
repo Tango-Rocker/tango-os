@@ -3229,6 +3229,7 @@ PY
 }
 run_app() {
   local tmp_dir="${TMPDIR:-/tmp}/engineos-app-test-$$"
+  local socket_pid=""
   local fake_tmux="$tmp_dir/tmux"
   local fake_wargus_launcher="$tmp_dir/wargus-launcher"
   local log="$tmp_dir/tmux.log"
@@ -3239,7 +3240,13 @@ run_app() {
   local fake_systemctl="$tmp_dir/systemctl"
   local fake_chroma="$tmp_dir/chroma-launcher-client"
   local direct_manifest="$tmp_dir/apps.toml"
-  cleanup_app() { rm -rf "$tmp_dir"; }
+  cleanup_app() {
+    if [[ -n "$socket_pid" ]]; then
+      kill "$socket_pid" 2>/dev/null || true
+      wait "$socket_pid" 2>/dev/null || true
+    fi
+    rm -rf "$tmp_dir"
+  }
   trap cleanup_app RETURN
   mkdir -p "$tmp_dir/state" "$tmp_dir/log"
   cat >"$fake_tmux" <<'FAKE'
@@ -3294,9 +3301,60 @@ FAKE
     ENGINEOS_STATE_DIR="$tmp_dir/state" ENGINEOS_LOG_DIR="$tmp_dir/log" \
     ENGINEOS_APPS_MANIFEST="$ROOT/packages/engineos-config/files/etc/engineos/apps.toml" \
     "$SCRIPT_DIR/app.sh" launch falkon --profile 'Space Name'
-  grep -F 'launch-pane-app -t %9 -- /usr/bin/falkon --no-remote --profile Space Name' \
+  grep -F 'launch-pane-app -t %9 -- env -u DISPLAY' "$log" >/dev/null &&
+    grep -F 'WAYLAND_DISPLAY=engineos-test-wayland' "$log" >/dev/null &&
+    grep -F '/usr/bin/falkon --no-remote --profile Space Name' \
     "$log" >/dev/null ||
-    die "manifest Falkon launch did not preserve arguments or absolute dispatch"
+    die "manifest Falkon launch did not forward Wayland or preserve absolute dispatch"
+
+  mkdir -p "$tmp_dir/runtime/engineos"
+  cat >"$tmp_dir/runtime/engineos/shell-state.json" <<'JSON'
+{"pid":1234,"wayland_display":"wayland-derived"}
+JSON
+  coproc TEST_WAYLAND_SOCKET {
+    python - "$tmp_dir/runtime/wayland-derived" <<'PY'
+import socket
+import sys
+
+with socket.socket(socket.AF_UNIX) as server:
+    server.bind(sys.argv[1])
+    server.listen(1)
+    print("ready", flush=True)
+    connection, _ = server.accept()
+    connection.close()
+PY
+  }
+  socket_pid="$TEST_WAYLAND_SOCKET_PID"
+  read -r socket_ready <&"${TEST_WAYLAND_SOCKET[0]}"
+  [[ "$socket_ready" == ready ]] ||
+    die "test Wayland socket did not become ready"
+  env -u WAYLAND_DISPLAY XDG_RUNTIME_DIR="$tmp_dir/runtime" TMUX_PANE=%9 \
+    ENGINEOS_TMUX_BIN="$fake_tmux" ENGINEOS_FAKE_TMUX_LOG="$log" \
+    ENGINEOS_STATE_DIR="$tmp_dir/runtime/engineos" \
+    ENGINEOS_LOG_DIR="$tmp_dir/log" \
+    ENGINEOS_APPS_MANIFEST="$ROOT/packages/engineos-config/files/etc/engineos/apps.toml" \
+    "$SCRIPT_DIR/app.sh" launch falkon
+  grep -F 'display=wayland-derived' \
+    "$tmp_dir/runtime/engineos/apps/falkon.status" >/dev/null ||
+    die "manifest Falkon launch did not derive the live shell display"
+  grep -F 'XDG_RUNTIME_DIR='"$tmp_dir/runtime" "$log" >/dev/null &&
+    grep -F 'WAYLAND_DISPLAY=wayland-derived' "$log" >/dev/null &&
+    grep -F '/usr/bin/falkon --no-remote' "$log" >/dev/null ||
+    die "manifest Falkon launch did not forward the derived shell display"
+  wait "$socket_pid" 2>/dev/null || true
+  socket_pid=""
+
+  if env -u WAYLAND_DISPLAY XDG_RUNTIME_DIR="$tmp_dir/runtime" TMUX_PANE=%9 \
+      ENGINEOS_TMUX_BIN="$fake_tmux" ENGINEOS_FAKE_TMUX_LOG="$log" \
+      ENGINEOS_STATE_DIR="$tmp_dir/runtime/engineos" \
+      ENGINEOS_LOG_DIR="$tmp_dir/log" \
+      ENGINEOS_APPS_MANIFEST="$ROOT/packages/engineos-config/files/etc/engineos/apps.toml" \
+      "$SCRIPT_DIR/app.sh" launch falkon >"$tmp_dir/no-display.out" 2>&1; then
+    die "manifest Falkon launch accepted a shell-state display without a live socket"
+  fi
+  grep -F 'no live engineos-shell display could be derived' \
+    "$tmp_dir/no-display.out" >/dev/null ||
+    die "stale shell display failure was not actionable"
 
   cp "$ROOT/packages/engineos-config/files/etc/engineos/apps.toml" "$direct_manifest"
   sed -i "s#\\[\"/usr/bin/chroma-launcher-client\"\\]#[\"$fake_chroma\"]#" \
@@ -3311,8 +3369,10 @@ FAKE
   grep -Fx -- '--user start chroma-worker.service' \
     "$tmp_dir/systemctl.log" >/dev/null ||
     die "manifest Chroma launch did not start its durable worker"
-  grep -F "launch-pane-app -t %9 -- $fake_chroma --check" "$log" >/dev/null ||
-    die "manifest Chroma launch did not use absolute executable dispatch"
+  grep -F 'launch-pane-app -t %9 -- env -u DISPLAY' "$log" >/dev/null &&
+    grep -F 'WAYLAND_DISPLAY=engineos-test-wayland' "$log" >/dev/null &&
+    grep -F "$fake_chroma --check" "$log" >/dev/null ||
+    die "manifest Chroma launch did not forward Wayland or use absolute dispatch"
 
   if env -u TMUX_PANE WAYLAND_DISPLAY=engineos-test-wayland \
       ENGINEOS_TMUX_BIN=/bin/false ENGINEOS_STATE_DIR="$tmp_dir/state" \

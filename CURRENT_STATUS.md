@@ -177,6 +177,17 @@ question when `engineos-mc` is in the transaction. This preserves the atomic
 stock-`mc` to `engineos-mc` replacement that plain noninteractive `pacman -U`
 previously rejected.
 
+A 2026-07-19 follow-up found that the direct `falkon` and `chroma` shims could
+still be invoked from a native pane whose shell predated the compositor and
+therefore lacked `WAYLAND_DISPLAY`. The source fix for `engineos-tools
+0.1.0-63` discovers the display reported by the current shell only when its
+Unix socket accepts a connection, then carries `XDG_RUNTIME_DIR`,
+`WAYLAND_DISPLAY`, and the Wayland backend variables in the exact
+tmux-injected launch command. Stale shell state continues to fail closed. The
+app source test and the focused package build pass. Revision 63 is not yet
+installed on tty1; live Falkon and Chroma acceptance remains pending that
+package update.
+
 ## Remaining Acceptance Work
 
 The unchanged upstream regression suite exposes a pre-existing scheduling race
@@ -189,6 +200,7 @@ issue, not a retained runtime fallback.
 
 The next physical acceptance pass exercises the remaining interactive paths:
 
+    eos-ci local --package engineos-tools --test app --install --clean-generated --no-validate-repo
     eos-proof native-kms
     eos-proof mc-preview
     falkon

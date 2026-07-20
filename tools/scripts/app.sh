@@ -418,6 +418,20 @@ adapt_pane_command() {
   esac
 }
 
+forward_pane_client_env() {
+  [[ -n "${WAYLAND_DISPLAY:-}" ]] || return 0
+  PANE_COMMAND=(
+    env -u DISPLAY
+    "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    "WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
+    "XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-wayland}"
+    "SDL_VIDEODRIVER=${SDL_VIDEODRIVER:-wayland}"
+    "GDK_BACKEND=${GDK_BACKEND:-wayland}"
+    "QT_QPA_PLATFORM=${QT_QPA_PLATFORM:-wayland}"
+    "${PANE_COMMAND[@]}"
+  )
+}
+
 run_pane_launch() {
   local pane_id="${TMUX_PANE:-}"
   local game=false
@@ -444,6 +458,7 @@ run_pane_launch() {
   done
   [[ $# -gt 0 ]] || die "pane launch requires a command"
   adapt_pane_command "$@"
+  forward_pane_client_env
   set -- "${PANE_COMMAND[@]}"
 
   local mux_bin
@@ -493,6 +508,7 @@ run_pane_split() {
     die "pane split requires TMUX and TMUX_PANE or --pane"
   [[ $# -gt 0 ]] || die "pane split requires a command"
   adapt_pane_command "$@"
+  forward_pane_client_env
   set -- "${PANE_COMMAND[@]}"
   local mux_bin
   local mux_args=(split-pane-app)
@@ -651,12 +667,45 @@ prepare_quake_args() {
 }
 
 require_shell_display() {
-  if [[ "${ENGINEOS_APP_REQUIRE_WAYLAND:-true}" == "true" && -z "${WAYLAND_DISPLAY:-}" ]]; then
-    write_app_state "${1:-unknown}" "failed" "missing-wayland-display"
-    log_line "launch failed reason=missing-wayland-display app=${1:-unknown}"
-    printf 'eos-app: WAYLAND_DISPLAY is required so engineos-shell owns graphical clients.\n' >&2
-    return 125
+  if [[ "${ENGINEOS_APP_REQUIRE_WAYLAND:-true}" != "true" ||
+      -n "${WAYLAND_DISPLAY:-}" ]]; then
+    return
   fi
+
+  local display socket runtime_dir
+  display="$(shell_state_string wayland_display || true)"
+  runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  if [[ "$display" == /* ]]; then
+    socket="$display"
+  elif [[ -n "$display" && "$display" != */* &&
+      "$display" != *[!A-Za-z0-9._-]* ]]; then
+    socket="$runtime_dir/$display"
+  else
+    socket=""
+  fi
+  if [[ -n "$socket" && -S "$socket" ]] &&
+      python - "$socket" <<'PY'
+import socket
+import sys
+
+try:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(0.5)
+        client.connect(sys.argv[1])
+except OSError:
+    raise SystemExit(1)
+PY
+  then
+    export WAYLAND_DISPLAY="$display"
+    log_line "client display derived source=shell-state display=$(printf '%q' "$display")"
+    return
+  fi
+
+  write_app_state "${1:-unknown}" "failed" "missing-wayland-display"
+  log_line "launch failed reason=missing-wayland-display app=${1:-unknown}"
+  printf 'eos-app: WAYLAND_DISPLAY is unset and no live engineos-shell display could be derived from %s.\n' \
+    "$SHELL_STATE_FILE" >&2
+  return 125
 }
 
 prepare_client_env() {
