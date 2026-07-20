@@ -420,6 +420,48 @@ run_refresh_user() {
     printf '  result:     failed reason=install-zsh-config-failed\n'
     return 1
   fi
+  local app_shims_cmd="${ENGINEOS_APP_SHIMS_CMD:-}"
+  if [[ -z "$app_shims_cmd" && -x "$ROOT/tools/engineos/engineos-app-shims" ]]; then
+    app_shims_cmd="$ROOT/tools/engineos/engineos-app-shims"
+  elif [[ -z "$app_shims_cmd" ]]; then
+    app_shims_cmd="$(command -v engineos-app-shims || true)"
+  fi
+  if [[ -z "$app_shims_cmd" ]]; then
+    printf '  result:     failed reason=app-shim-generator-unavailable\n'
+    return 1
+  fi
+  if [[ "$dry_run" == true ]]; then
+    printf '  would_run:  %s manifest=%q destination=%q\n' \
+      "$app_shims_cmd" "$(engineos_apps_manifest "$ROOT")" \
+      "$USER_HOME/.local/bin"
+  elif ! HOME="$USER_HOME" \
+      ENGINEOS_APPS_MANIFEST="$(engineos_apps_manifest "$ROOT")" \
+      ENGINEOS_APP_SHIM_DIR="$USER_HOME/.local/bin" \
+      "$app_shims_cmd"; then
+    printf '  result:     failed reason=app-shim-generation-failed\n'
+    return 1
+  fi
+  local spotify_config_cmd="${ENGINEOS_SPOTIFY_CONFIG_CMD:-}"
+  if [[ -z "$spotify_config_cmd" &&
+      -x "$ROOT/tools/engineos/engineos-spotify-config" ]]; then
+    spotify_config_cmd="$ROOT/tools/engineos/engineos-spotify-config"
+  elif [[ -z "$spotify_config_cmd" ]]; then
+    spotify_config_cmd="$(command -v engineos-spotify-config || true)"
+  fi
+  if [[ -z "$spotify_config_cmd" ]]; then
+    printf '  result:     failed reason=spotify-config-helper-unavailable\n'
+    return 1
+  fi
+  if [[ "$dry_run" == true ]]; then
+    printf '  would_run:  %s config=%q\n' \
+      "$spotify_config_cmd" "$USER_HOME/.config/spotify-player"
+  elif ! HOME="$USER_HOME" "$spotify_config_cmd" \
+      --config-dir "$USER_HOME/.config/spotify-player" \
+      --theme-source \
+        "$PAYLOAD_DIR/assets/spotify/gruvbox-dark.toml"; then
+    printf '  result:     failed reason=spotify-config-migration-failed\n'
+    return 1
+  fi
   if ! have_executable "$TMUX_CMD"; then
     printf '  mux:        unavailable; native config source skipped\n'
     printf '  result:     partial reason=tmux-unavailable\n'
@@ -491,6 +533,7 @@ run_terminal_theme() {
         die "terminal theme is unavailable: $theme_file"
       python - "$theme_preview_socket" "$theme_file" <<'PY'
 import json
+import os
 import socket
 import sys
 
@@ -525,9 +568,23 @@ except (UnicodeDecodeError, json.JSONDecodeError) as exc:
     raise SystemExit(f"shell theme IPC returned invalid JSON: {exc}")
 if result.get("status") != "ok":
     raise SystemExit(str(result.get("error") or "shell rejected terminal theme"))
+config_home = os.environ.get("XDG_CONFIG_HOME")
+if not config_home:
+    home = os.environ.get("HOME")
+    if not home:
+        raise SystemExit("terminal theme applied but HOME is unavailable for persistence")
+    config_home = os.path.join(home, ".config")
+destination = os.path.join(config_home, "engineos", "terminal-theme.json")
+os.makedirs(os.path.dirname(destination), mode=0o700, exist_ok=True)
+temporary = destination + f".tmp.{os.getpid()}"
+with open(temporary, "w", encoding="utf-8") as handle:
+    json.dump(theme, handle, indent=2)
+    handle.write("\n")
+os.chmod(temporary, 0o600)
+os.replace(temporary, destination)
 print(
     f"terminal theme applied: {theme.get('name', 'unnamed')} "
-    f"socket={socket_path}"
+    f"socket={socket_path} persisted={destination}"
 )
 PY
       ;;

@@ -118,6 +118,48 @@ foreground `#ebdbb2`, background `#282828`, renderer
 frame capture is recorded at
 `artifacts/captures/shell-20260717T032058Z.png`.
 
+## Desktop Reliability Source Proof
+
+The 2026-07-19 source/package pass implements the Sprint 17 desktop ownership
+correction. It has not yet replaced the packages on tty1:
+
+- pointer delivery is classified per region as tmux UI, tmux pane, Wayland
+  surface, or none, with press-to-release domain latching; Qt keeps keyboard
+  focus while status, menus, borders, and other panes remain mouse-owned by
+  tmux;
+- pane/output scenes, presentation attachments, and image attachments reconcile
+  in dependency order. Missing output scenes and superseded image revisions
+  defer, malformed images are isolated by image ID, and only mux
+  transport/protocol loss remains compositor-fatal;
+- `pane-image -e` supplies MC's ephemeral preview lifetime. The repo-owned
+  `engineos-mc` package passes MC's real PID to the helper and retains helper
+  stderr under the EngineOS runtime log directory;
+- tmux ACS cells are normalized to Unicode box drawing. The shared CPU/GLES
+  style decoder covers bold, italic, dim, reverse, hidden, underline variants
+  and colors, strikeout, overline, and blink;
+- Gruvbox Dark is the compiled and system terminal default. A successful
+  runtime theme apply is persisted, and shell state reports theme source/error
+  plus preview reconciliation status/error;
+- manifest commands now provide direct `falkon` and `chroma` shims backed by
+  absolute pane-launch argv. Launching outside a focused native pane fails
+  explicitly instead of creating an unmanaged Wayland client;
+- Chroma queue/backend ownership is in `chroma-worker.service`, with the
+  mode-0600 `chroma-worker/v1` socket, SQLite single-writer queue, transactional
+  output reservations, atomic completion, bounded retries, restart recovery,
+  retained history, and unknown-port rejection;
+- Spotify migration preserves credentials and unrelated settings while
+  selecting the matching Gruvbox theme, enabling audio visualization, and
+  reserving ten playback rows.
+
+Built package revisions are `engineos-config 0.1.0-10`,
+`engineos-mux 3.6b-44`, `engineos-shell 0.1.0-81`,
+`engineos-tools 0.1.0-61`, and `engineos-mc 4.8.33-1`. The native mux contract,
+image-preview test, app/Chroma/Spotify test, and all shell Meson renderer/theme
+tests pass. The mux proof also covers the transient-systemd-scope respawn race:
+scope signals reconcile the short registration window, and accepted TERM/KILL
+requests retire presentation state immediately while retaining the saved
+respawn command.
+
 ## Remaining Acceptance Work
 
 The unchanged upstream regression suite exposes a pre-existing scheduling race
@@ -128,8 +170,23 @@ control-client sizing. The exact evidence is under
 `/tmp/engineos-tmux-upstream-20260711T225801Z`; this is a test-fixture timing
 issue, not a retained runtime fallback.
 
-The next physical acceptance pass is:
+The next physical acceptance pass first installs the reliability package set,
+then exercises the interactive paths:
 
+    sudo pacman -S engineos-config engineos-mux engineos-shell engineos-tools engineos-mc
+    systemctl --user daemon-reload
+    eos-runtime shell refresh-user
     eos-proof native-kms
+    eos-proof mc-preview
+    falkon
+    chroma
+    systemctl --user status chroma-worker.service
+    eos-runtime shell theme apply gruvbox-dark
     eos-proof native-quake
     eos-validate boot --bare-metal
+
+Live acceptance must repeatedly switch away from MC image previews without a
+shell restart, click tmux UI/borders/other panes while Qt remains presented,
+restart the graphical shell during an active Chroma generation and observe the
+committed output, and verify changing Spotify spectrum bars and Gruvbox
+persistence after restart.

@@ -47,12 +47,12 @@ def quick_view_panel(cli_panel: str | None = None) -> str:
     return value
 
 
-def quick_view_owner_token(panel: str) -> str:
+def quick_view_owner_token(panel: str, mc_pid: int | None = None) -> str:
     override = os.environ.get("ENGINEOS_PREVIEW_OWNER")
     if override:
         return override
     pane = os.environ.get("TMUX_PANE") or "no-pane"
-    mc_pid = mc_ancestor_pid() or os.getppid()
+    mc_pid = mc_pid or mc_ancestor_pid() or os.getppid()
     return f"mc-quick-view:{mc_pid}:{pane}:{panel}"
 
 
@@ -187,7 +187,9 @@ def build_request(args: argparse.Namespace) -> tuple[dict[str, object] | None, s
         "anchor": "mc-preview-panel" if args.quick_view else "active-pane",
         "fit": "contain",
         "owner": args.owner or (
-            quick_view_owner_token(panel) if args.quick_view else owner_token()
+            quick_view_owner_token(panel, args.mc_pid)
+            if args.quick_view
+            else owner_token()
         ),
     }
     return request, None
@@ -251,7 +253,10 @@ def send_native_mux_image(
         owner = request.get("owner")
         if not isinstance(path, str) or not isinstance(owner, str) or not owner:
             return None, "native mux image request is incomplete"
-        command = [mux, "pane-image", "-t", pane, "show", path, owner]
+        command = [mux, "pane-image"]
+        if args.quick_view:
+            command.append("-e")
+        command.extend(["-t", pane, "show", path, owner])
     try:
         result = subprocess.run(
             command,
@@ -316,6 +321,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="wallpaper opacity percent, from 0 to 100",
     )
     parser.add_argument("--owner", help=argparse.SUPPRESS)
+    parser.add_argument("--mc-pid", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--wait-pid", type=int, help=argparse.SUPPRESS)
     parser.add_argument(
         "--dry-run",
@@ -329,6 +335,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--target can only be used with --wallpaper")
     if args.opacity != 100 and not args.wallpaper:
         parser.error("--opacity can only be used with --wallpaper")
+    if args.mc_pid is not None and (args.mc_pid <= 1 or not args.quick_view):
+        parser.error("--mc-pid requires --quick-view and a PID greater than 1")
     return args
 
 
@@ -448,8 +456,12 @@ def main(argv: list[str]) -> int:
             print("engine-image-preview: shell preview IPC ready", file=sys.stderr)
         if caps:
             print("engine-image-preview: capabilities=" + ",".join(map(str, caps)), file=sys.stderr)
-    elif args.quick_view and parent_looks_like_mc():
-        start_parent_watcher_once(mc_ancestor_pid() or os.getppid(), str(request["owner"]), sock_path)
+    elif args.quick_view and (args.mc_pid is not None or parent_looks_like_mc()):
+        start_parent_watcher_once(
+            args.mc_pid or mc_ancestor_pid() or os.getppid(),
+            str(request["owner"]),
+            sock_path,
+        )
     elif (args.view or args.open) and parent_looks_like_mc():
         start_parent_watcher(mc_ancestor_pid() or os.getppid(), str(request["owner"]), sock_path)
     return 0

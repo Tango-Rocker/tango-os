@@ -54,6 +54,8 @@ const pixman_region32_t *engineos_terminal_renderer_damage(
 	const struct engineos_terminal_renderer *terminal);
 const char *engineos_terminal_renderer_mode(
 	const struct engineos_terminal_renderer *terminal);
+bool engineos_terminal_renderer_has_blink(
+	const struct engineos_terminal_renderer *terminal);
 void engineos_terminal_renderer_stats(
 	const struct engineos_terminal_renderer *terminal,
 	struct engineos_terminal_render_stats *stats);

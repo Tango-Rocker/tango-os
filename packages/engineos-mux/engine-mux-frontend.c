@@ -335,6 +335,9 @@ engine_mux_reconcile_leases(void)
 				if (pane->engine_image_lease_client_id != 0)
 					break;
 			}
+			if (pane->engine_image_lease_client_id == 0 &&
+			    pane->engine_image_ephemeral)
+				engine_pane_image_clear(pane);
 		}
 	}
 }
@@ -801,7 +804,14 @@ engine_mux_screen_rows(struct screen *screen, u_int rows)
 				continue;
 			if (cell.data.have == 0)
 				evbuffer_add(text, " ", 1);
-			else
+			else if ((cell.attr & GRID_ATTR_CHARSET) &&
+			    cell.data.have == 1) {
+				const char *acs = tty_acs_get(NULL, cell.data.data[0]);
+				if (acs != NULL)
+					evbuffer_add(text, acs, strlen(acs));
+				else
+					evbuffer_add(text, cell.data.data, cell.data.have);
+			} else
 				evbuffer_add(text, cell.data.data, cell.data.have);
 		}
 		if (columns != 0)
@@ -1305,15 +1315,32 @@ static void
 engine_mux_encode_cell(struct engine_mux_grid_cell *wire_cell,
     struct grid_cell *cell)
 {
-	wire_cell->attributes = htons(cell->attr);
+	u_int attributes = cell->attr;
+	const char *acs = NULL;
+	size_t text_length = cell->data.have;
+
+	if ((attributes & GRID_ATTR_CHARSET) && text_length == 1)
+		acs = tty_acs_get(NULL, cell->data.data[0]);
+	if (acs != NULL) {
+		text_length = strlen(acs);
+		if (text_length <= sizeof wire_cell->text) {
+			attributes &= ~GRID_ATTR_CHARSET;
+			memcpy(wire_cell->text, acs, text_length);
+		} else {
+			acs = NULL;
+			text_length = cell->data.have;
+		}
+	}
+	wire_cell->attributes = htons(attributes);
 	wire_cell->flags = cell->flags;
 	wire_cell->width = cell->data.width;
-	wire_cell->text_length = cell->data.have;
+	wire_cell->text_length = text_length;
 	wire_cell->foreground = htonl((uint32_t)cell->fg);
 	wire_cell->background = htonl((uint32_t)cell->bg);
 	wire_cell->underline_colour = htonl((uint32_t)cell->us);
 	wire_cell->hyperlink = htonl(cell->link);
-	memcpy(wire_cell->text, cell->data.data, cell->data.have);
+	if (acs == NULL)
+		memcpy(wire_cell->text, cell->data.data, cell->data.have);
 }
 
 static u_char *

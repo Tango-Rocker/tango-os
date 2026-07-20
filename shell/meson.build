@@ -56,6 +56,7 @@ executable(
     'src/engineos-image.c',
     'src/engineos-mux-client.c',
     'src/engineos-terminal-renderer.c',
+    'src/engineos-terminal-style.c',
     'src/engineos-terminal-theme.c',
     'src/engineos-tmux-key.c',
     xdg_shell_protocol_header,
@@ -98,6 +99,18 @@ terminal_theme_test = executable(
   dependencies: [json_c_dep],
 )
 test('terminal-theme', terminal_theme_test)
+
+terminal_style_test = executable(
+  'engineos-terminal-style-test',
+  [
+    'tests/terminal-style.c',
+    'src/engineos-terminal-style.c',
+    'src/engineos-terminal-theme.c',
+  ],
+  include_directories: [include_directories('src')],
+  dependencies: [json_c_dep],
+)
+test('terminal-style', terminal_style_test)
 
 install_subdir(
   'themes',

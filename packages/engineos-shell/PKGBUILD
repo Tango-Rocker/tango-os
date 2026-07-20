@@ -1,6 +1,6 @@
 pkgname=engineos-shell
 pkgver=0.1.0
-pkgrel=80
+pkgrel=81
 pkgdesc="EngineOS wlroots shell bootstrap"
 arch=('x86_64')
 url="https://example.invalid/engineos"
@@ -25,6 +25,8 @@ package() {
   _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
 
   DESTDIR="$pkgdir" meson install -C "$srcdir/build"
+  install -Dm644 "$_engineos_root/shell/themes/gruvbox-dark.json" \
+    "$pkgdir/etc/engineos/terminal-theme.json"
   install -Dm644 "$_engineos_root/shell/README.md" "$pkgdir/usr/share/engineos-shell/README.md"
   install -Dm644 "$_engineos_root/LICENSES.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

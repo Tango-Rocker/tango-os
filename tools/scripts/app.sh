@@ -380,7 +380,7 @@ native_focused_pane() {
   mux_bin="$(tmux_bin)"
   clients="$("$mux_bin" list-clients \
     -F '#{client_name}|#{client_flags}|#{session_id}')" ||
-    die "native game launch could not list graphical mux clients"
+    die "no focused native pane: could not list graphical mux clients"
   focused_session="$(awk -F '|' '
     $1 ~ /^engineos-view-[0-9]+$/ && $2 ~ /(^|,)focused(,|$)/ {
       print $3
@@ -388,13 +388,13 @@ native_focused_pane() {
     }
     END { if (count != 1) exit 1 }
   ' <<<"$clients")" ||
-    die "native game launch requires exactly one focused graphical mux view"
+    die "no focused native pane: launch from an EngineOS graphical mux view"
   [[ "$focused_session" == \$* ]] ||
-    die "focused graphical mux view has an invalid session identity"
+    die "no focused native pane: graphical view has an invalid session"
   pane="$("$mux_bin" display-message -p -t "$focused_session:" '#{pane_id}')" ||
-    die "native game launch could not resolve the focused mux pane"
+    die "no focused native pane: graphical view has no selected pane"
   [[ "$pane" =~ ^%[0-9]+$ ]] ||
-    die "focused graphical mux view has an invalid pane identity"
+    die "no focused native pane: graphical view returned an invalid pane"
   printf '%s\n' "$pane"
 }
 
@@ -669,6 +669,44 @@ prepare_client_env() {
   fi
 }
 
+run_manifest_launch() {
+  local app="$1"
+  shift
+  local launch_mode
+  local pane_id="${TMUX_PANE:-}"
+  local user_service
+  local -a manifest_argv=()
+
+  launch_mode="$(manifest_get "$app" launch_mode || true)"
+  [[ "$launch_mode" == "pane-wayland" ]] ||
+    die "app $app has unsupported launch_mode: ${launch_mode:-missing}"
+  if [[ -z "$pane_id" ]]; then
+    pane_id="$(native_focused_pane)"
+  fi
+  require_shell_display "$app"
+  prepare_client_env
+  mapfile -t manifest_argv < <(
+    engineos_app_manifest_array_lines "$APPS_MANIFEST" "$app" argv
+  )
+  [[ ${#manifest_argv[@]} -gt 0 ]] ||
+    die "app $app manifest argv is missing"
+  [[ "${manifest_argv[0]}" == /* ]] ||
+    die "app $app manifest argv must start with an absolute executable"
+  [[ -x "${manifest_argv[0]}" ]] ||
+    die "app $app executable is unavailable: ${manifest_argv[0]}"
+  user_service="$(manifest_get "$app" user_service || true)"
+  if [[ -n "$user_service" ]]; then
+    local systemctl_bin="${ENGINEOS_SYSTEMCTL_BIN:-systemctl}"
+    command -v "$systemctl_bin" >/dev/null 2>&1 ||
+      die "app $app requires user service $user_service but systemctl is unavailable"
+    "$systemctl_bin" --user start "$user_service" ||
+      die "app $app could not start user service $user_service"
+  fi
+  write_app_state "$app" "launch-requested" "" "$@"
+  log_line "launch app=$app owner=tmux pane=$pane_id mode=$launch_mode command=$(quote_cmd "${manifest_argv[@]}" "$@")"
+  run_pane_launch --pane "$pane_id" -- "${manifest_argv[@]}" "$@"
+}
+
 run_launch() {
   local app="${1:-}"
   [[ -n "$app" ]] || die "app launch requires an app id"
@@ -709,15 +747,12 @@ run_launch() {
       log_line "launch app=wargus owner=tmux command=engineos-wargus args=$(quote_cmd "$@")"
       run_pane_launch --game -- engineos-wargus "$@"
       ;;
-    chroma)
-      local launcher="${ENGINEOS_CHROMA_LAUNCHER:-/home/dev/stable-diffusion.cpp-pipefusion/scripts/chroma_launcher_qt.py}"
-      [[ -r "$launcher" ]] || die "Chroma launcher not found: $launcher"
-      write_app_state "$app" "launch-requested" "" "$@"
-      log_line "launch app=chroma owner=tmux command=python3 $(quote_cmd "$launcher" "$@")"
-      run_pane_launch -- python3 "$launcher" "$@"
-      ;;
     *)
-      die "unknown app id: $app"
+      if [[ -n "$(engineos_app_manifest_section "$APPS_MANIFEST" "$app")" ]]; then
+        run_manifest_launch "$app" "$@"
+      else
+        die "unknown app id: $app"
+      fi
       ;;
   esac
 }
@@ -867,7 +902,10 @@ run_manifest_validate() {
 
   manifest_expect_value falkon slot pane
 	manifest_expect_value falkon role presentation
-  manifest_expect_value falkon command "eos-app pane launch -- falkon"
+  manifest_expect_value falkon command "eos-app launch falkon"
+  manifest_expect_value falkon launch_mode pane-wayland
+  manifest_expect_value falkon argv '["/usr/bin/falkon"]'
+  manifest_expect_value falkon commands '["falkon"]'
   manifest_expect_value falkon package falkon
   manifest_expect_app_id falkon org.kde.falkon
   manifest_expect_value falkon input normal
@@ -876,6 +914,10 @@ run_manifest_validate() {
   manifest_expect_value chroma slot pane
 	manifest_expect_value chroma role presentation
   manifest_expect_value chroma command "eos-app launch chroma"
+  manifest_expect_value chroma launch_mode pane-wayland
+  manifest_expect_value chroma commands '["chroma"]'
+  manifest_expect_value chroma argv '["/usr/bin/chroma-launcher-client"]'
+  manifest_expect_value chroma user_service chroma-worker.service
   manifest_expect_value chroma package stable-diffusion.cpp-pipefusion
   manifest_expect_app_id chroma stable-diffusion-chroma
   manifest_expect_value chroma health pane-presentation

@@ -1,0 +1,14 @@
+--- a/tmux.h
++++ b/tmux.h
+@@ -2941,0 +2942,11 @@ int	 engine_mux_frontend_owns_window(struct window *);
++/* engine-pane.c */
++const char *engine_pane_presentation_name(const struct window_pane *);
++const char *engine_pane_view_mode_name(const struct window_pane *);
++int	 engine_pane_surface_map(struct window_pane *, pid_t, u_int,
++	     const char *, char **);
++int	 engine_pane_surface_unmap(struct window_pane *, pid_t, u_int, char **);
++struct window_pane *engine_pane_resolve_pid(pid_t, char **);
++void	 engine_pane_surface_clear(struct window_pane *);
++void	 engine_pane_image_clear(struct window_pane *);
++void	 engine_pane_sync_all(void);
++

@@ -1,6 +1,6 @@
 pkgname=engineos-mux
 pkgver=3.6b
-pkgrel=42
+pkgrel=44
 _commit=0623d1e968423ad0c192e0d8debf1258671063d5
 pkgdesc="EngineOS tmux 3.6b graphical frontend protocol foundation"
 arch=('x86_64')
@@ -20,6 +20,7 @@ source=(
   '0006-engine-mux-deterministic-shutdown.patch'
   '0007-strip-sent-flag-before-pane-input.patch'
   '0008-skip-graphical-client-tty-alerts.patch'
+  '0009-engine-pane-prototypes.patch'
   'engine-mux-frontend.c'
   'engine-mux-frontend.h'
   'engine-pane.c'
@@ -28,14 +29,15 @@ source=(
 sha256sums=('2c212f7ee2d925b01ec20ab5bb3a906c17b6a8652fe521fcaaf498f800b4d1fa'
             'c7f3fbcd68f53f4227614e03cfb7e5f91d3069b68ad03dccf4ead6c13c742e11'
             '1d8d061eaa8aca3df1ab4d0517c6fad2d62b7e8fe60e6aac637ed6b1e68febdf'
-            '492a467aac874af3b49791e37be5bb572bfcf5eace28574aa514c15d7bc734b9'
+            '958b3292dc1ae898d0c76b4f596aa0d62c1256db6a5d7497b7b50a5f0a42b881'
             '592d31c1a38987282520102f617ce699430c35b4cd2d1ecfc2f6a14c5992e767'
             'c98a0184cde19f14e32f61595f622748f064f2294a1a285adb920eb03eaba593'
             'e0120b1a3121da735ded8d83d797ae16eeb807174d50f0f91a1483a40d967fe2'
             'aa5af5738e4498e967b1c6c0f50b3b25b157a811b51f6e2a8bc6e173fe609636'
-            '0107a9e5402328d2a75fd0b52305a08d25b6d757b3b2e9a20013001bc88bd9f4'
+            '40f0a0ea8359c30e349d288deb737fa4aceb8f8be99dfc97f213a715578fde1f'
+            '4328e473d5e571e00e96a1ac0bbe6a41d4502cd91c5753d314cceb95744f2da0'
             'cdad7a4fb6c706fb77863825c42218351cc1d4ab37131a835fc81a7d92967b1a'
-            '4a94b8db1a630f41201e218bf7d8cda3b45b820a1059f52216bc9b806b264399'
+            'dc07b0a4cc102d66e276c90230dbe3a9d225754707b300889d36e24bea3ac166'
             'baaaa7bbb1ab42a407818fbf0d23f2467d00d7ed7d66553f5fb78faaf270c211')
 
 prepare() {
@@ -50,6 +52,7 @@ prepare() {
 	patch -d "$_source_dir" -Np1 -i "$startdir/0006-engine-mux-deterministic-shutdown.patch"
 	patch -d "$_source_dir" -Np1 -i "$startdir/0007-strip-sent-flag-before-pane-input.patch"
 	patch -d "$_source_dir" -Np1 -i "$startdir/0008-skip-graphical-client-tty-alerts.patch"
+	patch -d "$_source_dir" -Np1 -i "$startdir/0009-engine-pane-prototypes.patch"
 	install -m0644 "$srcdir/engine-mux-frontend.c" "$_source_dir/engine-mux-frontend.c"
 	install -m0644 "$srcdir/engine-mux-frontend.h" "$_source_dir/engine-mux-frontend.h"
 	install -m0644 "$srcdir/engine-pane.c" "$_source_dir/engine-pane.c"

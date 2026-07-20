@@ -83,6 +83,13 @@ enum engineos_input_mode {
 	ENGINEOS_INPUT_GAME,
 };
 
+enum engineos_pointer_target {
+	ENGINEOS_POINTER_NONE,
+	ENGINEOS_POINTER_TMUX_UI,
+	ENGINEOS_POINTER_TMUX_PANE,
+	ENGINEOS_POINTER_WAYLAND_SURFACE,
+};
+
 struct engineos_view_geometry {
 	int x;
 	int y;
@@ -123,6 +130,20 @@ struct engineos_preview_surface {
 	uint32_t mux_image_id;
 	uint32_t lease_client_id;
 	uint32_t lease_view_id;
+};
+
+struct engineos_preview_failure {
+	struct wl_list link;
+	uint32_t pane_id;
+	uint32_t pane_generation;
+	uint32_t image_id;
+};
+
+enum engineos_preview_create_result {
+	ENGINEOS_PREVIEW_CREATED,
+	ENGINEOS_PREVIEW_DEFERRED,
+	ENGINEOS_PREVIEW_ISOLATED_FAILURE,
+	ENGINEOS_PREVIEW_FATAL,
 };
 
 struct engineos_mux_pane_output_scene {
@@ -168,6 +189,8 @@ struct engineos_shell_server {
 	struct wlr_buffer *mux_terminal_buffer;
 	struct engineos_terminal_renderer *mux_terminal_renderer;
 	struct engineos_terminal_theme terminal_theme;
+	char terminal_theme_source[32];
+	char terminal_theme_error[256];
 	int mux_terminal_width;
 	int mux_terminal_height;
 	uint32_t mux_terminal_glyph_cells;
@@ -180,12 +203,15 @@ struct engineos_shell_server {
 	uint32_t mux_pointer_x;
 	uint32_t mux_pointer_y;
 	uint32_t mux_popup_count;
+	enum engineos_pointer_target pointer_grab_target;
+	bool pointer_grab_active;
 	uint32_t keyboard_modifiers;
 	uint32_t mux_consumed_keycode;
 	bool mux_prefix_pending;
 	bool mux_pointer_cell_valid;
 	struct wl_event_source *mux_event_source;
 	struct wl_event_source *mux_snapshot_retry_timer;
+	struct wl_event_source *terminal_blink_timer;
 	struct wl_list outputs;
 	struct wl_list views;
 	struct wl_list keyboards;
@@ -224,6 +250,7 @@ struct engineos_shell_server {
 	struct wl_event_source *preview_socket_source;
 	int preview_socket_fd;
 	struct wl_list previews;
+	struct wl_list preview_failures;
 	struct engineos_preview_surface wallpaper;
 	struct engineos_mux_client mux_client;
 	enum engineos_input_mode input_mode;
@@ -239,6 +266,11 @@ struct engineos_shell_server {
 	uint32_t next_mux_view_id;
 	uint64_t mux_snapshot_retry_count;
 	bool mux_image_resync_pending;
+	char preview_reconciliation_status[32];
+	char preview_reconciliation_error[256];
+	uint32_t preview_failed_pane_id;
+	uint32_t preview_failed_generation;
+	uint32_t preview_failed_image_id;
 };
 
 struct engineos_shell_keyboard {
@@ -1386,6 +1418,15 @@ static void destroy_mux_pane_output_scene(
 		struct engineos_shell_server *server,
 		struct engineos_mux_pane_scene *pane_scene,
 		struct engineos_mux_pane_output_scene *output_scene) {
+	struct engineos_preview_surface *preview;
+	wl_list_for_each(preview, &server->previews, link) {
+		if (preview->scene_buffer == NULL || output_scene->tree == NULL ||
+				preview->scene_buffer->node.parent != output_scene->tree)
+			continue;
+		wlr_scene_node_reparent(&preview->scene_buffer->node,
+			&server->scene->tree);
+		wlr_scene_node_set_enabled(&preview->scene_buffer->node, false);
+	}
 	struct engineos_shell_view *view;
 	wl_list_for_each(view, &server->views, link) {
 		if (!view->mux_bound || view->mux_pane_id != pane_scene->pane_id ||
@@ -1891,6 +1932,13 @@ static void sync_native_presentation_visibility(
 				!presentation_visible);
 		}
 	}
+	/* Attach previews only after pane/output and presentation scene trees are
+	 * stable, but before focus and input are reconciled for this revision. */
+	if (!sync_native_preview_leases(server, reason)) {
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+		return;
+	}
 	if (active == NULL && server->emergency_released && focused_pane != NULL &&
 			strcmp(focused_pane->view_mode, "presentation") != 0) {
 		server->emergency_released = false;
@@ -1922,11 +1970,6 @@ static void sync_native_presentation_visibility(
 		server->mux_consumed_keycode = 0;
 		sync_pointer_constraint(server, reason);
 		sync_cursor_image(server, reason);
-	}
-	if (!sync_native_preview_leases(server, reason)) {
-		server->mux_client.ready = false;
-		wl_display_terminate(server->display);
-		return;
 	}
 	schedule_outputs(server);
 }
@@ -2033,6 +2076,32 @@ static int native_mux_snapshot_retry(void *data) {
 		server->mux_client.ready = false;
 		wl_display_terminate(server->display);
 	}
+	return 0;
+}
+
+static int terminal_blink_tick(void *data) {
+	struct engineos_shell_server *server = data;
+	bool has_blink = false;
+	struct engineos_mux_pane_scene *pane_scene;
+	wl_list_for_each(pane_scene, &server->mux_pane_scenes, link) {
+		struct engineos_mux_pane_output_scene *output_scene;
+		wl_list_for_each(output_scene, &pane_scene->output_scenes, link)
+			has_blink = has_blink ||
+				engineos_terminal_renderer_has_blink(
+					output_scene->renderer);
+	}
+	struct engineos_shell_output *output;
+	wl_list_for_each(output, &server->outputs, link)
+		has_blink = has_blink ||
+			engineos_terminal_renderer_has_blink(output->mux_ui_renderer);
+	if (has_blink && !refresh_native_terminal_scene(server,
+			"terminal-blink-phase")) {
+		server->mux_client.ready = false;
+		wl_display_terminate(server->display);
+		return 0;
+	}
+	if (server->terminal_blink_timer != NULL)
+		wl_event_source_timer_update(server->terminal_blink_timer, 500);
 	return 0;
 }
 
@@ -2183,7 +2252,71 @@ static struct engineos_preview_surface *find_mux_image_preview(
 	return NULL;
 }
 
-static bool create_mux_image_preview(struct engineos_shell_server *server,
+static bool preview_failure_known(struct engineos_shell_server *server,
+		uint32_t pane_id, uint32_t pane_generation, uint32_t image_id) {
+	struct engineos_preview_failure *failure;
+	wl_list_for_each(failure, &server->preview_failures, link) {
+		if (failure->pane_id == pane_id &&
+				failure->pane_generation == pane_generation &&
+				failure->image_id == image_id)
+			return true;
+	}
+	return false;
+}
+
+static bool mux_image_is_current(struct engineos_shell_server *server,
+		const struct engineos_preview_failure *failure) {
+	struct engineos_shell_output *output;
+	wl_list_for_each(output, &server->outputs, link) {
+		for (size_t index = 0; output->mux_registered &&
+				index < output->mux_snapshot.pane_count; index++) {
+			const struct engineos_mux_pane_model *pane =
+				&output->mux_snapshot.panes[index];
+			if (pane->pane_id == failure->pane_id &&
+					pane->generation == failure->pane_generation &&
+					pane->image_id == failure->image_id)
+				return true;
+		}
+	}
+	return false;
+}
+
+static void prune_preview_failures(struct engineos_shell_server *server) {
+	struct engineos_preview_failure *failure, *tmp;
+	wl_list_for_each_safe(failure, tmp, &server->preview_failures, link) {
+		if (mux_image_is_current(server, failure))
+			continue;
+		wl_list_remove(&failure->link);
+		free(failure);
+	}
+	if (!wl_list_empty(&server->preview_failures))
+		return;
+	server->preview_failed_pane_id = 0;
+	server->preview_failed_generation = 0;
+	server->preview_failed_image_id = 0;
+	if (strcmp(server->preview_reconciliation_status, "error") == 0) {
+		snprintf(server->preview_reconciliation_status,
+			sizeof(server->preview_reconciliation_status), "ready");
+		server->preview_reconciliation_error[0] = '\0';
+	}
+}
+
+static bool record_preview_failure(struct engineos_shell_server *server,
+		uint32_t pane_id, uint32_t pane_generation, uint32_t image_id) {
+	if (preview_failure_known(server, pane_id, pane_generation, image_id))
+		return true;
+	struct engineos_preview_failure *failure = calloc(1, sizeof(*failure));
+	if (failure == NULL)
+		return false;
+	failure->pane_id = pane_id;
+	failure->pane_generation = pane_generation;
+	failure->image_id = image_id;
+	wl_list_insert(server->preview_failures.prev, &failure->link);
+	return true;
+}
+
+static enum engineos_preview_create_result create_mux_image_preview(
+		struct engineos_shell_server *server,
 		struct engineos_mux_pane_model *pane,
 		struct engineos_mux_pane_output_scene *output_scene,
 		char *error, size_t error_size) {
@@ -2197,9 +2330,9 @@ static bool create_mux_image_preview(struct engineos_shell_server *server,
 			wlr_log(WLR_INFO,
 				"mux image fetch superseded pane=%%%u generation=%u image_id=%u; snapshot resync deferred",
 				pane->pane_id, pane->generation, pane->image_id);
-			return true;
+			return ENGINEOS_PREVIEW_DEFERRED;
 		}
-		return false;
+		return ENGINEOS_PREVIEW_FATAL;
 	}
 	int image_width = 0, image_height = 0;
 	struct wlr_buffer *buffer = engineos_image_decode_memory(encoded,
@@ -2207,7 +2340,7 @@ static bool create_mux_image_preview(struct engineos_shell_server *server,
 		error, error_size);
 	free(encoded);
 	if (buffer == NULL)
-		return false;
+		return ENGINEOS_PREVIEW_ISOLATED_FAILURE;
 	long dest_width = output_scene->stats.width;
 	long dest_height = dest_width * image_height / image_width;
 	if (dest_height > output_scene->stats.height) {
@@ -2218,7 +2351,7 @@ static bool create_mux_image_preview(struct engineos_shell_server *server,
 			dest_height > INT_MAX) {
 		wlr_buffer_drop(buffer);
 		snprintf(error, error_size, "mux image destination is invalid");
-		return false;
+		return ENGINEOS_PREVIEW_ISOLATED_FAILURE;
 	}
 	hide_matching_image_previews(server, NULL, true, pane->pane_id,
 		pane->generation, "replace-mux-pane-image");
@@ -2226,7 +2359,7 @@ static bool create_mux_image_preview(struct engineos_shell_server *server,
 	if (preview == NULL) {
 		wlr_buffer_drop(buffer);
 		snprintf(error, error_size, "failed to allocate mux image state");
-		return false;
+		return ENGINEOS_PREVIEW_FATAL;
 	}
 	preview->buffer = buffer;
 	preview->scene_buffer = wlr_scene_buffer_create(output_scene->tree, buffer);
@@ -2235,7 +2368,7 @@ static bool create_mux_image_preview(struct engineos_shell_server *server,
 		preview->buffer = NULL;
 		free(preview);
 		snprintf(error, error_size, "failed to create mux image scene buffer");
-		return false;
+		return ENGINEOS_PREVIEW_FATAL;
 	}
 	char path[96];
 	snprintf(path, sizeof(path), "mux://pane/%u/image/%u", pane->pane_id,
@@ -2246,7 +2379,7 @@ static bool create_mux_image_preview(struct engineos_shell_server *server,
 		reset_image_surface(preview);
 		free(preview);
 		snprintf(error, error_size, "failed to retain mux image identity");
-		return false;
+		return ENGINEOS_PREVIEW_FATAL;
 	}
 	preview->native_pane = true;
 	preview->mux_owned = true;
@@ -2275,13 +2408,14 @@ static bool create_mux_image_preview(struct engineos_shell_server *server,
 		pane->image_mime, pane->image_owner, pane->image_lease_client_id,
 		pane->image_lease_view_id, image_width, image_height,
 		preview->width, preview->height);
-	return true;
+	return ENGINEOS_PREVIEW_CREATED;
 }
 
 static bool sync_native_preview_leases(struct engineos_shell_server *server,
 		const char *reason) {
 	struct engineos_preview_surface *preview, *tmp;
 	bool changed = false;
+	prune_preview_failures(server);
 	wl_list_for_each_safe(preview, tmp, &server->previews, link) {
 		if (!preview->native_pane)
 			continue;
@@ -2306,7 +2440,9 @@ static bool sync_native_preview_leases(struct engineos_shell_server *server,
 			image_current && pane_scene != NULL && lease_client_id ==
 				server->mux_client.frontend_client_id && lease_view_id != 0 ?
 			find_mux_pane_output_scene(pane_scene, lease_view_id) : NULL;
-		if (output_scene == NULL) {
+		if (!image_current || pane == NULL ||
+				lease_client_id != server->mux_client.frontend_client_id ||
+				lease_view_id == 0) {
 			wlr_log(WLR_INFO,
 				"image preview lease lost pane=%%%u generation=%u reason=%s",
 				preview->pane_id, preview->pane_generation,
@@ -2314,6 +2450,23 @@ static bool sync_native_preview_leases(struct engineos_shell_server *server,
 			wl_list_remove(&preview->link);
 			reset_image_surface(preview);
 			free(preview);
+			changed = true;
+			continue;
+		}
+		if (output_scene == NULL) {
+			if (preview->scene_buffer->node.parent != &server->scene->tree)
+				wlr_scene_node_reparent(&preview->scene_buffer->node,
+					&server->scene->tree);
+			wlr_scene_node_set_enabled(&preview->scene_buffer->node, false);
+			snprintf(server->preview_reconciliation_status,
+				sizeof(server->preview_reconciliation_status), "deferred");
+			snprintf(server->preview_reconciliation_error,
+				sizeof(server->preview_reconciliation_error),
+				"output scene unavailable for pane %%%u image %u",
+				preview->pane_id, preview->mux_image_id);
+			if (server->mux_snapshot_retry_timer != NULL)
+				wl_event_source_timer_update(
+					server->mux_snapshot_retry_timer, 16);
 			changed = true;
 			continue;
 		}
@@ -2355,25 +2508,76 @@ static bool sync_native_preview_leases(struct engineos_shell_server *server,
 					find_mux_image_preview(server, pane->pane_id,
 						pane->generation, pane->image_id) != NULL)
 				continue;
+			if (preview_failure_known(server, pane->pane_id, pane->generation,
+					pane->image_id))
+				continue;
 			struct engineos_mux_pane_scene *pane_scene = find_mux_pane_scene(
 				server, pane->pane_id, pane->generation);
 			struct engineos_mux_pane_output_scene *output_scene =
 				pane_scene != NULL ? find_mux_pane_output_scene(pane_scene,
 					output->mux_view_id) : NULL;
+			if (output_scene == NULL) {
+				snprintf(server->preview_reconciliation_status,
+					sizeof(server->preview_reconciliation_status), "deferred");
+				snprintf(server->preview_reconciliation_error,
+					sizeof(server->preview_reconciliation_error),
+					"output scene unavailable for pane %%%u image %u",
+					pane->pane_id, pane->image_id);
+				if (server->mux_snapshot_retry_timer != NULL)
+					wl_event_source_timer_update(
+						server->mux_snapshot_retry_timer, 16);
+				changed = true;
+				continue;
+			}
 			char error[256] = {0};
-			if (output_scene == NULL || !create_mux_image_preview(server, pane,
-					output_scene, error, sizeof(error))) {
+			enum engineos_preview_create_result result =
+				create_mux_image_preview(server, pane, output_scene,
+					error, sizeof(error));
+			if (result == ENGINEOS_PREVIEW_FATAL) {
 				wlr_log(WLR_ERROR,
 					"mux image synchronization failed pane=%%%u image=%u: %s",
 					pane->pane_id, pane->image_id,
-					error[0] != '\0' ? error : "output scene unavailable");
+					error[0] != '\0' ? error : "mux transport failure");
 				return false;
 			}
-			if (server->mux_image_resync_pending) {
+			if (result == ENGINEOS_PREVIEW_ISOLATED_FAILURE) {
+				if (!record_preview_failure(server, pane->pane_id,
+						pane->generation, pane->image_id)) {
+					wlr_log(WLR_ERROR,
+						"failed to retain isolated mux image failure");
+					return false;
+				}
+				server->preview_failed_pane_id = pane->pane_id;
+				server->preview_failed_generation = pane->generation;
+				server->preview_failed_image_id = pane->image_id;
+				snprintf(server->preview_reconciliation_status,
+					sizeof(server->preview_reconciliation_status), "error");
+				snprintf(server->preview_reconciliation_error,
+					sizeof(server->preview_reconciliation_error), "%s",
+					error[0] != '\0' ? error : "image decode failed");
+				wlr_log(WLR_ERROR,
+					"mux image isolated pane=%%%u image=%u: %s",
+					pane->pane_id, pane->image_id,
+					server->preview_reconciliation_error);
+				changed = true;
+				continue;
+			}
+			if (result == ENGINEOS_PREVIEW_DEFERRED ||
+					server->mux_image_resync_pending) {
+				snprintf(server->preview_reconciliation_status,
+					sizeof(server->preview_reconciliation_status), "deferred");
+				snprintf(server->preview_reconciliation_error,
+					sizeof(server->preview_reconciliation_error),
+					"image revision superseded");
 				if (server->mux_snapshot_retry_timer != NULL)
 					wl_event_source_timer_update(
 						server->mux_snapshot_retry_timer, 1);
 				continue;
+			}
+			if (wl_list_empty(&server->preview_failures)) {
+				snprintf(server->preview_reconciliation_status,
+					sizeof(server->preview_reconciliation_status), "ready");
+				server->preview_reconciliation_error[0] = '\0';
 			}
 			changed = true;
 		}
@@ -2568,7 +2772,66 @@ static bool apply_terminal_theme(struct engineos_shell_server *server,
 		server->terminal_theme.name,
 		(unsigned long long)server->terminal_theme.generation,
 		server->terminal_theme.foreground, server->terminal_theme.background);
+	snprintf(server->terminal_theme_source,
+		sizeof(server->terminal_theme_source), "persisted-user");
+	server->terminal_theme_error[0] = '\0';
 	return true;
+}
+
+static bool load_terminal_theme_file(struct engineos_shell_server *server,
+		const char *path, const char *source) {
+	if (path == NULL || access(path, R_OK) != 0)
+		return false;
+	struct json_object *object = json_object_from_file(path);
+	char error[256] = {0};
+	struct engineos_terminal_theme theme;
+	if (object == NULL ||
+			!engineos_terminal_theme_parse(&theme, object, error,
+				sizeof(error))) {
+		snprintf(server->terminal_theme_error,
+			sizeof(server->terminal_theme_error),
+			"%.32s override %.96s is invalid: %.96s", source, path,
+			error[0] != '\0' ? error : "invalid JSON");
+		wlr_log(WLR_ERROR, "%s", server->terminal_theme_error);
+		if (object != NULL) json_object_put(object);
+		return false;
+	}
+	json_object_put(object);
+	theme.generation = 1;
+	server->terminal_theme = theme;
+	snprintf(server->terminal_theme_source,
+		sizeof(server->terminal_theme_source), "%s", source);
+	return true;
+}
+
+static void load_terminal_theme_defaults(struct engineos_shell_server *server) {
+	engineos_terminal_theme_default(&server->terminal_theme);
+	snprintf(server->terminal_theme_source,
+		sizeof(server->terminal_theme_source), "compiled-gruvbox");
+	const char *config_home = getenv("XDG_CONFIG_HOME");
+	const char *home = getenv("HOME");
+	char *user_path = NULL;
+	if (config_home != NULL && config_home[0] != '\0')
+		user_path = join_state_path(config_home,
+			"engineos/terminal-theme.json");
+	else if (home != NULL && home[0] != '\0') {
+		char *home_config = join_state_path(home, ".config");
+		if (home_config != NULL) {
+			user_path = join_state_path(home_config,
+				"engineos/terminal-theme.json");
+			free(home_config);
+		}
+	}
+	if (load_terminal_theme_file(server, user_path, "persisted-user")) {
+		free(user_path);
+		return;
+	}
+	free(user_path);
+	const char *system_path = getenv(
+		"ENGINEOS_TERMINAL_THEME_SYSTEM_DEFAULT");
+	if (system_path == NULL || system_path[0] == '\0')
+		system_path = "/etc/engineos/terminal-theme.json";
+	(void)load_terminal_theme_file(server, system_path, "system-default");
 }
 
 static void handle_preview_request_json(struct engineos_shell_server *server,
@@ -2874,6 +3137,11 @@ static void write_shell_state(struct engineos_shell_server *server,
 		server->screencopy_mgr != NULL ? "true" : "false");
 	fprintf(file, ",\n  \"terminal_theme\": {\"name\": ");
 	json_write_string(file, server->terminal_theme.name);
+	fprintf(file, ", \"source\": ");
+	json_write_string(file, server->terminal_theme_source);
+	fprintf(file, ", \"error\": ");
+	json_write_string(file, server->terminal_theme_error[0] != '\0' ?
+		server->terminal_theme_error : NULL);
 	fprintf(file,
 		", \"generation\": %llu, \"foreground\": \"#%06x\", \"background\": \"#%06x\", \"colors\": [",
 		(unsigned long long)server->terminal_theme.generation,
@@ -3256,6 +3524,16 @@ static void write_shell_state(struct engineos_shell_server *server,
 		primary_preview = state_preview;
 	fprintf(file, ",\n  \"preview\": ");
 	write_preview_json(file, primary_preview);
+	fprintf(file, ",\n  \"preview_reconciliation\": {\"status\": ");
+	json_write_string(file, server->preview_reconciliation_status[0] != '\0' ?
+		server->preview_reconciliation_status : "idle");
+	fprintf(file, ", \"error\": ");
+	json_write_string(file, server->preview_reconciliation_error[0] != '\0' ?
+		server->preview_reconciliation_error : NULL);
+	fprintf(file,
+		", \"failed_pane_id\": \"%%%u\", \"failed_generation\": %u, \"failed_image_id\": %u}",
+		server->preview_failed_pane_id, server->preview_failed_generation,
+		server->preview_failed_image_id);
 	fprintf(file, ",\n  \"previews\": [");
 	bool first_preview = true;
 	wl_list_for_each(state_preview, &server->previews, link) {
@@ -4811,16 +5089,13 @@ static uint32_t native_mux_mouse_modifiers(
 
 static bool native_mux_pointer_cell(struct engineos_shell_server *server,
 		uint32_t *view_id, uint32_t *cell_x, uint32_t *cell_y) {
-	if (!server->mux_client.ready ||
-			server->input_mode != ENGINEOS_INPUT_TERMINAL ||
-			server->mux_client.primary_view_id == 0) return false;
+	if (!server->mux_client.ready) return false;
 	struct wlr_output *target = wlr_output_layout_output_at(
 		server->output_layout, server->cursor->x, server->cursor->y);
 	if (target == NULL) return false;
 	struct engineos_shell_output *output;
 	wl_list_for_each(output, &server->outputs, link) {
-		if (output->output != target || !output->mux_registered ||
-				output->mux_view_id != server->mux_client.primary_view_id) continue;
+		if (output->output != target || !output->mux_registered) continue;
 		struct wlr_output_layout_output *layout_output =
 			wlr_output_layout_get(server->output_layout, target);
 		if (layout_output == NULL) return false;
@@ -4846,6 +5121,62 @@ static bool native_mux_pointer_cell(struct engineos_shell_server *server,
 		return true;
 	}
 	return false;
+}
+
+static enum engineos_pointer_target classify_pointer_target(
+		struct engineos_shell_server *server, uint32_t *view_id,
+		uint32_t *cell_x, uint32_t *cell_y) {
+	if (!native_mux_pointer_cell(server, view_id, cell_x, cell_y))
+		return ENGINEOS_POINTER_NONE;
+
+	struct engineos_shell_output *output = NULL;
+	struct engineos_shell_output *candidate;
+	wl_list_for_each(candidate, &server->outputs, link) {
+		if (candidate->mux_registered &&
+				candidate->mux_view_id == *view_id) {
+			output = candidate;
+			break;
+		}
+	}
+	if (output == NULL || !output->mux_snapshot.ready)
+		return ENGINEOS_POINTER_NONE;
+
+	const struct engineos_mux_ui_model *ui = &output->mux_snapshot.ui;
+	if (ui->ready && !ui->invalidated) {
+		if (ui->menu_active && *cell_x >= ui->menu_x &&
+				*cell_x < ui->menu_x + ui->menu_width &&
+				*cell_y >= ui->menu_y &&
+				*cell_y < ui->menu_y + ui->menu_height)
+			return ENGINEOS_POINTER_TMUX_UI;
+		if (ui->status_y >= 0 &&
+				*cell_y >= (uint32_t)ui->status_y &&
+				*cell_y < (uint32_t)ui->status_y +
+					ui->status_row_count)
+			return ENGINEOS_POINTER_TMUX_UI;
+	}
+
+	for (size_t index = 0; index < output->mux_snapshot.pane_count;
+			index++) {
+		const struct engineos_mux_pane_model *pane =
+			&output->mux_snapshot.panes[index];
+		if (!pane->visible || !pane->window_active ||
+				*cell_x < pane->left ||
+				*cell_x >= pane->left + pane->columns ||
+				*cell_y < pane->top ||
+				*cell_y >= pane->top + pane->rows)
+			continue;
+		if (pane_presentation_owned_by_output(server, pane, output))
+			return ENGINEOS_POINTER_WAYLAND_SURFACE;
+		return ENGINEOS_POINTER_TMUX_PANE;
+	}
+
+	/* Cells outside pane content are tmux-owned borders and separators. */
+	return ENGINEOS_POINTER_TMUX_PANE;
+}
+
+static bool pointer_target_is_tmux(enum engineos_pointer_target target) {
+	return target == ENGINEOS_POINTER_TMUX_UI ||
+		target == ENGINEOS_POINTER_TMUX_PANE;
 }
 
 static bool route_native_terminal_mouse_at(struct engineos_shell_server *server,
@@ -4930,8 +5261,20 @@ static void cursor_handle_motion(struct wl_listener *listener, void *data) {
 	}
 	cursor_log_event(server, "motion", event->pointer);
 	const char *button = native_mux_button_name(server->mux_pointer_button);
-	if (button != NULL && route_native_terminal_mouse(server, "motion", button,
-			server->mux_pointer_button == 0)) return;
+	uint32_t view_id = 0, cell_x = 0, cell_y = 0;
+	enum engineos_pointer_target target = server->pointer_grab_active ?
+		server->pointer_grab_target :
+		classify_pointer_target(server, &view_id, &cell_x, &cell_y);
+	if (pointer_target_is_tmux(target)) {
+		if (view_id == 0 &&
+				!native_mux_pointer_cell(server, &view_id, &cell_x, &cell_y))
+			return;
+		clear_pointer_focus(server, "tmux-pointer-motion");
+		if (button != NULL)
+			route_native_terminal_mouse_at(server, view_id, cell_x, cell_y,
+				"motion", button, server->mux_pointer_button == 0);
+		return;
+	}
 	if (cursor_update_pointer_focus(server, event->time_msec, "motion")) {
 		sync_pointer_constraint(server, "motion");
 		send_game_relative_motion(server, event->time_msec,
@@ -4954,8 +5297,20 @@ static void cursor_handle_motion_absolute(struct wl_listener *listener, void *da
 	}
 	cursor_log_event(server, "motion-absolute", event->pointer);
 	const char *button = native_mux_button_name(server->mux_pointer_button);
-	if (button != NULL && route_native_terminal_mouse(server, "motion", button,
-			server->mux_pointer_button == 0)) return;
+	uint32_t view_id = 0, cell_x = 0, cell_y = 0;
+	enum engineos_pointer_target target = server->pointer_grab_active ?
+		server->pointer_grab_target :
+		classify_pointer_target(server, &view_id, &cell_x, &cell_y);
+	if (pointer_target_is_tmux(target)) {
+		if (view_id == 0 &&
+				!native_mux_pointer_cell(server, &view_id, &cell_x, &cell_y))
+			return;
+		clear_pointer_focus(server, "tmux-pointer-motion-absolute");
+		if (button != NULL)
+			route_native_terminal_mouse_at(server, view_id, cell_x, cell_y,
+				"motion", button, server->mux_pointer_button == 0);
+		return;
+	}
 	cursor_update_pointer_focus(server, event->time_msec, "motion-absolute");
 }
 
@@ -5010,8 +5365,7 @@ static bool focus_native_mux_output(struct engineos_shell_server *server,
 
 static void focus_native_mux_output_at_cursor(
 		struct engineos_shell_server *server) {
-	if (!server->mux_client.ready ||
-			server->input_mode != ENGINEOS_INPUT_TERMINAL) return;
+	if (!server->mux_client.ready) return;
 	struct wlr_output *target = wlr_output_layout_output_at(
 		server->output_layout, server->cursor->x, server->cursor->y);
 	if (target == NULL) return;
@@ -5035,10 +5389,17 @@ static void cursor_handle_button(struct wl_listener *listener, void *data) {
 	}
 	if (event->state == WL_POINTER_BUTTON_STATE_PRESSED &&
 			!server->game_capture) {
-		focus_native_mux_output_at_cursor(server);
+		uint32_t view_id = 0, cell_x = 0, cell_y = 0;
+		enum engineos_pointer_target target = classify_pointer_target(server,
+			&view_id, &cell_x, &cell_y);
+		server->pointer_grab_target = target;
+		server->pointer_grab_active = true;
 		const char *button = native_mux_button_name(event->button);
-		if (button != NULL && route_native_terminal_mouse(server, "press",
-				button, false)) {
+		if (button != NULL && pointer_target_is_tmux(target)) {
+			focus_native_mux_output_at_cursor(server);
+			clear_pointer_focus(server, "tmux-pointer-press");
+			route_native_terminal_mouse_at(server, view_id, cell_x, cell_y,
+				"press", button, false);
 			server->mux_pointer_button = event->button;
 			return;
 		}
@@ -5062,7 +5423,6 @@ static void cursor_handle_button(struct wl_listener *listener, void *data) {
 			route_native_terminal_mouse(server, "release", button, false);
 		if (!routed && button != NULL && server->mux_pointer_cell_valid &&
 				server->mux_client.ready &&
-				server->input_mode == ENGINEOS_INPUT_TERMINAL &&
 				server->mux_pointer_view_id != 0) {
 			routed = route_native_terminal_mouse_at(server,
 				server->mux_pointer_view_id, server->mux_pointer_x,
@@ -5070,12 +5430,18 @@ static void cursor_handle_button(struct wl_listener *listener, void *data) {
 		}
 		server->mux_pointer_button = 0;
 		server->mux_pointer_view_id = 0;
+		server->pointer_grab_active = false;
+		server->pointer_grab_target = ENGINEOS_POINTER_NONE;
 		if (routed) return;
 	}
 
 	if (cursor_update_pointer_focus(server, event->time_msec, "button")) {
 		wlr_seat_pointer_notify_button(server->seat, event->time_msec,
 			event->button, event->state);
+	}
+	if (event->state == WL_POINTER_BUTTON_STATE_RELEASED) {
+		server->pointer_grab_active = false;
+		server->pointer_grab_target = ENGINEOS_POINTER_NONE;
 	}
 }
 
@@ -5092,8 +5458,15 @@ static void cursor_handle_axis(struct wl_listener *listener, void *data) {
 		else if (event->delta > 0 || event->delta_discrete > 0)
 			button = "wheel-down";
 	}
-	if (button != NULL && route_native_terminal_mouse(server, "wheel", button,
-			false)) return;
+	uint32_t view_id = 0, cell_x = 0, cell_y = 0;
+	enum engineos_pointer_target target = classify_pointer_target(server,
+		&view_id, &cell_x, &cell_y);
+	if (button != NULL && pointer_target_is_tmux(target)) {
+		clear_pointer_focus(server, "tmux-pointer-wheel");
+		route_native_terminal_mouse_at(server, view_id, cell_x, cell_y,
+			"wheel", button, false);
+		return;
+	}
 	if (cursor_update_pointer_focus(server, event->time_msec, "axis")) {
 		wlr_seat_pointer_notify_axis(server->seat, event->time_msec,
 			event->orientation, event->delta, event->delta_discrete,
@@ -6526,6 +6899,10 @@ static void destroy_server(struct engineos_shell_server *server) {
 		wl_event_source_remove(server->mux_snapshot_retry_timer);
 		server->mux_snapshot_retry_timer = NULL;
 	}
+	if (server->terminal_blink_timer != NULL) {
+		wl_event_source_remove(server->terminal_blink_timer);
+		server->terminal_blink_timer = NULL;
+	}
 	clear_active_pointer_constraint(server, "shell-destroy");
 	if (server->display != NULL) {
 		wl_display_destroy_clients(server->display);
@@ -6566,6 +6943,12 @@ static void destroy_server(struct engineos_shell_server *server) {
 			&server->mux_pane_scenes, link) {
 		wl_list_remove(&pane_scene->link);
 		free(pane_scene);
+	}
+	struct engineos_preview_failure *failure, *next_failure;
+	wl_list_for_each_safe(failure, next_failure,
+			&server->preview_failures, link) {
+		wl_list_remove(&failure->link);
+		free(failure);
 	}
 	server->mux_terminal_renderer = NULL;
 	server->mux_terminal_buffer = NULL;
@@ -6612,11 +6995,12 @@ int main(int argc, char **argv) {
 	setlocale(LC_CTYPE, "");
 	enum engineos_shell_mode mode = ENGINEOS_SHELL_AUTO;
 	struct engineos_shell_server server = {0};
-	engineos_terminal_theme_default(&server.terminal_theme);
+	load_terminal_theme_defaults(&server);
 	server.preview_socket_fd = -1;
 	server.mux_client.fd = -1;
 	wl_list_init(&server.mux_pane_scenes);
 	wl_list_init(&server.previews);
+	wl_list_init(&server.preview_failures);
 	wl_list_init(&server.outputs);
 	wl_list_init(&server.views);
 	wl_list_init(&server.keyboards);
@@ -6732,6 +7116,14 @@ int main(int argc, char **argv) {
 		destroy_server(&server);
 		return 1;
 	}
+	server.terminal_blink_timer =
+		wl_event_loop_add_timer(event_loop, terminal_blink_tick, &server);
+	if (server.terminal_blink_timer == NULL) {
+		wlr_log(WLR_ERROR, "failed to add terminal blink timer");
+		destroy_server(&server);
+		return 1;
+	}
+	wl_event_source_timer_update(server.terminal_blink_timer, 500);
 
 	if (server.smoke_ms > 0) {
 		struct wl_event_source *timer =

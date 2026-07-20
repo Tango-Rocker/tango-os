@@ -13,6 +13,7 @@ struct engineos_mux_ui_span {
 	uint16_t attributes;
 	int32_t foreground;
 	int32_t background;
+	int32_t underline_colour;
 };
 
 struct engineos_mux_ui_row {

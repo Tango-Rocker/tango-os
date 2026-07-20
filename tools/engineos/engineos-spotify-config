@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Apply EngineOS Spotify defaults without replacing unrelated user settings."""
+
+import argparse
+import os
+import re
+import stat
+import tempfile
+import tomllib
+from pathlib import Path
+
+THEME_NAME = "engineos-gruvbox-dark"
+START = "# BEGIN ENGINEOS GRUVBOX DARK"
+END = "# END ENGINEOS GRUVBOX DARK"
+
+
+def atomic_write(path: Path, content: str, mode: int = 0o600) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.chmod(mode)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def replace_top_level(text: str, key: str, value: str) -> str:
+    lines = text.splitlines(keepends=True)
+    first_table = next(
+        (index for index, line in enumerate(lines) if line.lstrip().startswith("[")),
+        len(lines),
+    )
+    pattern = re.compile(rf"^(\s*){re.escape(key)}\s*=.*(?:\n)?$")
+    for index in range(first_table):
+        if pattern.match(lines[index]):
+            newline = "\n" if lines[index].endswith("\n") else ""
+            lines[index] = f"{key} = {value}{newline}"
+            return "".join(lines)
+    lines.insert(first_table, f"{key} = {value}\n")
+    return "".join(lines)
+
+
+def replace_layout_height(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    header = re.compile(r"^\s*\[layout\]\s*(?:#.*)?$")
+    key = re.compile(r"^\s*playback_window_height\s*=")
+    start = next(
+        (index for index, line in enumerate(lines) if header.match(line.rstrip("\n"))),
+        None,
+    )
+    if start is not None:
+        end = next(
+            (
+                index
+                for index in range(start + 1, len(lines))
+                if lines[index].lstrip().startswith("[")
+            ),
+            len(lines),
+        )
+        for index in range(start + 1, end):
+            if key.match(lines[index]):
+                lines[index] = "playback_window_height = 10\n"
+                return "".join(lines)
+        lines.insert(end, "playback_window_height = 10\n")
+        return "".join(lines)
+
+    first_table = next(
+        (index for index, line in enumerate(lines) if line.lstrip().startswith("[")),
+        len(lines),
+    )
+    inline = re.compile(r"^(\s*)layout\s*=\s*\{(.*)\}\s*(?:#.*)?$")
+    for index in range(first_table):
+        match = inline.match(lines[index].rstrip("\n"))
+        if not match:
+            continue
+        body = re.sub(
+            r"(?:^|,)\s*playback_window_height\s*=\s*[^,}]+",
+            "",
+            match.group(2),
+        ).strip(" ,")
+        prefix = f"{body}, " if body else ""
+        lines[index] = f"layout = {{ {prefix}playback_window_height = 10 }}\n"
+        return "".join(lines)
+
+    suffix = "" if not text or text.endswith("\n") else "\n"
+    return "".join(lines) + suffix + "\n[layout]\nplayback_window_height = 10\n"
+
+
+def update_app(path: Path) -> None:
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    if text:
+        tomllib.loads(text)
+    text = replace_top_level(text, "theme", f'"{THEME_NAME}"')
+    text = replace_top_level(text, "enable_audio_visualization", "true")
+    text = replace_layout_height(text)
+    parsed = tomllib.loads(text)
+    if (
+        parsed.get("theme") != THEME_NAME
+        or parsed.get("enable_audio_visualization") is not True
+        or parsed.get("layout", {}).get("playback_window_height") != 10
+    ):
+        raise ValueError("Spotify app configuration migration did not converge")
+    atomic_write(path, text)
+
+
+def update_theme(path: Path, source: Path) -> None:
+    managed = source.read_text(encoding="utf-8").strip()
+    tomllib.loads(managed)
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    if text:
+        tomllib.loads(text)
+    block = f"{START}\n{managed}\n{END}"
+    pattern = re.compile(
+        rf"{re.escape(START)}.*?{re.escape(END)}", re.DOTALL
+    )
+    if pattern.search(text):
+        text = pattern.sub(block, text)
+    else:
+        separator = "\n\n" if text.strip() else ""
+        text = text.rstrip() + separator + block + "\n"
+    tomllib.loads(text)
+    atomic_write(path, text)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config-dir", type=Path)
+    parser.add_argument("--theme-source", required=True, type=Path)
+    args = parser.parse_args()
+    config = args.config_dir or Path(
+        os.environ.get(
+            "SPOTIFY_PLAYER_CONFIG_DIR",
+            Path.home() / ".config/spotify-player",
+        )
+    )
+    update_app(config / "app.toml")
+    update_theme(config / "theme.toml", args.theme_source)
+    for path in (config / "app.toml", config / "theme.toml"):
+        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    print(f"updated Spotify Gruvbox defaults in {config}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -213,6 +213,17 @@ lint_pkgbuild() {
         return
       fi
       ;;
+    engineos-mc)
+      if ! grep -q 'engineos-quick-view-preview.patch' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: EngineOS Quick View patch is not applied"
+        return
+      fi
+      if ! grep -q -- '--mc-pid' \
+          "$pkg_dir/engineos-quick-view-preview.patch"; then
+        fail "$pkg: Quick View patch does not pass the real MC PID"
+        return
+      fi
+      ;;
 	engineos-dgen)
 		if ! grep -Eq '^_commit=[0-9a-f]{40}$' "$pkg_dir/PKGBUILD"; then
 			fail "$pkg: source is not pinned to an exact commit"

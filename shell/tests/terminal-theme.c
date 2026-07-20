@@ -23,6 +23,13 @@ int main(void) {
 	struct json_object *object = json_tokener_parse(json);
 	struct engineos_terminal_theme theme;
 	char error[256] = {0};
+	engineos_terminal_theme_default(&theme);
+	int failed = 0;
+	failed |= strcmp(theme.name, "gruvbox-dark") != 0;
+	failed |= expect_colour("compiled default background",
+		theme.background, 0x282828);
+	failed |= expect_colour("compiled default foreground",
+		theme.foreground, 0xebdbb2);
 	if (object == NULL ||
 			!engineos_terminal_theme_parse(&theme, object, error, sizeof(error))) {
 		fprintf(stderr, "valid theme rejected: %s\n", error);
@@ -31,7 +38,6 @@ int main(void) {
 	}
 	json_object_put(object);
 
-	int failed = 0;
 	failed |= strcmp(theme.name, "gruvbox-dark") != 0;
 	failed |= expect_colour("default background",
 		engineos_terminal_theme_resolve(&theme, 9, false), 0x282828);

@@ -2028,14 +2028,16 @@ static bool parse_ui_rows(struct json_object *array, uint32_t columns,
 			struct json_object *span = json_object_array_get_idx(spans, span_index);
 			struct engineos_mux_ui_span *destination =
 				&rows[row_index].spans[span_index];
-			uint32_t attributes, foreground, background;
+			uint32_t attributes, foreground, background, underline_colour;
 			if (!json_object_is_type(span, json_type_object) ||
 					!json_u32(span, "start", columns, &destination->start) ||
 					!json_u32(span, "end", columns, &destination->end) ||
 					destination->end < destination->start ||
 					!json_u32(span, "attributes", UINT16_MAX, &attributes) ||
 					!json_u32(span, "foreground", UINT32_MAX, &foreground) ||
-					!json_u32(span, "background", UINT32_MAX, &background)) {
+					!json_u32(span, "background", UINT32_MAX, &background) ||
+					!json_u32(span, "underline_colour", UINT32_MAX,
+						&underline_colour)) {
 				snprintf(error, error_size, "UI style span contract is invalid");
 				free_ui_rows(rows, count);
 				return false;
@@ -2043,6 +2045,7 @@ static bool parse_ui_rows(struct json_object *array, uint32_t columns,
 			destination->attributes = (uint16_t)attributes;
 			destination->foreground = (int32_t)foreground;
 			destination->background = (int32_t)background;
+			destination->underline_colour = (int32_t)underline_colour;
 		}
 	}
 	*parsed_rows = rows;

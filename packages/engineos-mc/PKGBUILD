@@ -1,0 +1,45 @@
+pkgname=engineos-mc
+pkgver=4.8.33
+pkgrel=1
+pkgdesc="Midnight Commander with EngineOS native pane-image Quick View integration"
+arch=('x86_64')
+url="https://midnight-commander.org/"
+license=('GPL-3.0-or-later' 'custom:EngineOS-TBD')
+depends=('e2fsprogs' 'glib2' 'gpm' 'libssh2' 'slang' 'unzip' 'engineos-tools')
+makedepends=('autoconf' 'automake' 'gettext' 'libtool' 'perl')
+provides=("mc=$pkgver")
+conflicts=('mc')
+replaces=('mc')
+source=(
+  "mc-$pkgver.tar.gz::https://github.com/MidnightCommander/mc/archive/refs/tags/$pkgver.tar.gz"
+  'engineos-quick-view-preview.patch'
+)
+sha256sums=(
+  '092e440930fda43574739e45a8b41af384b974e6720184b6707d127b84082c51'
+  '8c0365e773fb8fb5762dc5df49a14f39d12fcdc2386940a12290823ceb37d783'
+)
+
+prepare() {
+  patch -d "mc-$pkgver" -Np1 -i "$srcdir/engineos-quick-view-preview.patch"
+}
+
+build() {
+  cd "mc-$pkgver"
+  ./autogen.sh
+  ./configure \
+    --prefix=/usr \
+    --sysconfdir=/etc \
+    --libexecdir=/usr/lib \
+    --with-screen=slang \
+    --with-x=no
+  make
+}
+
+package() {
+  local _engineos_root
+  _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
+  cd "mc-$pkgver"
+  make DESTDIR="$pkgdir" install
+  install -Dm644 "$_engineos_root/LICENSES.md" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

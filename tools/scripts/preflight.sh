@@ -201,6 +201,12 @@ check_package_inputs() {
       require_file "tools/engineos/engineos"
       require_file "tools/engineos/eos-wrapper"
       require_file "tools/engineos/generate-wrappers.sh"
+      require_file "tools/engineos/chroma-worker"
+      require_file "tools/engineos/chroma-launcher-client"
+      require_file "tools/engineos/engineos-app-shims"
+      require_file "tools/engineos/engineos-spotify-config"
+      require_file "tools/post-install-payload/assets/systemd/chroma-worker.service"
+      require_file "tools/post-install-payload/assets/spotify/gruvbox-dark.toml"
       require_file "tools/scripts/common.sh"
       require_file "tools/scripts/package_lint.sh"
       require_file "tools/scripts/preflight.sh"
@@ -268,6 +274,10 @@ check_package_inputs() {
 		check_abs_python_syntax "$ROOT/tools/scripts/agent_router.py"
 		check_abs_python_syntax "$ROOT/tools/scripts/agent_hygiene.py"
 		check_abs_python_syntax "$ROOT/tests/tmux-text-client.py"
+		check_abs_python_syntax "$ROOT/tools/engineos/chroma-worker"
+		check_abs_python_syntax "$ROOT/tools/engineos/chroma-launcher-client"
+		check_abs_python_syntax "$ROOT/tools/engineos/engineos-app-shims"
+		check_abs_python_syntax "$ROOT/tools/engineos/engineos-spotify-config"
       ;;
     engineos-oh-my-zsh)
       require_file "packages/engineos-oh-my-zsh/PKGBUILD"
@@ -282,6 +292,7 @@ check_package_inputs() {
 		require_file "packages/engineos-mux/PKGBUILD"
 		require_file "packages/engineos-mux/0002-engine-mux-in-server-frontend.patch"
 		require_file "packages/engineos-mux/0003-engine-mux-graphical-client.patch"
+		require_file "packages/engineos-mux/0009-engine-pane-prototypes.patch"
 		require_file "packages/engineos-mux/engine-mux-frontend.c"
 		require_file "packages/engineos-mux/engine-mux-frontend.h"
 		;;
@@ -295,6 +306,14 @@ check_package_inputs() {
       require_file "shell/meson.build"
       require_file "shell/src/engineos-shell.c"
 	  require_file "shell/src/engineos-mux-client.c"
+	  require_file "shell/src/engineos-terminal-style.c"
+	  require_file "shell/src/engineos-terminal-style.h"
+	  require_file "shell/tests/terminal-style.c"
+      ;;
+    engineos-mc)
+      require_file "packages/engineos-mc/PKGBUILD"
+      require_file "packages/engineos-mc/README.md"
+      require_file "packages/engineos-mc/engineos-quick-view-preview.patch"
       ;;
 	engineos-dgen)
 		require_file "packages/engineos-dgen/PKGBUILD"

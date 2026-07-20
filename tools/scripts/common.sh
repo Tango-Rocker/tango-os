@@ -125,6 +125,24 @@ engineos_app_manifest_array_contains() {
   [[ "$line" == *"\"$needle\""* ]]
 }
 
+engineos_app_manifest_array_lines() {
+  local manifest="$1"
+  local app="$2"
+  local key="$3"
+  python - "$manifest" "$app" "$key" <<'PY'
+import sys
+import tomllib
+
+manifest, app, key = sys.argv[1:]
+with open(manifest, "rb") as handle:
+    value = tomllib.load(handle).get("apps", {}).get(app, {}).get(key)
+if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+    raise SystemExit(1)
+for item in value:
+    print(item)
+PY
+}
+
 have_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
@@ -133,6 +151,7 @@ engineos_packages() {
   printf '%s\n' \
     engineos-tools \
     engineos-config \
+    engineos-mc \
     engineos-dgen \
     engineos-oh-my-zsh \
     engineos-tmux-plugins \

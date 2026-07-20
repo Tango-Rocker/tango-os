@@ -14,15 +14,17 @@ diff --git a/src/viewer/actions_cmd.c b/src/viewer/actions_cmd.c
 index 3cd8f75eb..43b43a3c3 100644
 --- a/src/viewer/actions_cmd.c
 +++ b/src/viewer/actions_cmd.c
-@@ -45,6 +45,7 @@
+@@ -45,6 +45,9 @@
  #include <config.h>
 
++#include <fcntl.h>
  #include <stdlib.h>
 +#include <string.h>
++#include <unistd.h>
 
  #include "lib/global.h"
 
-@@ -97,6 +98,58 @@ mcview_remove_ext_script (WView *view)
+@@ -97,6 +100,111 @@ mcview_remove_ext_script (WView *view)
 
  /* --------------------------------------------------------------------------------------------- */
 
@@ -45,15 +47,66 @@ index 3cd8f75eb..43b43a3c3 100644
 +
 +/* --------------------------------------------------------------------------------------------- */
 +
++static void
++mcview_engineos_preview_child_setup (gpointer data)
++{
++    const char *runtime_dir = g_get_user_runtime_dir ();
++    char *log_dir = g_build_filename (runtime_dir, "engineos", NULL);
++    char *log_path = g_build_filename (log_dir,
++                                      "mc-preview-helper.log", NULL);
++    (void) g_mkdir_with_parents (log_dir, 0700);
++    int fd = open (log_path, O_WRONLY | O_CREAT | O_APPEND, 0600);
++
++    (void) data;
++    if (fd >= 0)
++    {
++        (void) dup2 (fd, STDERR_FILENO);
++        close (fd);
++    }
++    g_free (log_dir);
++    g_free (log_path);
++}
++
++/* --------------------------------------------------------------------------------------------- */
++
++static void
++mcview_engineos_preview_log_error (const GError *error)
++{
++    if (error != NULL)
++    {
++        const char *runtime_dir = g_get_user_runtime_dir ();
++        char *log_dir = g_build_filename (runtime_dir, "engineos", NULL);
++        char *log_path = g_build_filename (log_dir,
++                                          "mc-preview-helper.log", NULL);
++        (void) g_mkdir_with_parents (log_dir, 0700);
++        int fd = open (log_path, O_WRONLY | O_CREAT | O_APPEND, 0600);
++
++        if (fd >= 0)
++        {
++            (void) write (fd, error->message, strlen (error->message));
++            (void) write (fd, "\n", 1);
++            close (fd);
++        }
++        g_free (log_dir);
++        g_free (log_path);
++    }
++}
++
++/* --------------------------------------------------------------------------------------------- */
++
 +void
 +mcview_engineos_quick_preview_update (const char *file)
 +{
++    gchar pid[32];
++    g_snprintf (pid, sizeof (pid), "%ld", (long) getpid ());
 +    gchar *show_argv[] = {
 +        "engine-image-preview",
 +        "--quick-view",
 +        (gchar *) file,
 +        "--panel",
 +        "right",
++        "--mc-pid",
++        pid,
 +        NULL
 +    };
 +    gchar *hide_argv[] = { "engine-image-preview", "--hide", NULL };
@@ -62,17 +115,19 @@ index 3cd8f75eb..43b43a3c3 100644
 +    if (!mcview_engineos_is_preview_image (file))
 +    {
 +        (void) g_spawn_async (NULL, hide_argv, NULL,
-+                              G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL
-+                                  | G_SPAWN_STDERR_TO_DEV_NULL,
-+                              NULL, NULL, NULL, &error);
++                              G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL,
++                              mcview_engineos_preview_child_setup, NULL,
++                              NULL, &error);
++        mcview_engineos_preview_log_error (error);
 +        g_clear_error (&error);
 +        return;
 +    }
 +
 +    (void) g_spawn_async (NULL, show_argv, NULL,
-+                          G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL
-+                              | G_SPAWN_STDERR_TO_DEV_NULL,
-+                          NULL, NULL, NULL, &error);
++                          G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL,
++                          mcview_engineos_preview_child_setup, NULL,
++                          NULL, &error);
++    mcview_engineos_preview_log_error (error);
 +    g_clear_error (&error);
 +}
 +
@@ -81,7 +136,7 @@ index 3cd8f75eb..43b43a3c3 100644
  static void
  mcview_continue_search_cmd (WView *view)
  {
-@@ -158,6 +211,8 @@ mcview_hook (void *v)
+@@ -158,6 +241,8 @@ mcview_hook (void *v)
      if (fe == NULL)
          return;
 

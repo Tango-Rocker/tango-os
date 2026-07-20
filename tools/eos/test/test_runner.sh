@@ -2239,10 +2239,18 @@ PY
 			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
 		sleep 0.02
 	done
-	jq -e '.mux.presentation.type == "terminal" and
-		.input.mode == "terminal" and .input.capture == false' \
-		"$fixture/engineos/shell-state.json" >/dev/null ||
+	if ! jq -e '.mux.presentation.type == "terminal" and
+			.input.mode == "terminal" and .input.capture == false' \
+			"$fixture/engineos/shell-state.json" >/dev/null; then
+		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			display-message -p -t "$shell_pane_id" \
+			'#{pane_presentation}|#{pane_view_mode}|#{pane_app_pid}|#{pane_presentation_scope}|#{pane_surface_count}' \
+			>&2 || true
+		jq '{last_reason,input,mux:.mux.presentation,windows}' \
+			"$fixture/engineos/shell-state.json" >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
 		die "native game respawn exit did not restore terminal input"
+	fi
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		list-clients -F '#{client_name} #{client_flags}' \
 		>"$fixture/graphical-clients.txt"
@@ -3224,6 +3232,9 @@ run_app() {
   local status_out="$tmp_dir/status.json"
   local wrapper_log="$tmp_dir/wargus-wrapper.log"
   local wrapper_out="$tmp_dir/wargus-wrapper.out"
+  local fake_systemctl="$tmp_dir/systemctl"
+  local fake_chroma="$tmp_dir/chroma-launcher-client"
+  local direct_manifest="$tmp_dir/apps.toml"
   cleanup_app() { rm -rf "$tmp_dir"; }
   trap cleanup_app RETURN
   mkdir -p "$tmp_dir/state" "$tmp_dir/log"
@@ -3231,12 +3242,24 @@ run_app() {
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$ENGINEOS_FAKE_TMUX_LOG"
 if [[ "$1" == display-message ]]; then printf '%%9\n'; fi
+if [[ "$1" == list-clients ]]; then
+  printf '%s\n' 'engineos-view-1|focused|$1'
+fi
 FAKE
   cat >"$fake_wargus_launcher" <<'FAKE'
 #!/usr/bin/env bash
 printf '<%s>\n' "$@" >"$ENGINEOS_FAKE_WARGUS_LOG"
 FAKE
-  chmod +x "$fake_tmux" "$fake_wargus_launcher"
+  cat >"$fake_systemctl" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$ENGINEOS_FAKE_SYSTEMCTL_LOG"
+FAKE
+  cat >"$fake_chroma" <<'FAKE'
+#!/usr/bin/env bash
+exit 0
+FAKE
+  chmod +x "$fake_tmux" "$fake_wargus_launcher" "$fake_systemctl" \
+    "$fake_chroma"
 
   ENGINEOS_APPS_MANIFEST="$ROOT/packages/engineos-config/files/etc/engineos/apps.toml" \
     "$SCRIPT_DIR/app.sh" manifest validate >"$manifest_out"
@@ -3244,6 +3267,90 @@ FAKE
     die "app manifest did not validate the Stratagus app id"
   grep -F 'App manifest validation summary: 0 failure(s)' "$manifest_out" >/dev/null ||
     die "source app manifest validation did not pass"
+
+  ENGINEOS_APPS_MANIFEST="$ROOT/packages/engineos-config/files/etc/engineos/apps.toml" \
+    ENGINEOS_APP_SHIM_DIR="$tmp_dir/bin" \
+    "$ROOT/tools/engineos/engineos-app-shims" >/dev/null
+  [[ -x "$tmp_dir/bin/falkon" && -x "$tmp_dir/bin/chroma" ]] ||
+    die "manifest command shims were not generated"
+  cat >"$tmp_dir/bin/eos-app" <<'FAKE'
+#!/usr/bin/env bash
+printf '<%s>\n' "$@" >"$ENGINEOS_FAKE_SHIM_LOG"
+FAKE
+  chmod +x "$tmp_dir/bin/eos-app"
+  PATH="$tmp_dir/bin:$PATH" ENGINEOS_FAKE_SHIM_LOG="$tmp_dir/shim.log" \
+    "$tmp_dir/bin/falkon" --profile 'Space Name'
+  grep -Fx '<launch>' "$tmp_dir/shim.log" >/dev/null &&
+    grep -Fx '<falkon>' "$tmp_dir/shim.log" >/dev/null &&
+    grep -Fx '<Space Name>' "$tmp_dir/shim.log" >/dev/null ||
+    die "direct app shim did not preserve arguments"
+
+  WAYLAND_DISPLAY=engineos-test-wayland TMUX_PANE=%9 \
+    ENGINEOS_TMUX_BIN="$fake_tmux" ENGINEOS_FAKE_TMUX_LOG="$log" \
+    ENGINEOS_STATE_DIR="$tmp_dir/state" ENGINEOS_LOG_DIR="$tmp_dir/log" \
+    ENGINEOS_APPS_MANIFEST="$ROOT/packages/engineos-config/files/etc/engineos/apps.toml" \
+    "$SCRIPT_DIR/app.sh" launch falkon --profile 'Space Name'
+  grep -F 'launch-pane-app -t %9 -- /usr/bin/falkon --no-remote --profile Space Name' \
+    "$log" >/dev/null ||
+    die "manifest Falkon launch did not preserve arguments or absolute dispatch"
+
+  cp "$ROOT/packages/engineos-config/files/etc/engineos/apps.toml" "$direct_manifest"
+  sed -i "s#\\[\"/usr/bin/chroma-launcher-client\"\\]#[\"$fake_chroma\"]#" \
+    "$direct_manifest"
+  WAYLAND_DISPLAY=engineos-test-wayland TMUX_PANE=%9 \
+    ENGINEOS_TMUX_BIN="$fake_tmux" ENGINEOS_FAKE_TMUX_LOG="$log" \
+    ENGINEOS_SYSTEMCTL_BIN="$fake_systemctl" \
+    ENGINEOS_FAKE_SYSTEMCTL_LOG="$tmp_dir/systemctl.log" \
+    ENGINEOS_STATE_DIR="$tmp_dir/state" ENGINEOS_LOG_DIR="$tmp_dir/log" \
+    ENGINEOS_APPS_MANIFEST="$direct_manifest" \
+    "$SCRIPT_DIR/app.sh" launch chroma --check
+  grep -Fx -- '--user start chroma-worker.service' \
+    "$tmp_dir/systemctl.log" >/dev/null ||
+    die "manifest Chroma launch did not start its durable worker"
+  grep -F "launch-pane-app -t %9 -- $fake_chroma --check" "$log" >/dev/null ||
+    die "manifest Chroma launch did not use absolute executable dispatch"
+
+  if env -u TMUX_PANE WAYLAND_DISPLAY=engineos-test-wayland \
+      ENGINEOS_TMUX_BIN=/bin/false ENGINEOS_STATE_DIR="$tmp_dir/state" \
+      ENGINEOS_LOG_DIR="$tmp_dir/log" \
+      ENGINEOS_APPS_MANIFEST="$ROOT/packages/engineos-config/files/etc/engineos/apps.toml" \
+      "$SCRIPT_DIR/app.sh" launch falkon >"$tmp_dir/no-pane.out" 2>&1; then
+    die "direct Falkon launch succeeded outside a native graphical pane"
+  fi
+  grep -F 'no focused native pane' "$tmp_dir/no-pane.out" >/dev/null ||
+    die "direct Falkon launch failure was not actionable"
+
+  mkdir -p "$tmp_dir/spotify"
+  printf '%s\n' 'client_id = "preserved"' '' '[layout]' \
+    'playback_window_position = "Top"' >"$tmp_dir/spotify/app.toml"
+  "$ROOT/tools/engineos/engineos-spotify-config" \
+    --config-dir "$tmp_dir/spotify" \
+    --theme-source \
+      "$ROOT/tools/post-install-payload/assets/spotify/gruvbox-dark.toml" \
+    >/dev/null
+  "$ROOT/tools/engineos/engineos-spotify-config" \
+    --config-dir "$tmp_dir/spotify" \
+    --theme-source \
+      "$ROOT/tools/post-install-payload/assets/spotify/gruvbox-dark.toml" \
+    >/dev/null
+  python - "$tmp_dir/spotify" <<'PY'
+import pathlib
+import sys
+import tomllib
+root = pathlib.Path(sys.argv[1])
+app = tomllib.loads((root / "app.toml").read_text())
+theme = (root / "theme.toml").read_text()
+assert app["client_id"] == "preserved"
+assert app["theme"] == "engineos-gruvbox-dark"
+assert app["enable_audio_visualization"] is True
+assert app["layout"]["playback_window_height"] == 10
+assert app["layout"]["playback_window_position"] == "Top"
+assert theme.count("# BEGIN ENGINEOS GRUVBOX DARK") == 1
+assert any(item["name"] == "engineos-gruvbox-dark"
+           for item in tomllib.loads(theme)["themes"])
+PY
+
+  python "$ROOT/tests/chroma-worker-test.py" >/dev/null
 
   ENGINEOS_WARGUS_LAUNCHER="$fake_wargus_launcher" \
     ENGINEOS_FAKE_WARGUS_LOG="$wrapper_log" \
@@ -3851,8 +3958,8 @@ JSON
     die "crash bundle metadata did not record runtime mode"
   grep -F 'doctor.sh --vm' "$bundle_dir/doctor.txt" >/dev/null ||
     die "runtime crash bundle did not run VM doctor mode"
-  grep -F '"slots": {' "$bundle_dir/app-status.json" >/dev/null ||
-    die "crash bundle app status did not include slot state"
+  grep -F '"apps":{' "$bundle_dir/app-status.json" >/dev/null ||
+    die "crash bundle app status did not include native app state"
   grep -F '"schema": "engineos-shell-state-v0"' "$bundle_dir/state/shell-state.json" >/dev/null ||
     die "crash bundle shell state did not preserve schema"
   grep -F 'App manifest validation summary: 0 failure(s)' "$bundle_dir/app-manifest-validate.txt" >/dev/null ||

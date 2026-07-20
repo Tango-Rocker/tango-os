@@ -34,8 +34,8 @@ static u_int engine_split_serial;
 const struct cmd_entry cmd_pane_image_entry = {
 	.name = "pane-image",
 	.alias = NULL,
-	.args = { "t:", 1, 3, NULL },
-	.usage = CMD_TARGET_PANE_USAGE " show path owner|hide [owner]",
+	.args = { "et:", 1, 3, NULL },
+	.usage = "[-e] " CMD_TARGET_PANE_USAGE " show path owner|hide [owner]",
 	.target = { 't', CMD_FIND_PANE, 0 },
 	.flags = CMD_AFTERHOOK,
 	.exec = cmd_pane_image_exec
@@ -144,6 +144,7 @@ engine_pane_image_clear(struct window_pane *wp)
 	wp->engine_image_id = 0;
 	wp->engine_image_lease_client_id = 0;
 	wp->engine_image_lease_view_id = 0;
+	wp->engine_image_ephemeral = 0;
 }
 
 static int
@@ -245,6 +246,7 @@ cmd_pane_image_exec(struct cmd *self, struct cmdq_item *item)
 	wp->engine_image_size = size;
 	wp->engine_image_owner = xstrdup(owner);
 	wp->engine_image_mime = xstrdup(mime);
+	wp->engine_image_ephemeral = args_has(args, 'e');
 	if (++wp->engine_image_serial == 0)
 		wp->engine_image_serial++;
 	wp->engine_image_id = wp->engine_image_serial;
@@ -263,21 +265,38 @@ engine_pane_signal_scope(struct window_pane *wp, int signal_number)
 {
 	sd_bus_error error = SD_BUS_ERROR_NULL;
 	sd_bus *bus = NULL;
-	int result;
+	struct timespec delay = {
+		.tv_sec = 0,
+		.tv_nsec = 20 * 1000 * 1000,
+	};
+	int attempt, result;
 
 	if (wp->engine_scope == NULL || *wp->engine_scope == '\0')
-		return (-1);
+		return (-ENOENT);
 	result = sd_bus_open_user(&bus);
 	if (result < 0)
 		goto out;
-	result = sd_bus_call_method(bus, "org.freedesktop.systemd1",
-	    "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager",
-	    "KillUnit", &error, NULL, "ssi", wp->engine_scope, "all",
-	    signal_number);
+	/*
+	 * A freshly launched process can map its Wayland surface after cgroup
+	 * membership is visible but before the user manager resolves the
+	 * transient scope by name. Reconcile that narrow registration window;
+	 * every other error and a persistent missing unit remain explicit.
+	 */
+	for (attempt = 0; attempt < 10; attempt++) {
+		result = sd_bus_call_method(bus, "org.freedesktop.systemd1",
+		    "/org/freedesktop/systemd1",
+		    "org.freedesktop.systemd1.Manager", "KillUnit", &error,
+		    NULL, "ssi", wp->engine_scope, "all", signal_number);
+		if (result != -ENOENT)
+			break;
+		sd_bus_error_free(&error);
+		if (attempt != 9)
+			nanosleep(&delay, NULL);
+	}
 out:
 	sd_bus_error_free(&error);
 	sd_bus_unref(bus);
-	return (result < 0 ? -1 : 0);
+	return (result < 0 ? result : 0);
 }
 
 static int
@@ -319,6 +338,23 @@ engine_pane_surface_find(struct window_pane *wp, u_int id)
 			return (surface);
 	}
 	return (NULL);
+}
+
+static int
+engine_pane_refresh_live_surface_pgrp(struct window_pane *wp)
+{
+	struct engine_pane_surface *surface;
+	pid_t pgrp;
+
+	TAILQ_FOREACH(surface, &wp->engine_surfaces, entry) {
+		if (kill(surface->pid, 0) != 0 && errno != EPERM)
+			continue;
+		pgrp = getpgid(surface->pid);
+		if (pgrp > 0)
+			wp->engine_app_pgrp = pgrp;
+		return (1);
+	}
+	return (0);
 }
 
 static struct engine_pane_surface *
@@ -413,6 +449,9 @@ engine_pane_surface_map(struct window_pane *wp, pid_t pid, u_int id,
 	surface->role = role;
 	TAILQ_INSERT_TAIL(&wp->engine_surfaces, surface, entry);
 	if (role == ENGINE_PANE_SURFACE_TOPLEVEL) {
+		pid_t pgrp = getpgid(pid);
+		if (pgrp > 0)
+			wp->engine_app_pgrp = pgrp;
 		wp->engine_surface_count++;
 		wp->engine_active_surface_id = id;
 		wp->engine_mapped = 1;
@@ -690,7 +729,7 @@ cmd_signal_pane_app_exec(struct cmd *self, struct cmdq_item *item)
 	struct args *args = cmd_get_args(self);
 	struct window_pane *wp = cmdq_get_target(item)->wp;
 	const char *name = args_string(args, 0);
-	int signal_number;
+	int result, signal_number;
 
 	if (strcmp(name, "INT") == 0)
 		signal_number = SIGINT;
@@ -702,9 +741,15 @@ cmd_signal_pane_app_exec(struct cmd *self, struct cmdq_item *item)
 		cmdq_error(item, "unsupported signal: %s", name);
 		return (CMD_RETURN_ERROR);
 	}
-	if (engine_pane_signal_scope(wp, signal_number) == 0)
+	result = engine_pane_signal_scope(wp, signal_number);
+	if (result == 0) {
+		if (signal_number == SIGTERM || signal_number == SIGKILL)
+			engine_pane_reset_runtime(wp, 1);
 		return (CMD_RETURN_NORMAL);
-	cmdq_error(item, "pane graphical launch scope is unavailable");
+	}
+	cmdq_error(item, "pane graphical launch scope %s signal failed: %s",
+	    wp->engine_scope != NULL ? wp->engine_scope : "(unset)",
+	    strerror(-result));
 	return (CMD_RETURN_ERROR);
 }
 
@@ -851,6 +896,8 @@ engine_pane_sync_all(void)
 		    (wp->engine_scope != NULL && strncmp(wp->engine_scope,
 		    "engine-pane-split-", 18) == 0)) &&
 		    kill(-wp->engine_app_pgrp, 0) != 0 && errno == ESRCH) {
+			if (engine_pane_refresh_live_surface_pgrp(wp))
+				continue;
 			engine_pane_reset_runtime(wp, 1);
 			continue;
 		}

@@ -47,15 +47,15 @@ static bool valid_name(const char *name) {
 
 void engineos_terminal_theme_default(struct engineos_terminal_theme *theme) {
 	static const uint32_t colors[ENGINEOS_TERMINAL_THEME_COLOR_COUNT] = {
-		0x1d1f21, 0xcc342b, 0x198844, 0xfba922,
-		0x3971ed, 0xa36ac7, 0x3971ed, 0xc5c8c6,
-		0x969896, 0xcc342b, 0x198844, 0xfba922,
-		0x3971ed, 0xa36ac7, 0x3971ed, 0xffffff,
+		0x282828, 0xcc241d, 0x98971a, 0xd79921,
+		0x458588, 0xb16286, 0x689d6a, 0xa89984,
+		0x928374, 0xfb4934, 0xb8bb26, 0xfabd2f,
+		0x83a598, 0xd3869b, 0x8ec07c, 0xebdbb2,
 	};
 	memset(theme, 0, sizeof(*theme));
-	strcpy(theme->name, "engineos-dark");
-	theme->foreground = 0xd8dee9;
-	theme->background = 0x101419;
+	strcpy(theme->name, "gruvbox-dark");
+	theme->foreground = 0xebdbb2;
+	theme->background = 0x282828;
 	memcpy(theme->colors, colors, sizeof(colors));
 	theme->generation = 1;
 }

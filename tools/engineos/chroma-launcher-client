@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Run the existing Chroma Qt UI as a reconnectable worker client."""
+
+import importlib.util
+import json
+import os
+import socket
+import sys
+from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+PROTOCOL = "chroma-worker/v1"
+DEFAULT_SOURCE = (
+    "/home/dev/stable-diffusion.cpp-pipefusion/scripts/chroma_launcher_qt.py"
+)
+
+
+def worker_socket() -> Path:
+    runtime = Path(
+        os.environ.get("XDG_RUNTIME_DIR", f"/tmp/engineos-{os.getuid()}")
+    )
+    return Path(
+        os.environ.get("CHROMA_WORKER_SOCKET", runtime / "chroma/worker.sock")
+    )
+
+
+def request(operation: str, **fields: Any) -> dict[str, Any]:
+    message = {"protocol": PROTOCOL, "op": operation, **fields}
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(5)
+        client.connect(str(worker_socket()))
+        client.sendall(json.dumps(message, separators=(",", ":")).encode() + b"\n")
+        response = b""
+        while b"\n" not in response:
+            chunk = client.recv(65536)
+            if not chunk:
+                break
+            response += chunk
+    if not response:
+        raise RuntimeError("Chroma worker closed the connection without a response")
+    result = json.loads(response.splitlines()[0])
+    if not result.get("ok"):
+        raise RuntimeError(str(result.get("error", "Chroma worker request failed")))
+    return result
+
+
+def load_launcher(path: Path) -> ModuleType:
+    spec = importlib.util.spec_from_file_location("engineos_chroma_launcher", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load Chroma launcher: {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def install_worker_client(module: ModuleType) -> None:
+    launcher = module.Launcher
+
+    def show_error(self: Any, exc: Exception) -> None:
+        self.status_label.setText(f"Chroma worker unavailable: {exc}")
+
+    def refresh(self: Any) -> None:
+        try:
+            snapshot = request("snapshot")
+        except (OSError, ValueError, RuntimeError) as exc:
+            show_error(self, exc)
+            return
+        self.queue_table.setRowCount(0)
+        self.jobs.clear()
+        self.current_job = None
+        active_id = snapshot.get("active_job")
+        for record in snapshot.get("jobs", []):
+            payload = record.get("payload", {})
+            outputs = record.get("outputs", [])
+            job = module.Job(
+                int(record["id"]),
+                module.merged_settings(payload.get("settings", {})),
+                str(payload.get("prompt", "")),
+                str(payload.get("negative_prompt", "")),
+                status=str(record.get("status", "queued")),
+                output_pattern=Path(outputs[0]) if outputs else None,
+                attempt=int(record.get("attempts", 0)),
+                error=str(record.get("error", "")),
+            )
+            self.jobs.append(job)
+            self._add_job_row(job)
+            if job.job_id == active_id:
+                self.current_job = job
+        state = "paused" if snapshot.get("paused") else "running"
+        self.status_label.setText(
+            f"Worker {state}; {len(self.jobs)} retained job(s)"
+        )
+        self._update_progress_bar()
+
+    def init_queue(self: Any) -> None:
+        self.queue_db = None
+
+    def load_queue(self: Any) -> None:
+        refresh(self)
+
+    def save_job(self: Any, _job: Any) -> None:
+        return None
+
+    def add_job(self: Any) -> Any:
+        settings = self.collect_settings()
+        settings_to_save = dict(settings)
+        if settings["RefreshPromptCache"]:
+            self.refresh_prompt_cache.setChecked(False)
+            settings_to_save["RefreshPromptCache"] = False
+        module.save_settings(settings_to_save)
+        payload = {
+            "settings": settings,
+            "prompt": self.prompt.toPlainText(),
+            "negative_prompt": self.negative.toPlainText(),
+        }
+        try:
+            result = request("enqueue", payload=payload)
+            refresh(self)
+            self.status_label.setText(f"Queued durable job {result['job_id']}")
+            return next(
+                (job for job in self.jobs if job.job_id == result["job_id"]),
+                None,
+            )
+        except (OSError, ValueError, RuntimeError) as exc:
+            show_error(self, exc)
+            return None
+
+    def start_queue(self: Any) -> None:
+        try:
+            request("resume")
+            refresh(self)
+        except (OSError, ValueError, RuntimeError) as exc:
+            show_error(self, exc)
+
+    def run_now(self: Any) -> None:
+        if add_job(self) is not None:
+            start_queue(self)
+
+    def delete_job(self: Any, job: Any) -> None:
+        try:
+            request("remove", job_id=job.job_id)
+            refresh(self)
+        except (OSError, ValueError, RuntimeError) as exc:
+            show_error(self, exc)
+
+    def stop_current(self: Any) -> None:
+        try:
+            snapshot = request("snapshot")
+            active = snapshot.get("active_job")
+            if active is None:
+                request("pause")
+                self.status_label.setText("Queue paused")
+            else:
+                request("cancel", job_id=active)
+                self.status_label.setText(f"Cancellation requested for job {active}")
+            refresh(self)
+        except (OSError, ValueError, RuntimeError) as exc:
+            show_error(self, exc)
+
+    def stop_server(self: Any, silent: bool = False) -> None:
+        try:
+            request("stop-server")
+            if not silent:
+                self.status_label.setText("Worker backend stopped")
+        except (OSError, ValueError, RuntimeError) as exc:
+            if not silent:
+                show_error(self, exc)
+
+    def close_event(self: Any, event: Any) -> None:
+        # Queue and backend ownership belong to chroma-worker.service.
+        event.accept()
+
+    launcher._init_queue_db = init_queue
+    launcher._load_queue = load_queue
+    launcher._save_job = save_job
+    launcher.add_job = add_job
+    launcher.run_now = run_now
+    launcher.start_queue = start_queue
+    launcher._delete_job = delete_job
+    launcher._tick = refresh
+    launcher.stop_current = stop_current
+    launcher.stop_server = stop_server
+    launcher.closeEvent = close_event
+
+
+def main() -> int:
+    source = Path(os.environ.get("CHROMA_LAUNCHER_SOURCE", DEFAULT_SOURCE))
+    if not source.is_file():
+        print(f"chroma: launcher source not found: {source}", file=sys.stderr)
+        return 1
+    try:
+        module = load_launcher(source)
+        install_worker_client(module)
+        return int(module.main())
+    except Exception as exc:
+        print(f"chroma: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
