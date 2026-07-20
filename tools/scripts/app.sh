@@ -404,15 +404,19 @@ adapt_pane_command() {
   [[ ${#PANE_COMMAND[@]} -gt 0 ]] || return
   case "${PANE_COMMAND[0]##*/}" in
     falkon)
-      local argument dedicated=false
+      local argument dedicated=false profile=false
       for argument in "${PANE_COMMAND[@]:1}"; do
         case "$argument" in
           --no-remote|-r) dedicated=true ;;
+          --profile|--profile=*|-p) profile=true ;;
         esac
       done
       if [[ "$dedicated" == false ]]; then
         PANE_COMMAND=("${PANE_COMMAND[0]}" --no-remote
           "${PANE_COMMAND[@]:1}")
+      fi
+      if [[ "$profile" == false ]]; then
+        PANE_COMMAND=("${PANE_COMMAND[@]}" --profile engineos)
       fi
       ;;
   esac

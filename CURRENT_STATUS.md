@@ -179,14 +179,18 @@ previously rejected.
 
 A 2026-07-19 follow-up found that the direct `falkon` and `chroma` shims could
 still be invoked from a native pane whose shell predated the compositor and
-therefore lacked `WAYLAND_DISPLAY`. The source fix for `engineos-tools
-0.1.0-63` discovers the display reported by the current shell only when its
-Unix socket accepts a connection, then carries `XDG_RUNTIME_DIR`,
-`WAYLAND_DISPLAY`, and the Wayland backend variables in the exact
-tmux-injected launch command. Stale shell state continues to fail closed. The
-app source test and the focused package build pass. Revision 63 is not yet
-installed on tty1; live Falkon and Chroma acceptance remains pending that
-package update.
+therefore lacked `WAYLAND_DISPLAY`. `engineos-tools 0.1.0-63` discovers the
+display reported by the current shell only when its Unix socket accepts a
+connection, then carries `XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, and the Wayland
+backend variables in the exact tmux-injected launch command. Stale shell state
+continues to fail closed. Revision 63 was installed through the deploy-on-push
+package closure, which passed the app, mux, and agent tests and restarted the
+live shell successfully. Its first live no-argument Falkon proof reached the
+new Wayland launch command and exposed a second launcher error: Falkon refuses
+`--no-remote` with its default profile. The source follow-up in
+`engineos-tools 0.1.0-64` selects the dedicated `engineos` profile unless the
+caller supplies one. Its app source test and focused package build pass;
+revision 64 and final live Falkon/Chroma mapping remain pending deployment.
 
 ## Remaining Acceptance Work
 

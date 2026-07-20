@@ -3339,7 +3339,7 @@ PY
     die "manifest Falkon launch did not derive the live shell display"
   grep -F 'XDG_RUNTIME_DIR='"$tmp_dir/runtime" "$log" >/dev/null &&
     grep -F 'WAYLAND_DISPLAY=wayland-derived' "$log" >/dev/null &&
-    grep -F '/usr/bin/falkon --no-remote' "$log" >/dev/null ||
+    grep -F '/usr/bin/falkon --no-remote --profile engineos' "$log" >/dev/null ||
     die "manifest Falkon launch did not forward the derived shell display"
   wait "$socket_pid" 2>/dev/null || true
   socket_pid=""
@@ -3467,8 +3467,10 @@ PY
   ENGINEOS_STATE_DIR="$tmp_dir/state" ENGINEOS_LOG_DIR="$tmp_dir/log" \
     "$SCRIPT_DIR/app.sh" status --json >"$status_out"
 
-  grep -Fx 'launch-pane-app -t %9 -- /usr/bin/falkon --no-remote' "$log" >/dev/null ||
-    die "pane launch did not call native tmux command"
+  grep -Fx \
+    'launch-pane-app -t %9 -- /usr/bin/falkon --no-remote --profile engineos' \
+    "$log" >/dev/null ||
+    die "pane launch did not select the dedicated Falkon profile"
   grep -Fx 'pane-presentation -t %9 toggle' "$log" >/dev/null ||
     die "pane view did not call native tmux command"
   grep -Fx 'signal-pane-app -t %9 TERM' "$log" >/dev/null ||
