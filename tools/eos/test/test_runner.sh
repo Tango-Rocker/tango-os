@@ -2982,6 +2982,10 @@ run_ci() {
     die "ci dry-run did not ignore duplicate package selection"
   grep -F 'sudo -n pacman -U --noconfirm' "$out" >/dev/null ||
     die "ci dry-run did not include reinstall command"
+  "$ROOT/tools/engineos/eos-ci" local --dry-run \
+    --package engineos-mc --install --no-validate-repo >"$tmp_dir/mc.txt"
+  grep -F 'sudo -n pacman -U --noconfirm --ask=4' "$tmp_dir/mc.txt" >/dev/null ||
+    die "ci dry-run did not approve the explicit stock mc replacement"
   grep -F 'sudo -n systemctl disable --now engineos-engine-runner.service' "$out" >/dev/null ||
     die "ci dry-run did not stop the retired engine runner before reinstall"
   grep -F 'sudo -n pacman -R --noconfirm engineos-engine-runner engineos-engine-runner-debug' "$out" >/dev/null ||

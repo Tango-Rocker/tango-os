@@ -5207,8 +5207,17 @@ static bool route_native_terminal_mouse_at(struct engineos_shell_server *server,
 	if (!engineos_mux_client_send_mouse(&server->mux_client, view_id, x, y,
 			event, button, native_mux_mouse_modifiers(server),
 			&grid_changed, error, sizeof(error))) {
+		if (server->mux_client.last_request_rejected) {
+			wlr_log(WLR_DEBUG,
+				"native tmux mouse rejected event=%s button=%s "
+				"cell=%u,%u: %s",
+				event, button, x, y, error);
+			server->mux_pointer_cell_valid = false;
+			return true;
+		}
 		wlr_log(WLR_ERROR,
-			"native tmux mouse failed event=%s button=%s cell=%u,%u: %s",
+			"native tmux mouse transport failed event=%s button=%s "
+			"cell=%u,%u: %s",
 			event, button, x, y, error);
 		server->mux_client.ready = false;
 		wl_display_terminate(server->display);
@@ -5270,7 +5279,9 @@ static void cursor_handle_motion(struct wl_listener *listener, void *data) {
 				!native_mux_pointer_cell(server, &view_id, &cell_x, &cell_y))
 			return;
 		clear_pointer_focus(server, "tmux-pointer-motion");
-		if (button != NULL)
+		if (button != NULL &&
+				(server->mux_pointer_button != 0 ||
+				 view_id == server->mux_client.primary_view_id))
 			route_native_terminal_mouse_at(server, view_id, cell_x, cell_y,
 				"motion", button, server->mux_pointer_button == 0);
 		return;
@@ -5306,7 +5317,9 @@ static void cursor_handle_motion_absolute(struct wl_listener *listener, void *da
 				!native_mux_pointer_cell(server, &view_id, &cell_x, &cell_y))
 			return;
 		clear_pointer_focus(server, "tmux-pointer-motion-absolute");
-		if (button != NULL)
+		if (button != NULL &&
+				(server->mux_pointer_button != 0 ||
+				 view_id == server->mux_client.primary_view_id))
 			route_native_terminal_mouse_at(server, view_id, cell_x, cell_y,
 				"motion", button, server->mux_pointer_button == 0);
 		return;

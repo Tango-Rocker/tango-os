@@ -118,10 +118,10 @@ foreground `#ebdbb2`, background `#282828`, renderer
 frame capture is recorded at
 `artifacts/captures/shell-20260717T032058Z.png`.
 
-## Desktop Reliability Source Proof
+## Desktop Reliability Deployment
 
 The 2026-07-19 source/package pass implements the Sprint 17 desktop ownership
-correction. It has not yet replaced the packages on tty1:
+correction and is installed on tty1:
 
 - pointer delivery is classified per region as tmux UI, tmux pane, Wayland
   surface, or none, with press-to-release domain latching; Qt keeps keyboard
@@ -151,14 +151,31 @@ correction. It has not yet replaced the packages on tty1:
   selecting the matching Gruvbox theme, enabling audio visualization, and
   reserving ten playback rows.
 
-Built package revisions are `engineos-config 0.1.0-10`,
-`engineos-mux 3.6b-44`, `engineos-shell 0.1.0-81`,
-`engineos-tools 0.1.0-61`, and `engineos-mc 4.8.33-1`. The native mux contract,
+Installed package revisions are `engineos-config 0.1.0-10`,
+`engineos-mux 3.6b-44`, `engineos-shell 0.1.0-82`,
+`engineos-tools 0.1.0-62`, and `engineos-mc 4.8.33-1`. The native mux contract,
 image-preview test, app/Chroma/Spotify test, and all shell Meson renderer/theme
 tests pass. The mux proof also covers the transient-systemd-scope respawn race:
 scope signals reconcile the short registration window, and accepted TERM/KILL
 requests retire presentation state immediately while retaining the saved
 respawn command.
+
+The first live restart exposed a pointer-routing failure during the package
+cutover. The replaced tmux server PID 704 dumped core, and the recovered shell
+then treated ordinary mouse-target rejection on a non-authoritative output as
+mux transport loss, causing two more compositor restarts. Evidence is preserved
+at `artifacts/crash-bundles/20260720T001210Z`. Shell revision 82 keeps rejected
+or stale pointer cells nonfatal, suppresses idle hover dispatch to
+non-authoritative output views, and retains compositor-fatal handling for real
+mux transport/protocol loss. It was installed and restarted without replacing
+the recovered tmux server PID 3745788; both outputs report
+`gpu-fcft-atlas-gles2`, zero frame failures, Gruvbox from `persisted-user`, and
+idle preview reconciliation with no service restart after the fix.
+
+The local CI installer now explicitly approves only libalpm's conflict-removal
+question when `engineos-mc` is in the transaction. This preserves the atomic
+stock-`mc` to `engineos-mc` replacement that plain noninteractive `pacman -U`
+previously rejected.
 
 ## Remaining Acceptance Work
 
@@ -170,12 +187,8 @@ control-client sizing. The exact evidence is under
 `/tmp/engineos-tmux-upstream-20260711T225801Z`; this is a test-fixture timing
 issue, not a retained runtime fallback.
 
-The next physical acceptance pass first installs the reliability package set,
-then exercises the interactive paths:
+The next physical acceptance pass exercises the remaining interactive paths:
 
-    sudo pacman -S engineos-config engineos-mux engineos-shell engineos-tools engineos-mc
-    systemctl --user daemon-reload
-    eos-runtime shell refresh-user
     eos-proof native-kms
     eos-proof mc-preview
     falkon

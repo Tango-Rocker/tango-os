@@ -239,6 +239,7 @@ verify_installed_package() {
 install_rebuilt_packages() {
   local pkg artifact split_pkg split_artifact
   local artifacts=()
+  local pacman_args=(-U --noconfirm)
 
   for pkg in "${PACKAGES[@]}"; do
     if [[ "$DRY_RUN" == true ]]; then
@@ -261,8 +262,14 @@ install_rebuilt_packages() {
   done
 
   [[ ${#artifacts[@]} -gt 0 ]] || return 0
+  if printf '%s\n' "${PACKAGES[@]}" | grep -Fxq engineos-mc; then
+    # Local -U transactions do not apply PKGBUILD replaces= metadata. Invert
+    # only libalpm's conflict-removal question so engineos-mc can atomically
+    # replace the stock mc package it explicitly conflicts with.
+    pacman_args+=(--ask=4)
+  fi
   remove_retired_packages
-  run_or_print sudo -n pacman -U --noconfirm "${artifacts[@]}"
+  run_or_print sudo -n pacman "${pacman_args[@]}" "${artifacts[@]}"
   if [[ "$DRY_RUN" != true ]]; then
     for artifact in "${artifacts[@]}"; do
       pkg="$(pacman -Qp "$artifact" | awk '{print $1}')"
