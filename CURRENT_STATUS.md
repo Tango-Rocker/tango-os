@@ -210,7 +210,13 @@ shell retained Falkon's client cursor surface after the focused view was
 destroyed, leaving pointer events active but the cursor invisible. Restarting
 the live shell restored the cursor immediately. Shell revision 83 tracks
 client-owned cursor images and restores the shell default when a focused view
-is minimized, unmapped, or destroyed.
+is minimized, unmapped, or destroyed. Revision 83 passed the source smoke,
+headless compositor contract, package build, and deploy-on-push app/mux/shell
+action/agent gate; it is installed with live shell PID 4018250. A live Falkon
+close proof moved a uinput pointer through the normal libinput path onto the
+focused client, observed `cursor.client_owned: true` and client hotspots, then
+observed `cursor image=restored` plus terminal state with both `hidden` and
+`client_owned` false after TERM.
 
 ## Remaining Acceptance Work
 
