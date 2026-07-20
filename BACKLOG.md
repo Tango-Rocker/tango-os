@@ -11,6 +11,16 @@ This is the place for useful tangents. Add ideas here instead of expanding the c
 
 ## Later Ideas
 
+### Installed Chroma Worker Request CLI
+
+Why: `/usr/bin/chroma-worker request snapshot` passes a `Path` directly to
+`socket.connect` and raises `TypeError` on the current Python, although the
+Chroma UI client converts the same path to `str` and the live worker/UI path
+works. Add a focused CLI contract test when revisiting worker tooling.
+
+Likely phase: current desktop reliability follow-up, separate from live app
+mapping acceptance.
+
 ### Pixman Nonfocused Presentation Timing
 
 Why: the live terminal-theme assertion passes under both Pixman and GLES2, and

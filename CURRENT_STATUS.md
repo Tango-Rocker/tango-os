@@ -152,8 +152,8 @@ correction and is installed on tty1:
   reserving ten playback rows.
 
 Installed package revisions are `engineos-config 0.1.0-10`,
-`engineos-mux 3.6b-44`, `engineos-shell 0.1.0-82`,
-`engineos-tools 0.1.0-62`, and `engineos-mc 4.8.33-1`. The native mux contract,
+`engineos-mux 3.6b-44`, `engineos-shell 0.1.0-83`,
+`engineos-tools 0.1.0-64`, and `engineos-mc 4.8.33-1`. The native mux contract,
 image-preview test, app/Chroma/Spotify test, and all shell Meson renderer/theme
 tests pass. The mux proof also covers the transient-systemd-scope respawn race:
 scope signals reconcile the short registration window, and accepted TERM/KILL
@@ -189,8 +189,28 @@ live shell successfully. Its first live no-argument Falkon proof reached the
 new Wayland launch command and exposed a second launcher error: Falkon refuses
 `--no-remote` with its default profile. The source follow-up in
 `engineos-tools 0.1.0-64` selects the dedicated `engineos` profile unless the
-caller supplies one. Its app source test and focused package build pass;
-revision 64 and final live Falkon/Chroma mapping remain pending deployment.
+caller supplies one.
+
+Revision 64 is installed and the live shell restarted successfully as PID
+3934865 with the existing tmux server retained. Its deploy gate passed the app,
+mux, and agent tests; one earlier push attempt stopped on an intermittent mux
+shell-history assertion, while the immediate exact rerun and the next complete
+deploy gate passed. The live Chroma error about an unknown listener on port
+7862 resolved to the retired raw `chroma_launcher_qt.py` scope
+`engine-pane-704-15-1.scope`, which also owned the legacy `sd-server`. Stopping
+that stale EngineOS scope released the port without touching user files. The
+durable worker remains active as PID 3909433 with zero restarts, no queued job,
+and no backend PID. With `WAYLAND_DISPLAY` deliberately unset, fresh selected
+panes mapped Chroma PID 3945970 and Falkon PID 3947076 through current
+`engine-pane-3745788-*` scopes, reported display `wayland-0`, and returned to
+clean terminal presentation state after TERM. The shell still reports
+`gpu-fcft-atlas-gles2`, two outputs with zero frame failures, and a connected
+native mux. Closing that Falkon instance exposed a cursor-lifecycle bug: the
+shell retained Falkon's client cursor surface after the focused view was
+destroyed, leaving pointer events active but the cursor invisible. Restarting
+the live shell restored the cursor immediately. Shell revision 83 tracks
+client-owned cursor images and restores the shell default when a focused view
+is minimized, unmapped, or destroyed.
 
 ## Remaining Acceptance Work
 
@@ -204,11 +224,10 @@ issue, not a retained runtime fallback.
 
 The next physical acceptance pass exercises the remaining interactive paths:
 
-    eos-ci local --package engineos-tools --test app --install --clean-generated --no-validate-repo
     eos-proof native-kms
     eos-proof mc-preview
-    falkon
-    chroma
+    falkon  # repeat input and close acceptance
+    chroma  # restart the shell during an active generation
     systemctl --user status chroma-worker.service
     eos-runtime shell theme apply gruvbox-dark
     eos-proof native-quake

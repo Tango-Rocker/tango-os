@@ -257,6 +257,7 @@ struct engineos_shell_server {
 	bool game_capture;
 	bool emergency_released;
 	bool cursor_hidden;
+	bool cursor_client_owned;
 	int smoke_ms;
 	unsigned int output_count;
 	unsigned int keyboard_count;
@@ -836,6 +837,8 @@ static void set_view_minimized(struct engineos_shell_view *view,
 		view->server->focused_view = NULL;
 		set_view_activated(view, false);
 		wlr_seat_keyboard_notify_clear_focus(view->server->seat);
+		sync_pointer_constraint(view->server, "focused-view-minimized");
+		sync_cursor_image(view->server, "focused-view-minimized");
 	}
 	wlr_log(WLR_INFO,
 		"window minimize role=%s minimized=%s reason=%s title=%s app_id=%s",
@@ -3508,9 +3511,10 @@ static void write_shell_state(struct engineos_shell_server *server,
 		focused_state_pane != NULL ? focused_state_pane->generation : 0,
 		server->mux_pointer_view_id);
 	fprintf(file,
-		"  \"cursor\": {\"locked\": %s, \"hidden\": %s, \"x\": %.1f, \"y\": %.1f},\n",
+		"  \"cursor\": {\"locked\": %s, \"hidden\": %s, \"client_owned\": %s, \"x\": %.1f, \"y\": %.1f},\n",
 		should_lock_game_cursor(server) ? "true" : "false",
 		server->cursor_hidden ? "true" : "false",
+		server->cursor_client_owned ? "true" : "false",
 		server->cursor != NULL ? server->cursor->x : 0.0,
 		server->cursor != NULL ? server->cursor->y : 0.0);
 	fprintf(file, "  \"counts\": {\"outputs\": %u, \"keyboards\": %u, \"pointers\": %u, \"views\": %u},\n",
@@ -4924,6 +4928,7 @@ static void hide_cursor(struct engineos_shell_server *server,
 			reason != NULL ? reason : "unspecified");
 	}
 	server->cursor_hidden = true;
+	server->cursor_client_owned = false;
 }
 
 static void set_default_cursor(struct engineos_shell_server *server,
@@ -4935,12 +4940,14 @@ static void set_default_cursor(struct engineos_shell_server *server,
 	if (server->cursor_mgr == NULL) {
 		return;
 	}
+	bool custom_cursor = server->cursor_hidden || server->cursor_client_owned;
 	wlr_cursor_set_xcursor(server->cursor, server->cursor_mgr, "default");
-	if (server->cursor_hidden) {
+	if (custom_cursor) {
 		wlr_log(WLR_INFO, "cursor image=restored reason=%s",
 			reason != NULL ? reason : "unspecified");
 	}
 	server->cursor_hidden = false;
+	server->cursor_client_owned = false;
 }
 
 static void sync_cursor_image(struct engineos_shell_server *server,
@@ -5516,6 +5523,7 @@ static void seat_request_cursor(struct wl_listener *listener, void *data) {
 		wlr_cursor_set_surface(server->cursor, event->surface,
 			event->hotspot_x, event->hotspot_y);
 		server->cursor_hidden = event->surface == NULL;
+		server->cursor_client_owned = true;
 		wlr_log(WLR_INFO, "cursor image=client hotspot=%d,%d",
 			event->hotspot_x, event->hotspot_y);
 	} else {
@@ -6275,6 +6283,8 @@ static void xdg_surface_unmap(struct wl_listener *listener, void *data) {
 	(void)data;
 	struct engineos_shell_view *view = wl_container_of(listener, view, unmap);
 	bool native_game = view_is_native_mux_game(view);
+	bool was_focused = view->server->focused_view == view;
+	bool restore_cursor = was_focused;
 	view->mapped = false;
 	wlr_scene_node_set_enabled(&view->scene_tree->node, false);
 	native_presentation_unmap(view);
@@ -6288,8 +6298,11 @@ static void xdg_surface_unmap(struct wl_listener *listener, void *data) {
 	}
 	if (native_game && view->server->game_capture) {
 		view->server->game_capture = false;
-		sync_pointer_constraint(view->server, "engine-unmapped");
-		sync_cursor_image(view->server, "engine-unmapped");
+		restore_cursor = true;
+	}
+	if (restore_cursor) {
+		sync_pointer_constraint(view->server, "focused-view-unmapped");
+		sync_cursor_image(view->server, "focused-view-unmapped");
 	}
 	schedule_outputs(view->server);
 	wlr_log(WLR_INFO, "view unmapped role=%s id=%u title=%s app_id=%s",
@@ -6459,6 +6472,8 @@ static void xdg_surface_destroy(struct wl_listener *listener, void *data) {
 	struct engineos_shell_view *view = wl_container_of(listener, view, destroy);
 	struct engineos_shell_server *server = view->server;
 	bool native_game = view_is_native_mux_game(view);
+	bool was_focused = server->focused_view == view;
+	bool restore_cursor = was_focused;
 	if (view->mux_bound)
 		native_presentation_unmap(view);
 
@@ -6474,8 +6489,11 @@ static void xdg_surface_destroy(struct wl_listener *listener, void *data) {
 	}
 	if (native_game && server->game_capture) {
 		server->game_capture = false;
-		sync_pointer_constraint(server, "engine-destroyed");
-		sync_cursor_image(server, "engine-destroyed");
+		restore_cursor = true;
+	}
+	if (restore_cursor) {
+		sync_pointer_constraint(server, "focused-view-destroyed");
+		sync_cursor_image(server, "focused-view-destroyed");
 	}
 	if (view->xdg_surface != NULL) {
 		view->xdg_surface->data = NULL;
