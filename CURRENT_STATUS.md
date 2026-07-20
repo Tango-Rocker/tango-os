@@ -153,7 +153,7 @@ correction and is installed on tty1:
 
 Installed package revisions are `engineos-config 0.1.0-10`,
 `engineos-mux 3.6b-44`, `engineos-shell 0.1.0-83`,
-`engineos-tools 0.1.0-64`, and `engineos-mc 4.8.33-1`. The native mux contract,
+`engineos-tools 0.1.0-65`, and `engineos-mc 4.8.33-1`. The native mux contract,
 image-preview test, app/Chroma/Spotify test, and all shell Meson renderer/theme
 tests pass. The mux proof also covers the transient-systemd-scope respawn race:
 scope signals reconcile the short registration window, and accepted TERM/KILL
@@ -217,6 +217,21 @@ live Falkon close proof moved a uinput pointer through the normal libinput path
 onto the focused client, observed `cursor.client_owned: true` and client
 hotspots, then observed `cursor image=restored` plus terminal state with both
 `hidden` and `client_owned` false after TERM.
+
+A second 2026-07-19 Chroma follow-up installed `engineos-tools 0.1.0-65` so a
+new Qt client reconnects to worker-owned artifacts as well as queue state. The
+worker snapshot now advertises its durable log directory, current and per-job
+server-log paths, timestamps, and every reserved output. The Qt adapter rebuilds
+those paths after launch, follows only a bounded initial tail plus appended
+bytes without replay duplication, shows all output paths, and opens the worker
+log directory instead of the retired raw launcher's directory. The focused app
+suite includes the durable worker integration plus a synthetic Qt reconnect
+contract. After installation, the worker restart recovered three retained jobs,
+resumed job 9 with its backend, and advertised all three server-log paths plus
+three output reservations. The new Qt client mapped in pane `%8`, and live UI
+acceptance confirmed that the reconnect works. Runtime validation inspected
+only socket metadata, process state, and path existence; no live log contents
+were read.
 
 ## Remaining Acceptance Work
 

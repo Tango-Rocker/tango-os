@@ -3415,6 +3415,7 @@ assert any(item["name"] == "engineos-gruvbox-dark"
 PY
 
   python "$ROOT/tests/chroma-worker-test.py" >/dev/null
+  python "$ROOT/tests/chroma-launcher-client-test.py" >/dev/null
 
   ENGINEOS_WARGUS_LAUNCHER="$fake_wargus_launcher" \
     ENGINEOS_FAKE_WARGUS_LOG="$wrapper_log" \

@@ -11,6 +11,7 @@ from types import ModuleType
 from typing import Any
 
 PROTOCOL = "chroma-worker/v1"
+LOG_TAIL_BYTES = 64 * 1024
 DEFAULT_SOURCE = (
     "/home/dev/stable-diffusion.cpp-pipefusion/scripts/chroma_launcher_qt.py"
 )
@@ -45,6 +46,22 @@ def request(operation: str, **fields: Any) -> dict[str, Any]:
     return result
 
 
+def read_log_delta(path: Path, position: int | None) -> tuple[str, int]:
+    size = path.stat().st_size
+    initial = position is None
+    if position is None:
+        position = max(0, size - LOG_TAIL_BYTES)
+    elif size < position:
+        position = 0
+    with path.open("rb") as handle:
+        handle.seek(position)
+        data = handle.read()
+        next_position = handle.tell()
+    if initial and position > 0 and b"\n" in data:
+        data = data.split(b"\n", 1)[1]
+    return data.decode("utf-8", errors="replace"), next_position
+
+
 def load_launcher(path: Path) -> ModuleType:
     spec = importlib.util.spec_from_file_location("engineos_chroma_launcher", path)
     if spec is None or spec.loader is None:
@@ -61,6 +78,28 @@ def install_worker_client(module: ModuleType) -> None:
     def show_error(self: Any, exc: Exception) -> None:
         self.status_label.setText(f"Chroma worker unavailable: {exc}")
 
+    def sync_server_log(self: Any, snapshot: dict[str, Any]) -> str:
+        self.worker_log_dir = snapshot.get("log_dir")
+        raw_path = snapshot.get("server_log")
+        if not raw_path:
+            return ""
+        path = Path(str(raw_path))
+        current = getattr(self, "worker_server_log_path", None)
+        if current != path:
+            self.worker_server_log_path = path
+            self.worker_server_log_pos = None
+            self._append_panel(f"[worker] attached sd-server log: {path}")
+        try:
+            text, position = read_log_delta(
+                path, getattr(self, "worker_server_log_pos", None)
+            )
+        except OSError as exc:
+            return f"; server log unavailable: {exc}"
+        self.worker_server_log_pos = position
+        if text:
+            self._append_panel(text.rstrip("\n"))
+        return ""
+
     def refresh(self: Any) -> None:
         try:
             snapshot = request("snapshot")
@@ -74,23 +113,35 @@ def install_worker_client(module: ModuleType) -> None:
         for record in snapshot.get("jobs", []):
             payload = record.get("payload", {})
             outputs = record.get("outputs", [])
+            raw_log = record.get("server_log")
             job = module.Job(
                 int(record["id"]),
                 module.merged_settings(payload.get("settings", {})),
                 str(payload.get("prompt", "")),
                 str(payload.get("negative_prompt", "")),
                 status=str(record.get("status", "queued")),
+                log_path=Path(str(raw_log)) if raw_log else None,
                 output_pattern=Path(outputs[0]) if outputs else None,
+                start_time=(
+                    float(record.get("updated_at", 0))
+                    if record.get("status") == "running"
+                    else None
+                ),
                 attempt=int(record.get("attempts", 0)),
                 error=str(record.get("error", "")),
             )
             self.jobs.append(job)
             self._add_job_row(job)
+            if outputs:
+                self.queue_table.item(job.row, 6).setText(
+                    ", ".join(str(output) for output in outputs)
+                )
             if job.job_id == active_id:
                 self.current_job = job
         state = "paused" if snapshot.get("paused") else "running"
+        log_status = sync_server_log(self, snapshot)
         self.status_label.setText(
-            f"Worker {state}; {len(self.jobs)} retained job(s)"
+            f"Worker {state}; {len(self.jobs)} retained job(s){log_status}"
         )
         self._update_progress_bar()
 
@@ -168,6 +219,18 @@ def install_worker_client(module: ModuleType) -> None:
             if not silent:
                 show_error(self, exc)
 
+    def open_log_dir(self: Any) -> None:
+        raw_path = getattr(self, "worker_log_dir", None)
+        if not raw_path:
+            self.status_label.setText(
+                "Chroma worker log directory is not available yet"
+            )
+            return
+        try:
+            module.open_folder(Path(str(raw_path)))
+        except (OSError, RuntimeError) as exc:
+            show_error(self, exc)
+
     def close_event(self: Any, event: Any) -> None:
         # Queue and backend ownership belong to chroma-worker.service.
         event.accept()
@@ -182,6 +245,7 @@ def install_worker_client(module: ModuleType) -> None:
     launcher._tick = refresh
     launcher.stop_current = stop_current
     launcher.stop_server = stop_server
+    launcher._open_log_dir = open_log_dir
     launcher.closeEvent = close_event
 
 

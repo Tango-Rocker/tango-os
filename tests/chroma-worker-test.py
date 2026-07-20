@@ -206,6 +206,19 @@ def main() -> int:
             snapshot = call(socket_path, "snapshot")
             statuses = {job["status"] for job in snapshot["jobs"]}
             assert {"completed", "cancelled"} <= statuses
+            expected_log_dir = state / "chroma/logs"
+            expected_server_log = (
+                expected_log_dir / f"sd-server-{settings['ServerPort']}.log"
+            )
+            assert snapshot["log_dir"] == str(expected_log_dir)
+            assert snapshot["server_log"] == str(expected_server_log)
+            assert all(
+                job["server_log"] == str(expected_server_log)
+                for job in snapshot["jobs"]
+                if job["payload"]["settings"]["ServerPort"]
+                == settings["ServerPort"]
+            )
+            assert expected_server_log.is_file()
             assert socket_path.stat().st_mode & 0o777 == 0o600
 
             unknown_port = free_port()

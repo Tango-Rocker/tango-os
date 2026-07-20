@@ -198,24 +198,46 @@ class Worker:
     def start(self) -> None:
         self.thread.start()
 
+    def _server_log_path(self, settings: dict[str, Any]) -> Path:
+        return self.log_dir / f"sd-server-{int(settings['ServerPort'])}.log"
+
     def snapshot(self) -> dict[str, Any]:
         with self.db_lock, self.connect() as db:
-            rows = [
-                {
+            rows = []
+            for row in db.execute("SELECT * FROM jobs ORDER BY id"):
+                payload = json.loads(row["payload"])
+                rows.append({
                     "id": row["id"],
                     "status": row["status"],
-                    "payload": json.loads(row["payload"]),
+                    "payload": payload,
                     "attempts": row["attempts"],
                     "outputs": json.loads(row["outputs"]),
+                    "server_log": str(
+                        self._server_log_path(payload["settings"])
+                    ),
                     "error": row["error"],
-                }
-                for row in db.execute("SELECT * FROM jobs ORDER BY id")
-            ]
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                })
+        server_log: str | None = None
+        active = next(
+            (row for row in rows if row["id"] == self.active_job), None
+        )
+        if active is not None:
+            server_log = str(active["server_log"])
+        elif self.server_pid and self.server_key:
+            with contextlib.suppress(
+                json.JSONDecodeError, IndexError, TypeError, ValueError
+            ):
+                key = json.loads(self.server_key)
+                server_log = str(self.log_dir / f"sd-server-{int(key[1])}.log")
         return {
             "protocol": PROTOCOL,
             "paused": self.paused,
             "active_job": self.active_job,
             "server_pid": self.server_pid or None,
+            "log_dir": str(self.log_dir),
+            "server_log": server_log,
             "jobs": rows,
         }
 
@@ -479,7 +501,7 @@ class Worker:
                 f"refusing unknown process already listening on server port {port}"
             )
         self.stop_server()
-        log_path = self.log_dir / f"sd-server-{port}.log"
+        log_path = self._server_log_path(settings)
         log = open(log_path, "ab", buffering=0)
         try:
             self.server_process = subprocess.Popen(
