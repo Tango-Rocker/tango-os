@@ -7,4 +7,37 @@ if [ "$#" -eq 0 ]; then
 fi
 
 eos_app="${ENGINEOS_EOS_APP_BIN:-/usr/bin/eos-app}"
-exec "$eos_app" launch falkon "$@"
+tmux_bin="${ENGINEOS_TMUX_BIN:-/usr/bin/tmux}"
+
+if [ -z "${TMUX:-}" ] || [ -z "${TMUX_PANE:-}" ]; then
+  printf '%s\n' \
+    'engineos-browser-open: an EngineOS tmux pane is required' >&2
+  exit 125
+fi
+
+origin_window="$("$tmux_bin" display-message -p -t "$TMUX_PANE" '#{window_id}')" || {
+  printf '%s\n' \
+    'engineos-browser-open: could not resolve the invoking tmux window' >&2
+  exit 125
+}
+
+created="$("$tmux_bin" new-window -P -F '#{window_id} #{pane_id}' \
+  -a -t "$origin_window" -n browser)" || {
+  printf '%s\n' \
+    'engineos-browser-open: could not create a browser pane' >&2
+  exit 125
+}
+browser_window=${created%% *}
+browser_pane=${created#* }
+
+if [ -z "$browser_window" ] || [ -z "$browser_pane" ] || \
+    [ "$browser_window" = "$browser_pane" ]; then
+  printf '%s\n' \
+    'engineos-browser-open: tmux returned an invalid browser pane' >&2
+  exit 125
+fi
+
+if ! TMUX_PANE="$browser_pane" "$eos_app" launch falkon "$@"; then
+  "$tmux_bin" kill-window -t "$browser_window" >/dev/null 2>&1 || true
+  exit 125
+fi

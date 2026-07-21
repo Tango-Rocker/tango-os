@@ -3288,6 +3288,7 @@ run_app() {
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$ENGINEOS_FAKE_TMUX_LOG"
 if [[ "$1" == display-message ]]; then printf '%%9\n'; fi
+if [[ "$1" == new-window ]]; then printf '@42 %%42\n'; fi
 if [[ "$1" == list-clients ]]; then
   printf '%s\n' 'engineos-view-1|focused|$1'
 fi
@@ -3355,16 +3356,24 @@ FAKE
 
   cat >"$tmp_dir/eos-app" <<'FAKE'
 #!/usr/bin/env bash
-printf '<%s>\n' "$@" >"$ENGINEOS_FAKE_BROWSER_OPEN"
+printf 'pane=<%s>\n' "$TMUX_PANE" >"$ENGINEOS_FAKE_BROWSER_OPEN"
+printf '<%s>\n' "$@" >>"$ENGINEOS_FAKE_BROWSER_OPEN"
 FAKE
   chmod +x "$tmp_dir/eos-app"
-  ENGINEOS_EOS_APP_BIN="$tmp_dir/eos-app" \
+  : >"$log"
+  TMUX=/tmp/engineos-test-tmux TMUX_PANE=%9 \
+    ENGINEOS_TMUX_BIN="$fake_tmux" ENGINEOS_FAKE_TMUX_LOG="$log" \
+    ENGINEOS_EOS_APP_BIN="$tmp_dir/eos-app" \
     ENGINEOS_FAKE_BROWSER_OPEN="$tmp_dir/browser-open.log" \
     "$ROOT/tools/engineos/engineos-browser-open" "$oauth_url"
-  grep -Fx '<launch>' "$tmp_dir/browser-open.log" >/dev/null &&
+  grep -Fx 'display-message -p -t %9 #{window_id}' "$log" >/dev/null &&
+    grep -Fx 'new-window -P -F #{window_id} #{pane_id} -a -t %9 -n browser' \
+      "$log" >/dev/null &&
+    grep -Fx 'pane=<%42>' "$tmp_dir/browser-open.log" >/dev/null &&
+    grep -Fx '<launch>' "$tmp_dir/browser-open.log" >/dev/null &&
     grep -Fx '<falkon>' "$tmp_dir/browser-open.log" >/dev/null &&
     grep -Fx "<$oauth_url>" "$tmp_dir/browser-open.log" >/dev/null ||
-    die "EngineOS browser opener did not preserve the Spotify OAuth URL"
+    die "EngineOS browser opener did not preserve Spotify while targeting a new pane"
 
   mkdir -p "$tmp_dir/runtime/engineos"
   cat >"$tmp_dir/runtime/engineos/shell-state.json" <<'JSON'
