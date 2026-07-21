@@ -3153,6 +3153,41 @@ FAKE
     >"$tmp_dir/refresh-user.out"
   grep -F 'result:     preview' "$tmp_dir/refresh-user.out" >/dev/null ||
     die "shell runner user refresh dry-run did not complete"
+  grep -F 'engineos-falkon.desktop' "$tmp_dir/refresh-user.out" >/dev/null ||
+    die "shell runner user refresh did not preview the browser handler"
+
+  for command in xdg-mime xdg-settings update-desktop-database; do
+    cat >"$tmp_dir/$command" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s:%s\n' "${0##*/}" "$*" >>"$ENGINEOS_FAKE_BROWSER_CONFIG"
+FAKE
+    chmod +x "$tmp_dir/$command"
+  done
+  ENGINEOS_USER_HOME="$tmp_dir/home" \
+    ENGINEOS_XDG_MIME_BIN="$tmp_dir/xdg-mime" \
+    ENGINEOS_XDG_SETTINGS_BIN="$tmp_dir/xdg-settings" \
+    ENGINEOS_UPDATE_DESKTOP_DATABASE_BIN="$tmp_dir/update-desktop-database" \
+    ENGINEOS_FAKE_BROWSER_CONFIG="$tmp_dir/browser-config.log" \
+    ENGINEOS_TMUX_CMD=/bin/false \
+    "$SCRIPT_DIR/shell_runner.sh" refresh-user \
+    >"$tmp_dir/refresh-user-live.out"
+  cmp -s \
+    "$ROOT/tools/post-install-payload/assets/applications/engineos-falkon.desktop" \
+    "$tmp_dir/home/.local/share/applications/engineos-falkon.desktop" ||
+    die "shell runner did not install the EngineOS Falkon desktop handler"
+  grep -Fx 'xdg-mime:default engineos-falkon.desktop x-scheme-handler/http' \
+    "$tmp_dir/browser-config.log" >/dev/null &&
+    grep -Fx 'xdg-mime:default engineos-falkon.desktop x-scheme-handler/https' \
+      "$tmp_dir/browser-config.log" >/dev/null &&
+    grep -Fx 'xdg-settings:set default-web-browser engineos-falkon.desktop' \
+      "$tmp_dir/browser-config.log" >/dev/null ||
+    die "shell runner did not register EngineOS Falkon as the default browser"
+  grep -F 'export BROWSER=/usr/bin/engineos-browser-open' \
+    "$tmp_dir/home/.zshrc" >/dev/null ||
+    die "shell runner did not install the managed browser environment"
+  grep -F 'set-environment -g BROWSER /usr/bin/engineos-browser-open' \
+    "$tmp_dir/home/.tmux.conf" >/dev/null ||
+    die "shell runner did not install the tmux browser environment"
 
   for helper in engineos-tmux-pane-bridge engineos-tmux-pane-sync \
       engineos-tmux-window-move engineos-tmux-window-sync \
@@ -3304,8 +3339,32 @@ FAKE
   grep -F 'launch-pane-app -t %9 -- env -u DISPLAY' "$log" >/dev/null &&
     grep -F 'WAYLAND_DISPLAY=engineos-test-wayland' "$log" >/dev/null &&
     grep -F '/usr/bin/falkon --no-remote --profile Space Name' \
-    "$log" >/dev/null ||
+      "$log" >/dev/null ||
     die "manifest Falkon launch did not forward Wayland or preserve absolute dispatch"
+
+  : >"$log"
+  local oauth_url='https://accounts.spotify.com/authorize?state=engineos-test'
+  WAYLAND_DISPLAY=engineos-test-wayland TMUX_PANE=%9 \
+    ENGINEOS_TMUX_BIN="$fake_tmux" ENGINEOS_FAKE_TMUX_LOG="$log" \
+    ENGINEOS_STATE_DIR="$tmp_dir/state" ENGINEOS_LOG_DIR="$tmp_dir/log" \
+    ENGINEOS_APPS_MANIFEST="$ROOT/packages/engineos-config/files/etc/engineos/apps.toml" \
+    "$SCRIPT_DIR/app.sh" launch falkon "$oauth_url"
+  grep -F "/usr/bin/falkon --no-remote $oauth_url --profile engineos" \
+    "$log" >/dev/null ||
+    die "manifest Falkon launch did not preserve the Spotify OAuth URL"
+
+  cat >"$tmp_dir/eos-app" <<'FAKE'
+#!/usr/bin/env bash
+printf '<%s>\n' "$@" >"$ENGINEOS_FAKE_BROWSER_OPEN"
+FAKE
+  chmod +x "$tmp_dir/eos-app"
+  ENGINEOS_EOS_APP_BIN="$tmp_dir/eos-app" \
+    ENGINEOS_FAKE_BROWSER_OPEN="$tmp_dir/browser-open.log" \
+    "$ROOT/tools/engineos/engineos-browser-open" "$oauth_url"
+  grep -Fx '<launch>' "$tmp_dir/browser-open.log" >/dev/null &&
+    grep -Fx '<falkon>' "$tmp_dir/browser-open.log" >/dev/null &&
+    grep -Fx "<$oauth_url>" "$tmp_dir/browser-open.log" >/dev/null ||
+    die "EngineOS browser opener did not preserve the Spotify OAuth URL"
 
   mkdir -p "$tmp_dir/runtime/engineos"
   cat >"$tmp_dir/runtime/engineos/shell-state.json" <<'JSON'

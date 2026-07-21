@@ -1,12 +1,13 @@
 pkgname=engineos-tools
 pkgver=0.1.0
-pkgrel=66
+pkgrel=67
 pkgdesc="EngineOS command, proof, agent, and observability tools"
 arch=('any')
 url="https://example.invalid/engineos"
 license=('custom:EngineOS-TBD')
 install=engineos-tools.install
-depends=('bash' 'python' 'git' 'ripgrep' 'jq' 'engineos-config' 'engineos-mux')
+depends=('bash' 'python' 'git' 'ripgrep' 'jq' 'xdg-utils' 'desktop-file-utils'
+  'engineos-config' 'engineos-mux')
 provides=(
   'engineos-core' 'engineos-cli' 'engineos-package-tools' 'engineos-preflight-tools'
   'engineos-build-tools' 'engineos-deploy-tools' 'engineos-install-tools'
@@ -33,6 +34,8 @@ package() {
   install -Dm755 "$_engineos_root/tools/engineos/engine-image-preview" "$pkgdir/usr/bin/engine-image-preview"
   install -Dm755 "$_engineos_root/tools/engineos/engineos-app-shims" \
     "$pkgdir/usr/bin/engineos-app-shims"
+  install -Dm755 "$_engineos_root/tools/engineos/engineos-browser-open" \
+    "$pkgdir/usr/bin/engineos-browser-open"
   install -Dm755 "$_engineos_root/tools/engineos/chroma-worker" \
     "$pkgdir/usr/bin/chroma-worker"
   install -Dm755 "$_engineos_root/tools/engineos/chroma-launcher-client" \

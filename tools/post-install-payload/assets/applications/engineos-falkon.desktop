@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Falkon (EngineOS)
+GenericName=Web Browser
+Comment=Open web links in an EngineOS-owned Falkon pane
+TryExec=/usr/bin/engineos-browser-open
+Exec=/usr/bin/engineos-browser-open %u
+Icon=falkon
+Terminal=false
+NoDisplay=true
+DBusActivatable=false
+Categories=Network;WebBrowser;
+MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;

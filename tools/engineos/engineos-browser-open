@@ -1,0 +1,10 @@
+#!/usr/bin/env sh
+set -eu
+
+if [ "$#" -eq 0 ]; then
+  printf '%s\n' 'engineos-browser-open: a URL is required' >&2
+  exit 64
+fi
+
+eos_app="${ENGINEOS_EOS_APP_BIN:-/usr/bin/eos-app}"
+exec "$eos_app" launch falkon "$@"

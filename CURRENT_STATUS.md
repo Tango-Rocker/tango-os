@@ -153,7 +153,7 @@ correction and is installed on tty1:
 
 Installed package revisions are `engineos-config 0.1.0-10`,
 `engineos-mux 3.6b-44`, `engineos-shell 0.1.0-83`,
-`engineos-tools 0.1.0-66`, and `engineos-mc 4.8.33-1`. The native mux contract,
+`engineos-tools 0.1.0-67`, and `engineos-mc 4.8.33-1`. The native mux contract,
 image-preview test, app/Chroma/Spotify test, and all shell Meson renderer/theme
 tests pass. The mux proof also covers the transient-systemd-scope respawn race:
 scope signals reconcile the short registration window, and accepted TERM/KILL
@@ -242,6 +242,19 @@ contract rejects non-hex managed component colors, the real 0.23.0 binary
 accepted a synthetic migrated config and advanced to its normal startup path,
 and the live managed theme was migrated without replacing credentials or
 unrelated settings.
+
+The 2026-07-21 Spotify authentication follow-up installed
+`engineos-tools 0.1.0-67`. The stock Falkon desktop entry was already the MIME
+default, but Wayland-only `xdg-open` generic mode skipped MIME activation when
+`DISPLAY` was unset and fell through to unavailable text browsers. The managed
+user refresh now installs `engineos-falkon.desktop`, registers it for HTTP,
+HTTPS, XHTML, and HTML, and exports
+`BROWSER=/usr/bin/engineos-browser-open` through both zsh and the authoritative
+tmux server. The absolute opener delegates URLs to `eos-app launch falkon`, so
+shell-owned pane routing remains enforced. A real `xdg-open` proof launched
+Falkon with the Spotify account URL in pane `%9` under
+`engine-pane-695-9-1.scope`; the URL and dedicated `engineos` profile reached
+the final process unchanged. The temporary proof window was then closed.
 
 ## Remaining Acceptance Work
 

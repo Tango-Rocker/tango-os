@@ -2,6 +2,7 @@
 export ZSH="${ZSH:-/usr/share/oh-my-zsh}"
 export ZSH_DISABLE_COMPFIX=true
 export PATH="$HOME/.local/bin:$PATH"
+export BROWSER=/usr/bin/engineos-browser-open
 
 HISTFILE="${HISTFILE:-$HOME/.zsh_history}"
 HISTSIZE=50000

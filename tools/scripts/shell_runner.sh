@@ -356,6 +356,15 @@ run_refresh_user() {
   local tmux_force_config=false
   local zsh_conf
   local zsh_force_config=false
+  local browser_desktop
+  local browser_desktop_id="engineos-falkon.desktop"
+  local user_config_home="${ENGINEOS_USER_CONFIG_HOME:-$USER_HOME/.config}"
+  local user_data_home="${ENGINEOS_USER_DATA_HOME:-$USER_HOME/.local/share}"
+  local xdg_mime_cmd="${ENGINEOS_XDG_MIME_BIN:-xdg-mime}"
+  local xdg_settings_cmd="${ENGINEOS_XDG_SETTINGS_BIN:-xdg-settings}"
+  local desktop_database_cmd="${ENGINEOS_UPDATE_DESKTOP_DATABASE_BIN:-update-desktop-database}"
+  local command
+  local mime
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -440,6 +449,51 @@ run_refresh_user() {
       "$app_shims_cmd"; then
     printf '  result:     failed reason=app-shim-generation-failed\n'
     return 1
+  fi
+  browser_desktop="$user_data_home/applications/$browser_desktop_id"
+  if ! install_user_file \
+      "$PAYLOAD_DIR/assets/applications/$browser_desktop_id" \
+      "$browser_desktop" 0644 "$dry_run" true; then
+    printf '  result:     failed reason=browser-desktop-install-failed\n'
+    return 1
+  fi
+  for command in "$xdg_mime_cmd" "$xdg_settings_cmd" \
+      "$desktop_database_cmd"; do
+    if ! have_executable "$command"; then
+      printf '  result:     failed reason=browser-registration-tool-unavailable command=%s\n' \
+        "$command"
+      return 1
+    fi
+  done
+  if [[ "$dry_run" == true ]]; then
+    printf '  would_run:  %s %q\n' "$desktop_database_cmd" \
+      "$user_data_home/applications"
+    printf '  would_run:  %s default %s text/html application/xhtml+xml x-scheme-handler/http x-scheme-handler/https\n' \
+      "$xdg_mime_cmd" "$browser_desktop_id"
+    printf '  would_run:  %s set default-web-browser %s\n' \
+      "$xdg_settings_cmd" "$browser_desktop_id"
+  else
+    if ! "$desktop_database_cmd" "$user_data_home/applications"; then
+      printf '  result:     failed reason=browser-desktop-database-update-failed\n'
+      return 1
+    fi
+    for mime in text/html application/xhtml+xml x-scheme-handler/http \
+        x-scheme-handler/https; do
+      if ! HOME="$USER_HOME" XDG_CONFIG_HOME="$user_config_home" \
+          XDG_DATA_HOME="$user_data_home" \
+          "$xdg_mime_cmd" default "$browser_desktop_id" "$mime"; then
+        printf '  result:     failed reason=browser-mime-registration-failed mime=%s\n' \
+          "$mime"
+        return 1
+      fi
+    done
+    if ! HOME="$USER_HOME" XDG_CONFIG_HOME="$user_config_home" \
+        XDG_DATA_HOME="$user_data_home" \
+        "$xdg_settings_cmd" set default-web-browser "$browser_desktop_id"; then
+      printf '  result:     failed reason=default-browser-registration-failed\n'
+      return 1
+    fi
+    printf '  browser:    %s\n' "$browser_desktop_id"
   fi
   local spotify_config_cmd="${ENGINEOS_SPOTIFY_CONFIG_CMD:-}"
   if [[ -z "$spotify_config_cmd" &&

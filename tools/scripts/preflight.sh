@@ -204,8 +204,10 @@ check_package_inputs() {
       require_file "tools/engineos/chroma-worker"
       require_file "tools/engineos/chroma-launcher-client"
       require_file "tools/engineos/engineos-app-shims"
+      require_file "tools/engineos/engineos-browser-open"
       require_file "tools/engineos/engineos-spotify-config"
       require_file "tools/post-install-payload/assets/systemd/chroma-worker.service"
+      require_file "tools/post-install-payload/assets/applications/engineos-falkon.desktop"
       require_file "tools/post-install-payload/assets/spotify/gruvbox-dark.toml"
       require_file "tools/scripts/common.sh"
       require_file "tools/scripts/package_lint.sh"
@@ -277,6 +279,7 @@ check_package_inputs() {
 		check_abs_python_syntax "$ROOT/tools/engineos/chroma-worker"
 		check_abs_python_syntax "$ROOT/tools/engineos/chroma-launcher-client"
 		check_abs_python_syntax "$ROOT/tools/engineos/engineos-app-shims"
+		check_abs_bash_syntax "$ROOT/tools/engineos/engineos-browser-open"
 		check_abs_python_syntax "$ROOT/tools/engineos/engineos-spotify-config"
       ;;
     engineos-oh-my-zsh)
