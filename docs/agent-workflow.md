@@ -62,26 +62,6 @@ Inspect metadata-only agent route events locally with:
 ./tools/engineos/eos-observe metrics
 ```
 
-## Cost Supervisor
-
-The project overseer records a token baseline and inspects completed sessions
-without paying to re-review the historical corpus. A user timer scans every six
-hours, but the model reviewer runs only after five new completed sessions. Each
-session contributes at most one 160-line evidence chunk to `gpt-5.4-mini` at
-low reasoning.
-
-```bash
-eos-agent supervisor status --root /home/dev/Tang-OS --json
-eos-agent supervisor run --root /home/dev/Tang-OS
-systemctl --user status engineos-agent-supervisor.timer
-```
-
-Private reports and token ledgers live under
-`.agent-insights/out/supervisor/`, and extracted evidence lives under
-`.agent-insights/archive/`. Tracked issue history and review notes live under
-`management/`. Do not claim savings until a five-session post-baseline window
-exists, and always report supervisor reviewer tokens separately.
-
 ## Status Discipline
 
 When work changes build, boot, runtime, or agent behavior, update

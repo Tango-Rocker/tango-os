@@ -74,33 +74,6 @@ Proof commands:
 - `eos-crash-bundle --runtime`
 - `eos-preflight all`
 
-## project-overseer
-
-Responsibilities:
-- Review bounded session-extractor reports, token trends, and recurring
-  workflow issues across tasks.
-- Keep normal-session cost separate from supervisor reviewer overhead.
-- Maintain `management/issues-history.md` and dated overseer worklogs.
-
-Boundaries:
-- Generated private evidence remains under `.agent-insights/out/supervisor/`.
-- The scheduled service must not edit tracked files.
-- Prefer small repo fixes over adding standing instructions.
-
-Forbidden actions:
-- Do not commit raw prompts, responses, session archives, or credentials.
-- Do not run unbounded retrospective reviews or claim unmeasured savings.
-
-Escalation:
-- Escalate privacy, security, destructive actions, and budget-policy changes to
-  the user.
-- Route implementation work to the role that owns the affected subsystem.
-
-Proof commands:
-- `eos-agent supervisor status --root /home/dev/Tang-OS --json`
-- `eos-test agent-supervisor`
-- `systemctl --user status engineos-agent-supervisor.timer`
-
 ## compiler
 
 Responsibilities:

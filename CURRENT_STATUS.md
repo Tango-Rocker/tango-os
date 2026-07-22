@@ -52,34 +52,6 @@ exits.
 - Recovery tty, shell logs, crash bundles, screencopy/grim, and observational
   shell state.
 
-## Agent Workflow Cost Supervisor
-
-The project now has an installed project-overseer supervisor rather than only
-an OS operations overseer. `eos-agent supervisor` keeps a private,
-metadata-only token ledger, hashes session identifiers, omits prompts and
-responses, and batch-gates `codex-insights` review to five newly completed
-Tang-OS sessions. Each review is limited to one 160-line evidence chunk per
-session and uses `gpt-5.4-mini` with low reasoning. A persistent six-hour user
-timer is enabled and active; its first installed one-shot run completed
-successfully, and the next trigger was scheduled for 2026-07-22 16:12 local.
-
-The July 22 baseline contains 50 completed sessions and 2,232,994,211 total
-tokens, including 49,012,293 uncached input tokens and 77 compactions. The
-latest five-session historical window averages 34,997,816 total tokens,
-1,089,151 uncached input tokens, 84,101 output tokens, and 2 compactions, which
-passes the configured budget. Historical sessions were seeded without model
-review, so supervisor reviewer overhead is currently zero tokens. This is a
-baseline, not proof of savings: `post_baseline_ready` remains false until five
-future sessions complete. Currency cost is intentionally not estimated until
-verified model pricing is configured.
-
-The supervisor contract test covers initialization, batch gating, bounded
-extractor arguments, metadata privacy, token accounting, and visible extractor
-failure. A separate integration proof exercised the installed
-`codex-insights watch` path across five synthetic completed sessions with a
-fake reviewer, confirmed five bounded review calls, and confirmed that raw
-session archives were absent.
-
 Live cutover evidence from 2026-07-11 through 2026-07-12:
 
 - `engineos-mux 3.6b-42`, `engineos-shell 0.1.0-79`, and the native config and
@@ -181,7 +153,7 @@ correction and is installed on tty1:
 
 Installed package revisions are `engineos-config 0.1.0-10`,
 `engineos-mux 3.6b-45`, `engineos-shell 0.1.0-84`,
-`engineos-tools 0.1.0-70`, and `engineos-mc 4.8.33-1`. The native mux contract,
+`engineos-tools 0.1.0-69`, and `engineos-mc 4.8.33-1`. The native mux contract,
 image-preview test, app/Chroma/Spotify test, and all shell Meson renderer/theme
 tests pass. The mux proof also covers the transient-systemd-scope respawn race:
 scope signals reconcile the short registration window, and accepted TERM/KILL

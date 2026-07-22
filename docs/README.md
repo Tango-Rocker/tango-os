@@ -15,7 +15,6 @@ Use these files by purpose:
 - [agent-roles.md](agent-roles.md): role boundaries and handoff rules
 - [agent-workflow.md](agent-workflow.md): quick workflow checklist and Codex harness notes
 - [engineos-agent-pack.md](engineos-agent-pack.md): Codex config, roles, skills, and routing
-- [../management/INDEX.md](../management/INDEX.md): recurring workflow and token-cost supervisor
 - [asset-policy.md](asset-policy.md): Quake asset rules
 - [session-archive/](session-archive/): focused long-term proof history and handoff records
 

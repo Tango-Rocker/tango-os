@@ -23,17 +23,6 @@ risk_default = "medium"
 proof = "eos-doctor"
 
 [[roles]]
-id = "project-overseer"
-display_name = "EngineOS Project Overseer"
-mode = "subagent"
-role_doc = "management/agents/project-overseer-harness-agent.md"
-skill = ".agents/skills/project-overseer/SKILL.md"
-route_triggers = ["supervisor", "token usage", "token cost", "session review", "workflow efficiency", "recurring workflow", "project harness"]
-priority = 98
-risk_default = "low"
-proof = "eos-agent supervisor status --root /home/dev/Tang-OS"
-
-[[roles]]
 id = "compiler"
 display_name = "EngineOS Compiler"
 mode = "subagent"

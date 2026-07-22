@@ -12,8 +12,6 @@ docs/agent-roles.md               role boundaries and handoff rules
 .agents/skills/*/SKILL.md         task routers and area workflows
 tools/scripts/agent_router.py     structured TOML role router
 tools/scripts/agent_hygiene.py    role/path drift validator
-tools/scripts/agent_supervisor.py bounded review and token-cost ledger
-management/                       tracked recurring-issue and overseer records
 ```
 
 ## Installed Files
@@ -29,9 +27,7 @@ docs/agent-roles.md
 
 The `engineos-tools` package installs the same guidance under
 `/usr/share/engineos`. Role metadata remains canonical in one TOML file; the
-package does not generate profiles, wrappers, queues, or inactive hooks. The
-project-overseer timer runs a bounded one-shot review scan and keeps generated
-evidence outside Git.
+package does not generate profiles, wrappers, queues, or inactive hooks.
 
 ## Interface Policy
 
@@ -73,7 +69,6 @@ eos-observe tail --last 20
 ./tools/engineos/eos-test agent-hygiene
 ./tools/engineos/eos-test observability
 ./tools/engineos/eos-test agent-route
-./tools/engineos/eos-test agent-supervisor
 ./tools/engineos/eos-preflight repo --package engineos-tools
 ./tools/engineos/eos-lint packages --package engineos-tools
 ```
