@@ -76,6 +76,12 @@
 @@ -3598,0 +3599,2 @@
 +int		 menu_get_model(struct client *, struct menu **, int *, u_int *,
 +		    u_int *, struct screen **);
+--- a/server-client.c
++++ b/server-client.c
+@@ -538,0 +539,3 @@ server_client_suspend(struct client *c)
++	if (c->flags & CLIENT_GRAPHICAL)
++		return;
++
 --- a/menu.c
 +++ b/menu.c
 @@ -181,0 +182,32 @@

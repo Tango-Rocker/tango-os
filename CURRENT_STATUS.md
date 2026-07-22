@@ -152,7 +152,7 @@ correction and is installed on tty1:
   reserving ten playback rows.
 
 Installed package revisions are `engineos-config 0.1.0-10`,
-`engineos-mux 3.6b-44`, `engineos-shell 0.1.0-84`,
+`engineos-mux 3.6b-45`, `engineos-shell 0.1.0-84`,
 `engineos-tools 0.1.0-69`, and `engineos-mc 4.8.33-1`. The native mux contract,
 image-preview test, app/Chroma/Spotify test, and all shell Meson renderer/theme
 tests pass. The mux proof also covers the transient-systemd-scope respawn race:
@@ -297,6 +297,23 @@ as a captured game with no pointer constraint, but the active graphical client
 switched to Chroma about seven seconds later. The automated boundary proof is
 complete; a quiet-desktop physical pointer pass remains listed below rather
 than being reported as observed.
+
+After the revision-84 deployment, HDMI-A-1 stopped accepting terminal input
+while HDMI-A-2 remained healthy. Runtime state showed both DRM outputs and all
+physical devices healthy, but the primary output's synthetic tmux client
+`engineos-view-7` had the `suspended` flag. The stock `C-b C-z` binding invokes
+`suspend-client`; a synthetic graphical client has no terminal-side process to
+send tmux's wakeup message, so that state was permanent until shell output
+registration was rebuilt. Evidence is preserved at
+`artifacts/crash-bundles/20260722T012006Z`. Restarting only engineos-shell
+restored HDMI-A-1 as focused `engineos-view-9`, retained tmux PID 695, and left
+both outputs on the hardware GLES renderer with zero frame failures.
+`engineos-mux 3.6b-45` makes `server_client_suspend` ignore graphical clients,
+and the native mux contract directly attempts `suspend-client` against the
+focused output client and rejects any resulting `suspended` flag. Revision 45
+is installed. The retained revision-44 tmux server remains PID 695 so its live
+panes were not disrupted; its `C-b C-z` binding is unbound as a reversible
+runtime guard until that server is next restarted onto revision 45.
 
 ## Remaining Acceptance Work
 

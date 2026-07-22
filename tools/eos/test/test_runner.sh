@@ -2513,6 +2513,14 @@ PY
 		"$fixture/graphical-clients.txt")"
 	[[ -n "$shell_client_name" ]] ||
 		die "native shell focused graphical client name was unavailable"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		suspend-client -t "$shell_client_name"
+	if XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			list-clients -F '#{client_name}|#{client_flags}' | \
+			awk -F '|' -v client="$shell_client_name" \
+			'$1 == client && $2 ~ /suspended/ { found = 1 } END { exit !found }'; then
+		die "synthetic graphical client accepted an unrecoverable suspend"
+	fi
 	for _ in {1..500}; do
 		updated_native_revision="$(jq -er '.mux.grid.revision' \
 			"$fixture/engineos/shell-state.json")"
