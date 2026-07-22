@@ -8,6 +8,7 @@
 #include <linux/input-event-codes.h>
 #include <limits.h>
 #include <locale.h>
+#include <math.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -25,6 +26,7 @@
 #include <json-c/json.h>
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
+#include <wlr/interfaces/wlr_pointer.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_buffer.h>
@@ -181,6 +183,8 @@ struct engineos_shell_server {
 	struct wlr_relative_pointer_manager_v1 *relative_pointer_mgr;
 	struct wlr_pointer_constraints_v1 *pointer_constraints;
 	struct wlr_pointer_constraint_v1 *active_pointer_constraint;
+	struct wlr_pointer test_pointer;
+	bool test_pointer_initialized;
 	struct wlr_scene *scene;
 	struct wlr_scene_tree *mux_pane_tree;
 	struct wl_list mux_pane_scenes;
@@ -406,7 +410,9 @@ static void clear_pointer_focus(struct engineos_shell_server *server,
 	const char *reason);
 static void update_drag_icon_position(struct engineos_shell_server *server,
 	const char *reason);
-static bool should_lock_game_cursor(struct engineos_shell_server *server);
+static bool game_capture_active(struct engineos_shell_server *server);
+static bool active_pointer_constraint_is_locked(
+	struct engineos_shell_server *server);
 static void sync_cursor_image(struct engineos_shell_server *server,
 	const char *reason);
 static bool confine_cursor_to_view(struct engineos_shell_server *server,
@@ -427,6 +433,8 @@ static struct engineos_shell_view *native_presentation_root(
 static bool init_preview_ipc(struct engineos_shell_server *server);
 static void close_preview_ipc(struct engineos_shell_server *server,
 	bool unlink_socket, bool free_path);
+static void server_new_pointer(struct engineos_shell_server *server,
+	struct wlr_input_device *device);
 
 static const char *mode_to_string(enum engineos_shell_mode mode) {
 	switch (mode) {
@@ -1091,6 +1099,23 @@ static bool json_extract_int(struct json_object *json, const char *key,
 		return false;
 	}
 	*out = (int)parsed;
+	return true;
+}
+
+static bool json_extract_double(struct json_object *json, const char *key,
+		double *out) {
+	struct json_object *value = NULL;
+	if (json == NULL || key == NULL ||
+			!json_object_object_get_ex(json, key, &value) ||
+			(!json_object_is_type(value, json_type_double) &&
+			 !json_object_is_type(value, json_type_int))) {
+		return false;
+	}
+	double parsed = json_object_get_double(value);
+	if (!isfinite(parsed)) {
+		return false;
+	}
+	*out = parsed;
 	return true;
 }
 
@@ -2837,6 +2862,134 @@ static void load_terminal_theme_defaults(struct engineos_shell_server *server) {
 	(void)load_terminal_theme_file(server, system_path, "system-default");
 }
 
+static uint32_t test_pointer_time_msec(void) {
+	struct timespec now = {0};
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (uint32_t)((uint64_t)now.tv_sec * 1000 +
+		(uint64_t)now.tv_nsec / 1000000);
+}
+
+static void test_pointer_frame(struct engineos_shell_server *server,
+		const char *reason) {
+	wl_signal_emit_mutable(&server->test_pointer.events.frame,
+		&server->test_pointer);
+	write_shell_state(server, reason);
+}
+
+static bool handle_test_pointer_request(
+		struct engineos_shell_server *server, struct json_object *request,
+		const char *op, char *error, size_t error_size) {
+	if (!server->test_pointer_initialized) {
+		snprintf(error, error_size,
+			"test pointer is unavailable outside an enabled headless proof");
+		return false;
+	}
+
+	if (strcmp(op, "test-pointer-place") == 0) {
+		double x = 0.0, y = 0.0;
+		if (!json_extract_double(request, "x", &x) ||
+				!json_extract_double(request, "y", &y)) {
+			snprintf(error, error_size, "missing test pointer coordinates");
+			return false;
+		}
+		wlr_cursor_warp_closest(server->cursor, NULL, x, y);
+		test_pointer_frame(server, "test-pointer-place");
+		return true;
+	}
+
+	if (strcmp(op, "test-pointer-motion") == 0) {
+		double dx = 0.0, dy = 0.0;
+		if (!json_extract_double(request, "dx", &dx) ||
+				!json_extract_double(request, "dy", &dy) ||
+				fabs(dx) > 10000.0 || fabs(dy) > 10000.0) {
+			snprintf(error, error_size, "invalid test pointer motion");
+			return false;
+		}
+		struct wlr_pointer_motion_event event = {
+			.pointer = &server->test_pointer,
+			.time_msec = test_pointer_time_msec(),
+			.delta_x = dx,
+			.delta_y = dy,
+			.unaccel_dx = dx,
+			.unaccel_dy = dy,
+		};
+		wl_signal_emit_mutable(&server->test_pointer.events.motion, &event);
+		test_pointer_frame(server, "test-pointer-motion");
+		return true;
+	}
+
+	if (strcmp(op, "test-pointer-absolute") == 0) {
+		double x = 0.0, y = 0.0;
+		if (!json_extract_double(request, "x", &x) ||
+				!json_extract_double(request, "y", &y) ||
+				x < 0.0 || x > 1.0 || y < 0.0 || y > 1.0) {
+			snprintf(error, error_size,
+				"invalid normalized test pointer coordinates");
+			return false;
+		}
+		struct wlr_pointer_motion_absolute_event event = {
+			.pointer = &server->test_pointer,
+			.time_msec = test_pointer_time_msec(),
+			.x = x,
+			.y = y,
+		};
+		wl_signal_emit_mutable(&server->test_pointer.events.motion_absolute,
+			&event);
+		test_pointer_frame(server, "test-pointer-absolute");
+		return true;
+	}
+
+	if (strcmp(op, "test-pointer-button") == 0) {
+		int button = 0;
+		char state[16] = {0};
+		if (!json_extract_int(request, "button", &button) || button <= 0 ||
+				!json_extract_string(request, "state", state, sizeof(state)) ||
+				(strcmp(state, "pressed") != 0 &&
+				 strcmp(state, "released") != 0)) {
+			snprintf(error, error_size, "invalid test pointer button");
+			return false;
+		}
+		struct wlr_pointer_button_event event = {
+			.pointer = &server->test_pointer,
+			.time_msec = test_pointer_time_msec(),
+			.button = (uint32_t)button,
+			.state = strcmp(state, "pressed") == 0 ?
+				WL_POINTER_BUTTON_STATE_PRESSED :
+				WL_POINTER_BUTTON_STATE_RELEASED,
+		};
+		wlr_pointer_notify_button(&server->test_pointer, &event);
+		test_pointer_frame(server, "test-pointer-button");
+		return true;
+	}
+
+	if (strcmp(op, "test-pointer-axis") == 0) {
+		double delta = 0.0;
+		if (!json_extract_double(request, "delta", &delta) ||
+				fabs(delta) > 10000.0) {
+			snprintf(error, error_size, "invalid test pointer axis");
+			return false;
+		}
+		struct wlr_pointer_axis_event event = {
+			.pointer = &server->test_pointer,
+			.time_msec = test_pointer_time_msec(),
+			.source = WL_POINTER_AXIS_SOURCE_WHEEL,
+			.orientation = WL_POINTER_AXIS_VERTICAL_SCROLL,
+			.relative_direction =
+				WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL,
+			.delta = delta,
+			.delta_discrete = delta < 0 ?
+				-WLR_POINTER_AXIS_DISCRETE_STEP :
+				WLR_POINTER_AXIS_DISCRETE_STEP,
+		};
+		wl_signal_emit_mutable(&server->test_pointer.events.axis, &event);
+		test_pointer_frame(server, "test-pointer-axis");
+		return true;
+	}
+
+	snprintf(error, error_size, "unsupported test pointer operation");
+	return false;
+}
+
 static void handle_preview_request_json(struct engineos_shell_server *server,
 		int client_fd, struct json_object *request) {
 	char op[32] = {0};
@@ -2846,6 +2999,16 @@ static void handle_preview_request_json(struct engineos_shell_server *server,
 	}
 
 	if (strcmp(op, "ping") == 0) {
+		preview_write_response(client_fd, "ok", NULL);
+		return;
+	}
+	if (strncmp(op, "test-pointer-", 13) == 0) {
+		char error[256] = {0};
+		if (!handle_test_pointer_request(server, request, op, error,
+				sizeof(error))) {
+			preview_write_response(client_fd, "error", error);
+			return;
+		}
 		preview_write_response(client_fd, "ok", NULL);
 		return;
 	}
@@ -3511,8 +3674,17 @@ static void write_shell_state(struct engineos_shell_server *server,
 		focused_state_pane != NULL ? focused_state_pane->generation : 0,
 		server->mux_pointer_view_id);
 	fprintf(file,
-		"  \"cursor\": {\"locked\": %s, \"hidden\": %s, \"client_owned\": %s, \"x\": %.1f, \"y\": %.1f},\n",
-		should_lock_game_cursor(server) ? "true" : "false",
+		"  \"cursor\": {\"locked\": %s, \"constraint_active\": %s, \"constraint_type\": ",
+		active_pointer_constraint_is_locked(server) ? "true" : "false",
+		server->active_pointer_constraint != NULL ? "true" : "false");
+	if (server->active_pointer_constraint != NULL) {
+		json_write_string(file,
+			pointer_constraint_type_name(server->active_pointer_constraint->type));
+	} else {
+		fputs("null", file);
+	}
+	fprintf(file,
+		", \"hidden\": %s, \"client_owned\": %s, \"x\": %.1f, \"y\": %.1f},\n",
 		server->cursor_hidden ? "true" : "false",
 		server->cursor_client_owned ? "true" : "false",
 		server->cursor != NULL ? server->cursor->x : 0.0,
@@ -3690,7 +3862,7 @@ static bool view_is_native_mux_game(struct engineos_shell_view *view) {
 	return pane != NULL && strcmp(pane->presentation, "game") == 0;
 }
 
-static bool should_lock_game_cursor(struct engineos_shell_server *server) {
+static bool game_capture_active(struct engineos_shell_server *server) {
 	return server != NULL &&
 		server->game_capture &&
 		server->input_mode == ENGINEOS_INPUT_GAME &&
@@ -3699,9 +3871,17 @@ static bool should_lock_game_cursor(struct engineos_shell_server *server) {
 		view_is_native_mux_game(server->focused_view);
 }
 
+static bool active_pointer_constraint_is_locked(
+		struct engineos_shell_server *server) {
+	return game_capture_active(server) &&
+		server->active_pointer_constraint != NULL &&
+		server->active_pointer_constraint->type ==
+			WLR_POINTER_CONSTRAINT_V1_LOCKED;
+}
+
 static struct wlr_surface *focused_game_surface(
 		struct engineos_shell_server *server) {
-	if (!should_lock_game_cursor(server) ||
+	if (!game_capture_active(server) ||
 			server->focused_view->xdg_surface == NULL) {
 		return NULL;
 	}
@@ -3734,6 +3914,8 @@ static void active_pointer_constraint_destroy(struct wl_listener *listener,
 	remove_listener_if_linked(&server->active_pointer_constraint_destroy);
 	server->active_pointer_constraint = NULL;
 	wlr_log(WLR_INFO, "pointer constraint destroyed active=true");
+	sync_cursor_image(server, "pointer-constraint-destroyed");
+	write_shell_state(server, "pointer-constraint-destroyed");
 }
 
 static void sync_pointer_constraint(struct engineos_shell_server *server,
@@ -3983,7 +4165,7 @@ static bool focused_view_pointer_coords(struct engineos_shell_server *server,
 		return false;
 	}
 
-	if (should_lock_game_cursor(server)) {
+	if (game_capture_active(server)) {
 		confine_cursor_to_view(server, view, "pointer-target");
 	}
 
@@ -4179,7 +4361,7 @@ static void toggle_game_capture(struct engineos_shell_server *server) {
 	}
 	server->input_mode = ENGINEOS_INPUT_GAME;
 	server->game_capture = !server->game_capture;
-	if (should_lock_game_cursor(server))
+	if (game_capture_active(server))
 		confine_cursor_to_view(server, server->focused_view, "capture-toggle");
 	sync_pointer_constraint(server, "capture-toggle");
 	sync_cursor_image(server, "capture-toggle");
@@ -4323,7 +4505,7 @@ static void focus_view(struct engineos_shell_view *view) {
 	}
 
 	schedule_outputs(server);
-	if (should_lock_game_cursor(server)) {
+	if (game_capture_active(server)) {
 		confine_cursor_to_view(server, view, "focus");
 	}
 	sync_pointer_constraint(server, "focus");
@@ -4933,7 +5115,7 @@ static void hide_cursor(struct engineos_shell_server *server,
 
 static void set_default_cursor(struct engineos_shell_server *server,
 		const char *reason) {
-	if (should_lock_game_cursor(server)) {
+	if (active_pointer_constraint_is_locked(server)) {
 		hide_cursor(server, reason);
 		return;
 	}
@@ -4952,7 +5134,7 @@ static void set_default_cursor(struct engineos_shell_server *server,
 
 static void sync_cursor_image(struct engineos_shell_server *server,
 		const char *reason) {
-	if (should_lock_game_cursor(server)) {
+	if (active_pointer_constraint_is_locked(server)) {
 		hide_cursor(server, reason);
 		return;
 	}
@@ -5026,7 +5208,7 @@ static bool cursor_update_pointer_focus(struct engineos_shell_server *server,
 static void send_game_relative_motion(struct engineos_shell_server *server,
 		uint32_t time_msec, double dx, double dy,
 		double dx_unaccel, double dy_unaccel, const char *reason) {
-	if (!should_lock_game_cursor(server) ||
+	if (!active_pointer_constraint_is_locked(server) ||
 			server->relative_pointer_mgr == NULL) {
 		return;
 	}
@@ -5133,6 +5315,9 @@ static bool native_mux_pointer_cell(struct engineos_shell_server *server,
 static enum engineos_pointer_target classify_pointer_target(
 		struct engineos_shell_server *server, uint32_t *view_id,
 		uint32_t *cell_x, uint32_t *cell_y) {
+	if (game_capture_active(server))
+		return ENGINEOS_POINTER_WAYLAND_SURFACE;
+
 	if (!native_mux_pointer_cell(server, view_id, cell_x, cell_y))
 		return ENGINEOS_POINTER_NONE;
 
@@ -5268,8 +5453,10 @@ static void cursor_handle_motion(struct wl_listener *listener, void *data) {
 		wl_container_of(listener, server, cursor_motion);
 	struct wlr_pointer_motion_event *event = data;
 
-	wlr_cursor_move(server->cursor, &event->pointer->base,
-		event->delta_x, event->delta_y);
+	if (!active_pointer_constraint_is_locked(server)) {
+		wlr_cursor_move(server->cursor, &event->pointer->base,
+			event->delta_x, event->delta_y);
+	}
 	update_drag_icon_position(server, "pointer-motion");
 	if (server->moving_view != NULL) {
 		update_interactive_move(server, "pointer-motion");
@@ -5278,9 +5465,10 @@ static void cursor_handle_motion(struct wl_listener *listener, void *data) {
 	cursor_log_event(server, "motion", event->pointer);
 	const char *button = native_mux_button_name(server->mux_pointer_button);
 	uint32_t view_id = 0, cell_x = 0, cell_y = 0;
-	enum engineos_pointer_target target = server->pointer_grab_active ?
-		server->pointer_grab_target :
-		classify_pointer_target(server, &view_id, &cell_x, &cell_y);
+	enum engineos_pointer_target target = game_capture_active(server) ?
+		ENGINEOS_POINTER_WAYLAND_SURFACE :
+		(server->pointer_grab_active ? server->pointer_grab_target :
+		 classify_pointer_target(server, &view_id, &cell_x, &cell_y));
 	if (pointer_target_is_tmux(target)) {
 		if (view_id == 0 &&
 				!native_mux_pointer_cell(server, &view_id, &cell_x, &cell_y))
@@ -5306,8 +5494,10 @@ static void cursor_handle_motion_absolute(struct wl_listener *listener, void *da
 		wl_container_of(listener, server, cursor_motion_absolute);
 	struct wlr_pointer_motion_absolute_event *event = data;
 
-	wlr_cursor_warp_absolute(server->cursor, &event->pointer->base,
-		event->x, event->y);
+	if (!active_pointer_constraint_is_locked(server)) {
+		wlr_cursor_warp_absolute(server->cursor, &event->pointer->base,
+			event->x, event->y);
+	}
 	update_drag_icon_position(server, "pointer-motion-absolute");
 	if (server->moving_view != NULL) {
 		update_interactive_move(server, "pointer-motion-absolute");
@@ -5316,9 +5506,10 @@ static void cursor_handle_motion_absolute(struct wl_listener *listener, void *da
 	cursor_log_event(server, "motion-absolute", event->pointer);
 	const char *button = native_mux_button_name(server->mux_pointer_button);
 	uint32_t view_id = 0, cell_x = 0, cell_y = 0;
-	enum engineos_pointer_target target = server->pointer_grab_active ?
-		server->pointer_grab_target :
-		classify_pointer_target(server, &view_id, &cell_x, &cell_y);
+	enum engineos_pointer_target target = game_capture_active(server) ?
+		ENGINEOS_POINTER_WAYLAND_SURFACE :
+		(server->pointer_grab_active ? server->pointer_grab_target :
+		 classify_pointer_target(server, &view_id, &cell_x, &cell_y));
 	if (pointer_target_is_tmux(target)) {
 		if (view_id == 0 &&
 				!native_mux_pointer_cell(server, &view_id, &cell_x, &cell_y))
@@ -5331,7 +5522,10 @@ static void cursor_handle_motion_absolute(struct wl_listener *listener, void *da
 				"motion", button, server->mux_pointer_button == 0);
 		return;
 	}
-	cursor_update_pointer_focus(server, event->time_msec, "motion-absolute");
+	if (cursor_update_pointer_focus(server, event->time_msec,
+			"motion-absolute")) {
+		sync_pointer_constraint(server, "motion-absolute");
+	}
 }
 
 static bool focus_native_mux_output(struct engineos_shell_server *server,
@@ -5512,7 +5706,7 @@ static void seat_request_cursor(struct wl_listener *listener, void *data) {
 	struct wlr_seat_client *focused_client =
 		server->seat->pointer_state.focused_client;
 
-	if (should_lock_game_cursor(server)) {
+	if (active_pointer_constraint_is_locked(server)) {
 		hide_cursor(server, "client-cursor-request-game-capture");
 		wlr_log(WLR_INFO,
 			"cursor image request ignored reason=game-capture");
@@ -5589,6 +5783,28 @@ static void server_new_pointer(struct engineos_shell_server *server,
 	update_seat_capabilities(server);
 	wlr_log(WLR_INFO, "pointer configured name=%s",
 		device->name != NULL ? device->name : "(unnamed)");
+}
+
+static bool init_test_pointer(struct engineos_shell_server *server) {
+	const char *enabled = getenv("ENGINEOS_TEST_POINTER");
+	if (enabled == NULL || strcmp(enabled, "1") != 0) {
+		return true;
+	}
+	if (strcmp(server->mode_name, "headless") != 0) {
+		wlr_log(WLR_ERROR,
+			"test pointer requires explicit headless shell mode");
+		return false;
+	}
+
+	static const struct wlr_pointer_impl test_pointer_impl = {
+		.name = "engineos-test-pointer",
+	};
+	wlr_pointer_init(&server->test_pointer, &test_pointer_impl,
+		"engineos-test-pointer");
+	server->test_pointer_initialized = true;
+	server_new_pointer(server, &server->test_pointer.base);
+	wlr_log(WLR_INFO, "headless test pointer enabled");
+	return true;
 }
 
 static bool native_mux_outputs_committed(
@@ -5741,7 +5957,9 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	wlr_output_state_init(&state);
 	wlr_output_state_set_enabled(&state, true);
 	struct wlr_output_mode *selected_mode = NULL;
-	if (!wl_list_empty(&output->modes)) {
+	if (server->test_pointer_initialized) {
+		wlr_output_state_set_custom_mode(&state, 1920, 1080, 0);
+	} else if (!wl_list_empty(&output->modes)) {
 		selected_mode = wlr_output_preferred_mode(output);
 		if (selected_mode != NULL) {
 			wlr_output_state_set_mode(&state, selected_mode);
@@ -6531,6 +6749,8 @@ static void pointer_constraint_new(struct wl_listener *listener, void *data) {
 		server->focused_view != NULL ?
 			surface_role_name(server->focused_view->role) : "none");
 	sync_pointer_constraint(server, "constraint-requested");
+	sync_cursor_image(server, "constraint-requested");
+	write_shell_state(server, "constraint-requested");
 }
 
 static void relative_pointer_new(struct wl_listener *listener, void *data) {
@@ -6991,6 +7211,10 @@ static void destroy_server(struct engineos_shell_server *server) {
 		wlr_xcursor_manager_destroy(server->cursor_mgr);
 		server->cursor_mgr = NULL;
 	}
+	if (server->test_pointer_initialized) {
+		wlr_pointer_finish(&server->test_pointer);
+		server->test_pointer_initialized = false;
+	}
 	if (server->cursor != NULL) {
 		wlr_cursor_destroy(server->cursor);
 		server->cursor = NULL;
@@ -7119,6 +7343,10 @@ int main(int argc, char **argv) {
 	}
 
 	if (!setup_server(&server)) {
+		destroy_server(&server);
+		return 1;
+	}
+	if (!init_test_pointer(&server)) {
 		destroy_server(&server);
 		return 1;
 	}

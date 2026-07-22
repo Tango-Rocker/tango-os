@@ -30,8 +30,13 @@ launch token, or pixel geometry file participates in binding.
 Terminal keys and mouse events are translated to tmux key and mouse frames.
 Normal graphical input goes directly to the Wayland seat; prefix sequences
 remain tmux commands. Game panes retain pointer constraints, relative pointer
-support, and capture toggling. Alt+Tab leaves a pane presentation for its tmux
-console and toggles back to the mapped app when pressed again on that pane. On
+support, and capture toggling. Active game capture owns motion, buttons, and
+axes across pane borders and tmux UI; unlocked clients keep confined absolute
+coordinates, while client-requested locked constraints keep the compositor
+cursor stationary and receive relative deltas. `shell-state.json` reports
+capture policy separately from active constraint type. Alt+Tab leaves a pane
+presentation for its tmux console and toggles back to the mapped app when
+pressed again on that pane. On
 a pane without a mapped app, Alt+Tab advances tmux windows. Alt+Escape and
 Ctrl+Alt+Backspace release graphical input to the backing console; neither
 shortcut terminates the compositor.

@@ -152,7 +152,7 @@ correction and is installed on tty1:
   reserving ten playback rows.
 
 Installed package revisions are `engineos-config 0.1.0-10`,
-`engineos-mux 3.6b-44`, `engineos-shell 0.1.0-83`,
+`engineos-mux 3.6b-44`, `engineos-shell 0.1.0-84`,
 `engineos-tools 0.1.0-68`, and `engineos-mc 4.8.33-1`. The native mux contract,
 image-preview test, app/Chroma/Spotify test, and all shell Meson renderer/theme
 tests pass. The mux proof also covers the transient-systemd-scope respawn race:
@@ -262,6 +262,34 @@ targets Falkon at its new pane. A live pending-auth proof kept Spotify PID
 Falkon in pane `%13` under `engine-pane-695-13-1.scope`. Runtime validation used
 process, pane, and presentation state only; no log contents were read.
 
+The 2026-07-21 Wargus pointer report exposed a shell ownership error at the
+1920x1056 game boundary: captured motion reached the tmux status-row hit test
+before the focused game view, which sent Stratagus a pointer-leave event and
+reset its diagonal edge-scroll state. `engineos-shell 0.1.0-84` gives an active
+game capture first ownership of motion, absolute motion, buttons, and axes.
+Unlocked RTS clients retain confined absolute coordinates and their client
+cursor, while a client-requested locked constraint keeps the compositor cursor
+stationary and receives relative deltas. Shell state now distinguishes capture
+policy from `constraint_active`, `constraint_type`, and the actual `locked`
+state.
+
+The native headless contract now creates an input device and proves the exact
+1920x1080 output, 1920x1056 game surface, and one-row tmux status geometry. It
+drives simultaneous x/y motion at the bottom-right corner, absolute motion,
+button and axis events over the status row, client-requested relative lock,
+console toggling, emergency release, and app destruction through the real
+wlroots cursor handlers. The compositor, shell-action, input, source-shell,
+package build, install, and cleanup checks pass. One compositor run stopped on
+the existing intermittent graphical Up-history assertion; its exact rerun and
+the final complete contract passed without weakening that assertion. Revision
+84 is installed, and the system shell restarted as PID 339681 while retaining
+tmux PID 695; both DRM outputs report 1920x1080, hardware GLES rendering, and
+zero frame failures. A live `engineos-wargus --editor` launch mapped pane `%4`
+as a captured game with no pointer constraint, but the active graphical client
+switched to Chroma about seven seconds later. The automated boundary proof is
+complete; a quiet-desktop physical pointer pass remains listed below rather
+than being reported as observed.
+
 ## Remaining Acceptance Work
 
 The unchanged upstream regression suite exposes a pre-existing scheduling race
@@ -280,6 +308,7 @@ The next physical acceptance pass exercises the remaining interactive paths:
     chroma  # restart the shell during an active generation
     systemctl --user status chroma-worker.service
     eos-runtime shell theme apply gruvbox-dark
+    eos-app launch wargus --editor  # repeat the physical boundary motion proof
     eos-proof native-quake
     eos-validate boot --bare-metal
 

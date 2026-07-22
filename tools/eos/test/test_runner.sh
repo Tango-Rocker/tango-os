@@ -182,6 +182,21 @@ run_mux() {
 	local user_bus="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$user_runtime/bus}"
 	local TMUX="" TMUX_PANE=""
 	export TMUX TMUX_PANE
+	shell_test_pointer_request() {
+		python - "$fixture/engineos/preview.sock" "$1" <<'PY'
+import json
+import socket
+import sys
+
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+    client.connect(sys.argv[1])
+    client.sendall(sys.argv[2].encode("utf-8") + b"\n")
+    response = client.recv(4096)
+payload = json.loads(response)
+if payload.get("status") != "ok":
+    raise SystemExit(f"test pointer request failed: {payload}")
+PY
+	}
 
 	if [[ -z "$mux_bin" ]]; then
 		mux_bin="$ROOT/artifacts/build/engineos-mux/engineos-mux/src/tmux-$mux_commit/tmux"
@@ -247,9 +262,23 @@ PY
 	wayland-scanner private-code \
 		"$wayland_protocols_dir/stable/xdg-shell/xdg-shell.xml" \
 		"$fixture/xdg-shell-protocol.c"
+	wayland-scanner client-header \
+		"$wayland_protocols_dir/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml" \
+		"$fixture/pointer-constraints-unstable-v1-client-protocol.h"
+	wayland-scanner private-code \
+		"$wayland_protocols_dir/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml" \
+		"$fixture/pointer-constraints-protocol.c"
+	wayland-scanner client-header \
+		"$wayland_protocols_dir/unstable/relative-pointer/relative-pointer-unstable-v1.xml" \
+		"$fixture/relative-pointer-unstable-v1-client-protocol.h"
+	wayland-scanner private-code \
+		"$wayland_protocols_dir/unstable/relative-pointer/relative-pointer-unstable-v1.xml" \
+		"$fixture/relative-pointer-protocol.c"
 	cc -std=c11 -Wall -Wextra -Werror -O2 -I"$fixture" \
 		"$ROOT/tests/wayland-presentation-client.c" \
 		"$fixture/xdg-shell-protocol.c" \
+		"$fixture/pointer-constraints-protocol.c" \
+		"$fixture/relative-pointer-protocol.c" \
 		$(pkg-config --cflags --libs wayland-client) \
 		-o "$fixture/bin/engineos-wayland-presentation-client"
 	local PATH="$fixture/bin:$PATH"
@@ -1021,6 +1050,7 @@ PY
 
 	XDG_RUNTIME_DIR="$fixture" ENGINEOS_STATE_DIR="$fixture/engineos" \
 		ENGINEOS_MUX_SOCKET="$fixture/engineos/mux.sock" \
+		ENGINEOS_TEST_POINTER=1 \
 		WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=2 WLR_RENDERER="$shell_renderer" \
 		"$shell_bin" --headless --smoke-ms 90000 \
 		>"$fixture/shell-native.log" 2>&1 &
@@ -1469,6 +1499,7 @@ PY
 	rm -f "$fixture/engineos/shell-state.json"
 	XDG_RUNTIME_DIR="$fixture" ENGINEOS_STATE_DIR="$fixture/engineos" \
 		ENGINEOS_MUX_SOCKET="$fixture/engineos/mux.sock" \
+		ENGINEOS_TEST_POINTER=1 \
 		WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=2 WLR_RENDERER="$shell_renderer" \
 		"$shell_bin" --headless --smoke-ms 90000 \
 		>"$fixture/shell-native.log" 2>&1 &
@@ -2150,10 +2181,26 @@ PY
 	done
 	[[ "$pane_state" == 'terminal|presentation|0' ]] ||
 		die "scoped Wayland application exit did not restore the pane console"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		resize-pane -Z -t "$shell_pane_id"
+	for _ in {1..150}; do
+		jq -e --arg pane "$shell_pane_id" \
+			'([.mux.panes[] | select(.visible)] | length) == 1 and
+			 any(.mux.panes[]; .pane_id == $pane and .visible and
+			  .scene.pixel_width == 1920 and .scene.pixel_height == 1056)' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e --arg pane "$shell_pane_id" \
+		'([.mux.panes[] | select(.visible)] | length) == 1 and
+		 any(.mux.panes[]; .pane_id == $pane and .visible and
+		  .scene.pixel_width == 1920 and .scene.pixel_height == 1056)' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "Wargus capture proof did not establish 1920x1056 game geometry"
 	printf -v game_wrapper_command \
-		'ENGINEOS_TMUX_BIN=%q ENGINEOS_LOG_DIR=%q %q pane launch --game -- env WAYLAND_DISPLAY=%q %q' \
+		'ENGINEOS_TMUX_BIN=%q ENGINEOS_LOG_DIR=%q %q pane launch --game -- env WAYLAND_DISPLAY=%q ENGINEOS_WAYLAND_TEST_POINTER_LOG=%q %q' \
 		"$mux_bin" "$fixture" "$SCRIPT_DIR/app.sh" \
-		"$fixture/$wayland_display" \
+		"$fixture/$wayland_display" "$fixture/game-pointer-unlocked.log" \
 		"$fixture/bin/engineos-wayland-presentation-client"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		send-keys -t "$shell_pane_id" -l "$game_wrapper_command"
@@ -2163,19 +2210,117 @@ PY
 		jq -e '.mux.presentation.type == "game" and
 			.mux.presentation.view_mode == "presentation" and
 			.mux.presentation.mapped == true and .input.mode == "game" and
-			.input.capture == true and .cursor.locked == true and
+			.input.capture == true and .cursor.locked == false and
+			.cursor.constraint_active == false and
+			.cursor.constraint_type == null and
 			([.output_views[] | select(.owns_selected_presentation)] | length) == 1' \
 			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
 		sleep 0.02
 	done
 	jq -e '.mux.presentation.type == "game" and .input.mode == "game" and
-		.input.capture == true and .cursor.locked == true' \
+		.input.capture == true and .cursor.locked == false and
+		.cursor.constraint_active == false and .cursor.constraint_type == null' \
 		"$fixture/engineos/shell-state.json" >/dev/null || {
 		jq '{mux: .mux.presentation,input,cursor,windows}' \
 			"$fixture/engineos/shell-state.json" >&2 || true
 		tail -100 "$fixture/shell-native.log" >&2 || true
 		die "native game launch did not acquire direct presentation input and capture"
 	}
+	local game_x game_y game_width game_height game_max_x game_max_y
+	read -r game_x game_y game_width game_height < <(jq -er \
+		'.mux.pane_id as $pane |
+		 .output_views[] | select(.owns_selected_presentation) |
+		 .scene_x as $output_x | .scene_y as $output_y |
+		 .panes[] | select(.pane_id == $pane) |
+		 [$output_x + .pixel_x, $output_y + .pixel_y,
+		  .pixel_width, .pixel_height] | @tsv' \
+		"$fixture/engineos/shell-state.json")
+	for _ in {1..100}; do
+		grep -F "configured $game_width $game_height" \
+			"$fixture/game-pointer-unlocked.log" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	grep -F "configured $game_width $game_height" \
+		"$fixture/game-pointer-unlocked.log" >/dev/null || {
+		cat "$fixture/game-pointer-unlocked.log" >&2 || true
+		die "game proof client did not commit the presentation geometry"
+	}
+	game_max_x=$((game_x + game_width - 1))
+	game_max_y=$((game_y + game_height - 1))
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		set-option -gu @engineos-game-capture-leak 2>/dev/null || true
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		bind-key -n WheelDownStatus \
+		set-option -g @engineos-game-capture-leak axis
+	shell_test_pointer_request \
+		"{\"op\":\"test-pointer-place\",\"x\":$game_max_x,\"y\":$game_max_y}"
+	shell_test_pointer_request \
+		'{"op":"test-pointer-motion","dx":12,"dy":12}'
+	for _ in {1..100}; do
+		grep -E "^(enter|motion) $((game_width - 1))\\.00 $((game_height - 1))\\.00$" \
+			"$fixture/game-pointer-unlocked.log" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	grep -E "^(enter|motion) $((game_width - 1))\\.00 $((game_height - 1))\\.00$" \
+		"$fixture/game-pointer-unlocked.log" >/dev/null || {
+		cat "$fixture/game-pointer-unlocked.log" >&2 || true
+		jq '{input,cursor,windows}' "$fixture/engineos/shell-state.json" >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
+		die "captured diagonal motion did not remain at the game bottom-right edge"
+	}
+	jq -e --argjson x "$game_max_x" --argjson y "$game_max_y" \
+		'.input.capture == true and .cursor.locked == false and
+		 .cursor.x == $x and .cursor.y == $y' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "unlocked game capture did not confine absolute coordinates"
+	if grep -Fx 'leave' "$fixture/game-pointer-unlocked.log" >/dev/null; then
+		cat "$fixture/game-pointer-unlocked.log" >&2
+		die "captured game motion emitted a Wayland pointer leave"
+	fi
+	local layout_width layout_height absolute_x absolute_y
+	layout_width="$(jq -er \
+		'[.output_views[] | .scene_x + .pixel_width] | max' \
+		"$fixture/engineos/shell-state.json")"
+	layout_height="$(jq -er \
+		'[.output_views[] | .scene_y + .pixel_height] | max' \
+		"$fixture/engineos/shell-state.json")"
+	absolute_x="$(awk -v value="$game_max_x" -v extent="$layout_width" \
+		'BEGIN { printf "%.8f", value / (extent - 1) }')"
+	absolute_y="$(awk -v value="$((game_max_y + 12))" \
+		-v extent="$layout_height" \
+		'BEGIN { printf "%.8f", value / (extent - 1) }')"
+	shell_test_pointer_request \
+		"{\"op\":\"test-pointer-absolute\",\"x\":$absolute_x,\"y\":$absolute_y}"
+	jq -e --argjson x "$game_max_x" --argjson y "$game_max_y" \
+		'.cursor.x == $x and .cursor.y == $y' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "captured absolute motion escaped across the tmux status boundary"
+	shell_test_pointer_request \
+		"{\"op\":\"test-pointer-place\",\"x\":$game_max_x,\"y\":$((game_max_y + 12))}"
+	shell_test_pointer_request \
+		'{"op":"test-pointer-axis","delta":1}'
+	shell_test_pointer_request \
+		'{"op":"test-pointer-button","button":272,"state":"pressed"}'
+	shell_test_pointer_request \
+		'{"op":"test-pointer-button","button":272,"state":"released"}'
+	for _ in {1..100}; do
+		grep -F 'axis 0 1.00' "$fixture/game-pointer-unlocked.log" \
+			>/dev/null 2>&1 &&
+			grep -F 'button 272 pressed' "$fixture/game-pointer-unlocked.log" \
+			>/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	grep -F 'axis 0 1.00' "$fixture/game-pointer-unlocked.log" >/dev/null &&
+		grep -F 'button 272 pressed' "$fixture/game-pointer-unlocked.log" \
+			>/dev/null &&
+		grep -F 'button 272 released' "$fixture/game-pointer-unlocked.log" \
+			>/dev/null || {
+		cat "$fixture/game-pointer-unlocked.log" >&2 || true
+		die "captured game did not retain button and axis ownership over tmux UI"
+	}
+	[[ -z "$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		show-option -gv @engineos-game-capture-leak 2>/dev/null || true)" ]] ||
+		die "captured game axis leaked to the tmux status row"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
 		ENGINEOS_TMUX_BIN="$mux_bin" \
 		"$SCRIPT_DIR/app.sh" pane view --pane "$shell_pane_id" console
@@ -2198,12 +2343,14 @@ PY
 		jq -e '.mux.presentation.type == "game" and
 			.mux.presentation.view_mode == "presentation" and
 			.input.mode == "game" and .input.capture == true and
-			.cursor.locked == true' "$fixture/engineos/shell-state.json" \
+			.cursor.locked == false and .cursor.constraint_active == false' \
+			"$fixture/engineos/shell-state.json" \
 			>/dev/null 2>&1 && break
 		sleep 0.02
 	done
 	jq -e '.input.mode == "game" and .input.capture == true and
-		.cursor.locked == true' "$fixture/engineos/shell-state.json" >/dev/null ||
+		.cursor.locked == false and .cursor.constraint_active == false' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
 		die "native game presentation toggle did not restore capture"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
 		ENGINEOS_TMUX_BIN="$mux_bin" \
@@ -2217,6 +2364,96 @@ PY
 	done
 	[[ "$pane_state" == 'terminal|presentation|0' ]] ||
 		die "native game exit did not restore the pane console"
+	pane_shell_pid="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		"$mux_bin" display-message -p -t "$shell_pane_id" '#{pane_pid}')"
+	for _ in {1..150}; do
+		pane_state="$(XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+			"$mux_bin" display-message -p -t "$shell_pane_id" \
+			'#{pane_app_pid}|#{pane_presentation_scope}')"
+		pane_foreground_pid="$(ps -o tpgid= -p "$pane_shell_pid" | tr -d ' ')"
+		[[ "$pane_state" == '|' &&
+			"$pane_foreground_pid" == "$pane_shell_pid" ]] && break
+		sleep 0.02
+	done
+	[[ "$pane_state" == '|' &&
+		"$pane_foreground_pid" == "$pane_shell_pid" ]] ||
+		die "pane shell did not regain foreground ownership before locked game proof"
+	printf -v game_wrapper_command \
+		'ENGINEOS_TMUX_BIN=%q ENGINEOS_LOG_DIR=%q %q pane launch --game -- env WAYLAND_DISPLAY=%q ENGINEOS_WAYLAND_TEST_POINTER_LOG=%q ENGINEOS_WAYLAND_TEST_LOCK_POINTER=1 %q' \
+		"$mux_bin" "$fixture" "$SCRIPT_DIR/app.sh" \
+		"$fixture/$wayland_display" "$fixture/game-pointer-locked.log" \
+		"$fixture/bin/engineos-wayland-presentation-client"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -t "$shell_pane_id" -l "$game_wrapper_command"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		send-keys -t "$shell_pane_id" Enter
+	for _ in {1..150}; do
+		jq -e '.mux.presentation.type == "game" and
+			.mux.presentation.mapped == true and .input.mode == "game" and
+			.input.capture == true and .cursor.locked == true and
+			.cursor.constraint_active == true and
+			.cursor.constraint_type == "locked"' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 &&
+			grep -Fx 'constraint locked' "$fixture/game-pointer-locked.log" \
+				>/dev/null 2>&1 &&
+			grep -F "configured $game_width $game_height" \
+				"$fixture/game-pointer-locked.log" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '.input.capture == true and .cursor.locked == true and
+		.cursor.constraint_active == true and
+		.cursor.constraint_type == "locked" and .cursor.hidden == true' \
+		"$fixture/engineos/shell-state.json" >/dev/null || {
+		cat "$fixture/game-pointer-locked.log" >&2 || true
+		XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+			capture-pane -p -S -80 -t "$shell_pane_id" >&2 || true
+		jq '{input,cursor,windows}' "$fixture/engineos/shell-state.json" >&2 || true
+		tail -100 "$fixture/shell-native.log" >&2 || true
+		die "client-requested locked pointer was not activated and observed"
+	}
+	local locked_x locked_y
+	locked_x=$((game_x + game_width / 2))
+	locked_y=$((game_y + game_height / 2))
+	shell_test_pointer_request \
+		"{\"op\":\"test-pointer-place\",\"x\":$locked_x,\"y\":$locked_y}"
+	shell_test_pointer_request \
+		'{"op":"test-pointer-motion","dx":12,"dy":9}'
+	for _ in {1..100}; do
+		grep -F 'relative 12.00 9.00 12.00 9.00' \
+			"$fixture/game-pointer-locked.log" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	grep -F 'relative 12.00 9.00 12.00 9.00' \
+		"$fixture/game-pointer-locked.log" >/dev/null || {
+		cat "$fixture/game-pointer-locked.log" >&2 || true
+		die "locked game did not receive relative pointer deltas"
+	}
+	jq -e --argjson x "$locked_x" --argjson y "$locked_y" \
+		'.cursor.locked == true and .cursor.x == $x and .cursor.y == $y' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "locked pointer motion moved the compositor cursor"
+	shell_test_pointer_request \
+		"{\"op\":\"test-pointer-absolute\",\"x\":$absolute_x,\"y\":$absolute_y}"
+	jq -e --argjson x "$locked_x" --argjson y "$locked_y" \
+		'.cursor.x == $x and .cursor.y == $y' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "absolute input moved a client-locked compositor cursor"
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		bind-key -n WheelDownStatus next-window
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
+		ENGINEOS_TMUX_BIN="$mux_bin" \
+		"$SCRIPT_DIR/app.sh" pane signal --pane "$shell_pane_id" TERM || true
+	for _ in {1..150}; do
+		jq -e '.mux.presentation.type == "terminal" and
+			.input.mode == "terminal" and .input.capture == false and
+			.cursor.locked == false and .cursor.constraint_active == false' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '.mux.presentation.type == "terminal" and
+		.input.capture == false and .cursor.constraint_active == false' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "locked game exit did not release pointer capture and constraint"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" \
 		ENGINEOS_TMUX_BIN="$mux_bin" \
 		"$SCRIPT_DIR/app.sh" pane respawn --pane "$shell_pane_id"
@@ -2251,6 +2488,16 @@ PY
 		tail -100 "$fixture/shell-native.log" >&2 || true
 		die "native game respawn exit did not restore terminal input"
 	fi
+	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
+		resize-pane -Z -t "$shell_pane_id"
+	for _ in {1..150}; do
+		jq -e '([.mux.panes[] | select(.visible)] | length) == 2' \
+			"$fixture/engineos/shell-state.json" >/dev/null 2>&1 && break
+		sleep 0.02
+	done
+	jq -e '([.mux.panes[] | select(.visible)] | length) == 2' \
+		"$fixture/engineos/shell-state.json" >/dev/null ||
+		die "Wargus capture proof did not restore the split-pane layout"
 	XDG_RUNTIME_DIR="$fixture" TMUX_TMPDIR="$fixture" "$mux_bin" \
 		list-clients -F '#{client_name} #{client_flags}' \
 		>"$fixture/graphical-clients.txt"
