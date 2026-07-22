@@ -18,6 +18,7 @@
 /*engineos-release-*/
 /*.log
 /.agent-insights/out/
+/.agent-insights/archive/
 /.agent-insights/backfill/
 /.agent-insights/runs/
 

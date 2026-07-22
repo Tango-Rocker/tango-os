@@ -116,6 +116,18 @@ For local observability of agent work:
 ./tools/engineos/eos-observe tail --last 20
 ```
 
+For recurring workflow-cost review, use the bounded project supervisor rather
+than opening raw historical sessions in the active task:
+
+```bash
+./tools/engineos/eos-agent supervisor status --root /home/dev/Tang-OS --json
+./tools/engineos/eos-test agent-supervisor
+```
+
+The supervisor seeds existing sessions as a baseline and reviews one bounded
+chunk from each group of five new completed sessions. Its reviewer-token total
+must be reported alongside any claimed reduction.
+
 Session records are not part of the default work loop. When a user asks for
 one, read [../agentd.md](../agentd.md) for the archive path and writing style,
 then write only the focused handoff record needed for that session.

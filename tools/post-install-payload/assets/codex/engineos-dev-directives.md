@@ -28,6 +28,10 @@ Default workflow:
 9. The `codex-extractor` checkout provides pinned `codex-insights 0.2.0` with
    `gpt-5.6-luna` at medium reasoning. Managed setup installs it in an isolated
    user environment; verify it with `codex-insights --version`.
+10. The Tang-OS project supervisor overrides that interactive default with a
+    bounded `gpt-5.4-mini` low-reasoning review after every five completed
+    sessions. Inspect its token baseline and reviewer overhead with
+    `eos-agent supervisor status --root /home/dev/Tang-OS --json`.
 
 Codex CLI authentication is intentionally not automated. Run `codex` once after
 deploy and authenticate with the intended ChatGPT or API-key account.

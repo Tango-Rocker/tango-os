@@ -58,6 +58,7 @@ Use this before opening broad docs.
 | Find the next useful move | [CURRENT_STATUS.md](CURRENT_STATUS.md) | [ROADMAP.md](ROADMAP.md) |
 | Understand sprint scope | [ROADMAP.md](ROADMAP.md) | [docs/mvp-plan.md](docs/mvp-plan.md) |
 | Run agent workflow safely | [docs/agent-harness.md](docs/agent-harness.md) | [docs/agent-workflow.md](docs/agent-workflow.md) |
+| Review token cost and recurring workflow waste | [management/INDEX.md](management/INDEX.md) | `eos-agent supervisor status --root /home/dev/Tang-OS --json` |
 | Route broad agent work | [docs/agent-roles.md](docs/agent-roles.md) | `.agents/roles/*/AGENTS.md` |
 | Inspect agent roles | [docs/agent-roles.md](docs/agent-roles.md) | `eos-agent list` |
 | Clean agent-pack drift | [.agents/skills/cleaner/SKILL.md](.agents/skills/cleaner/SKILL.md) | `eos-agent hygiene check` |
@@ -83,6 +84,7 @@ builder, and generated-image paths are legacy/reference-only:
 ./tools/engineos/eos-doctor
 ./tools/engineos/eos-source-test agent
 ./tools/engineos/eos-agent hygiene check
+./tools/engineos/eos-agent supervisor status --root /home/dev/Tang-OS --json
 ./tools/engineos/eos-ci local --package engineos-tools --test agent --install --clean-generated --no-validate-repo
 ./tools/engineos/eos-preflight all
 ./tools/engineos/eos-lint packages

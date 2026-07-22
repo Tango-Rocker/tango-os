@@ -29,6 +29,7 @@ Usage: test_runner.sh [smoke|all]
        test_runner.sh agent-hygiene
        test_runner.sh observability
 	   test_runner.sh agent-route
+	   test_runner.sh agent-supervisor
 	   test_runner.sh dev-workflow
        test_runner.sh compositor --headless
        test_runner.sh screencopy
@@ -89,6 +90,7 @@ run_all() {
   run_all_step agent-hygiene
   run_all_step observability
 	run_all_step agent-route
+	run_all_step agent-supervisor
 	run_all_step dev-workflow
   run_all_step shell-actions
 	run_all_step mux
@@ -3103,7 +3105,8 @@ EOF
 run_agent() {
 	"$SCRIPT_DIR/preflight.sh" repo --package engineos-tools >/dev/null
 	"$SCRIPT_DIR/package_lint.sh" --package engineos-tools >/dev/null
-	python -m py_compile "$SCRIPT_DIR/agent_router.py" "$SCRIPT_DIR/agent_hygiene.py"
+	python -m py_compile "$SCRIPT_DIR/agent_router.py" "$SCRIPT_DIR/agent_hygiene.py" \
+		"$SCRIPT_DIR/agent_supervisor.py"
 	"$ROOT/tools/engineos/eos-agent" hygiene check >/dev/null
 	"$ROOT/tools/engineos/eos-agent" list | grep -Fx oracle >/dev/null ||
 		die "structured agent router did not list oracle"
@@ -3113,6 +3116,11 @@ run_agent() {
 		[[ -f "$ROOT/.agents/roles/$role/AGENTS.md" ]] || die "missing role doc: $role"
 		[[ -f "$ROOT/.agents/skills/$role/SKILL.md" ]] || die "missing role skill: $role"
 	done
+	[[ -f "$ROOT/management/agents/project-overseer-harness-agent.md" ]] ||
+		die "missing project-overseer management role doc"
+	[[ -f "$ROOT/.agents/skills/project-overseer/SKILL.md" ]] ||
+		die "missing project-overseer skill"
+	"$MODULE_DIR/test_runner.sh" agent-supervisor
 	printf 'agent harness smoke test passed\n'
 }
 
@@ -3155,7 +3163,136 @@ run_agent_route() {
 	grep -F 'role=admin-shell' "$out" >/dev/null || die "router did not select admin-shell"
 	"$ROOT/tools/engineos/eos-agent" route "clean up stale role docs" >"$out"
 	grep -F 'role=cleaner' "$out" >/dev/null || die "router did not select cleaner"
+	"$ROOT/tools/engineos/eos-agent" route "reduce recurring workflow token cost" >"$out"
+	grep -F 'role=project-overseer' "$out" >/dev/null ||
+		die "router did not select project-overseer for token cost"
 	printf 'agent route smoke test passed\n'
+}
+
+run_agent_supervisor() {
+	local tmp_dir="${TMPDIR:-/tmp}/engineos-agent-supervisor-$$"
+	local fixture="$tmp_dir/project"
+	local codex_home="$tmp_dir/codex"
+	local supervisor="$ROOT/tools/scripts/agent_supervisor.py"
+	local fake_extractor="$tmp_dir/codex-insights"
+	local out="$tmp_dir/out.json"
+	trap 'rm -rf "$tmp_dir"' RETURN
+	mkdir -p "$fixture/.agents" "$codex_home/sessions/2026/07/22"
+	git init -q "$fixture"
+	cat >"$fixture/.agents/supervisor.toml" <<'EOF'
+schema = "engineos-agent-supervisor-v1"
+project = "project"
+state_dir = ".agent-insights/out/supervisor"
+report_name = ".agent-insights/out/supervisor/latest-report.md"
+since_days = 30
+quiet_seconds = 0
+trigger_every = 5
+chunk_lines = 160
+max_chunks = 1
+model = "test-model"
+reasoning_effort = "low"
+
+[budget]
+recent_sessions = 5
+max_total_tokens_per_session = 1000
+max_uncached_input_tokens_per_session = 500
+max_output_tokens_per_session = 200
+max_compactions_per_session = 2
+EOF
+	cat >"$tmp_dir/write-session.py" <<'PY'
+import datetime, json, os, pathlib, sys, time
+root, project, session_id, tokens, started_offset = sys.argv[1:]
+path = pathlib.Path(root) / f"{session_id}.jsonl"
+started = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=int(started_offset))
+events = [
+    {"type": "session_meta", "payload": {"id": session_id, "cwd": project, "timestamp": started.isoformat()}},
+    {"type": "turn_context", "payload": {"model": "test-model"}},
+    {"type": "response_item", "payload": {"text": "SECRET-PROMPT-MUST-NOT-LEAK"}},
+    {"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {
+        "input_tokens": int(tokens), "cached_input_tokens": int(tokens) // 2,
+        "output_tokens": 100, "reasoning_output_tokens": 25,
+        "total_tokens": int(tokens) + 100}}}},
+]
+path.write_text("".join(json.dumps(item) + "\n" for item in events), encoding="utf-8")
+old = time.time() - 60
+os.utime(path, (old, old))
+PY
+	python "$tmp_dir/write-session.py" "$codex_home/sessions/2026/07/22" "$fixture" baseline-1 800 -120
+	python "$tmp_dir/write-session.py" "$codex_home/sessions/2026/07/22" "$fixture" baseline-2 900 -60
+	cat >"$fake_extractor" <<'PY'
+#!/usr/bin/env python3
+import json, os, pathlib, sys
+if os.environ.get("ENGINEOS_FAKE_EXTRACTOR_MARKER"):
+    pathlib.Path(os.environ["ENGINEOS_FAKE_EXTRACTOR_MARKER"]).write_text("called\n", encoding="utf-8")
+if os.environ.get("ENGINEOS_FAKE_EXTRACTOR_FAIL"):
+    raise SystemExit(17)
+args = sys.argv[1:]
+def value(flag): return args[args.index(flag) + 1]
+required = {"--trigger-every": "5", "--chunk-lines": "160", "--max-chunks": "1", "--reasoning-effort": "low"}
+for flag, expected in required.items():
+    if value(flag) != expected: raise SystemExit(f"{flag} was not bounded: {value(flag)}")
+if "--no-archive-raw" not in args or "--once" not in args: raise SystemExit("safe one-shot flags missing")
+home = pathlib.Path(value("--codex-home"))
+seen_path = pathlib.Path(value("--seen-file"))
+out_dir = pathlib.Path(value("--out-dir"))
+seen = set(seen_path.read_text(encoding="utf-8").splitlines()) if seen_path.exists() else set()
+found = []
+for path in home.rglob("*.jsonl"):
+    for line in path.read_text(encoding="utf-8").splitlines():
+        item = json.loads(line)
+        if item.get("type") == "session_meta":
+            found.append(item["payload"]["id"])
+            break
+new = sorted(set(found) - seen)
+seen_path.write_text("".join(f"{item}\n" for item in sorted(seen | set(new))), encoding="utf-8")
+if len(new) >= 5:
+    report = pathlib.Path.cwd() / value("--report-name")
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text("# bounded review\n", encoding="utf-8")
+    output = out_dir / "archive/project/analysis/1/reviews/001/codex-output.txt"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("tokens used\n1,234\n", encoding="utf-8")
+print(f"processed {len(new)}")
+PY
+	chmod +x "$fake_extractor"
+	CODEX_HOME="$codex_home" python "$supervisor" status --root "$fixture" --json >"$out"
+	jq -e '.configured == true and .initialized == false' "$out" >/dev/null ||
+		die "uninitialized supervisor status was not explicit"
+	CODEX_HOME="$codex_home" ENGINEOS_CODEX_INSIGHTS_BIN="$fake_extractor" \
+		ENGINEOS_FAKE_EXTRACTOR_MARKER="$tmp_dir/extractor-called" \
+		python "$supervisor" init --root "$fixture" --json >"$out"
+	jq -e '.result == "baseline-initialized" and .state.baseline_sessions == 2 and
+		.metrics.reviewer_tokens_used == 0' "$out" >/dev/null ||
+		die "supervisor did not seed a zero-review baseline"
+	[[ ! -e "$tmp_dir/extractor-called" ]] ||
+		die "supervisor baseline unexpectedly invoked the reviewer"
+	for number in 1 2 3 4 5; do
+		python "$tmp_dir/write-session.py" "$codex_home/sessions/2026/07/22" \
+			"$fixture" "new-$number" "$((1000 + number))" "$number"
+	done
+	CODEX_HOME="$codex_home" ENGINEOS_CODEX_INSIGHTS_BIN="$fake_extractor" \
+		ENGINEOS_FAKE_EXTRACTOR_MARKER="$tmp_dir/extractor-called" \
+		python "$supervisor" run --root "$fixture" --json >"$out"
+	jq -e '.result == "review-generated" and .processed == 5 and
+		.report_changed == true and .reviewer_tokens_used == 1234 and
+		.state.review_runs == 1 and .metrics.post_baseline_ready == true' \
+		"$out" >/dev/null || die "five completed sessions did not produce one bounded review"
+	[[ -f "$tmp_dir/extractor-called" ]] ||
+		die "supervisor did not invoke the extractor for new sessions"
+	if rg -n 'SECRET-PROMPT-MUST-NOT-LEAK|baseline-1|new-1' \
+			"$fixture/.agent-insights/out/supervisor/token-metrics.json" >/dev/null; then
+		die "supervisor token ledger stored raw session content or identifiers"
+	fi
+	python "$tmp_dir/write-session.py" "$codex_home/sessions/2026/07/22" "$fixture" failed-1 1200 10
+	if CODEX_HOME="$codex_home" ENGINEOS_CODEX_INSIGHTS_BIN="$fake_extractor" \
+			ENGINEOS_FAKE_EXTRACTOR_FAIL=1 python "$supervisor" run --root "$fixture" \
+			>"$tmp_dir/failed.out" 2>&1; then
+		die "supervisor treated extractor failure as success"
+	fi
+	jq -e '.last_result == "failed" and (.last_error | contains("exited 17"))' \
+		"$fixture/.agent-insights/out/supervisor/state.json" >/dev/null ||
+		die "supervisor did not preserve extractor failure state"
+	printf 'agent supervisor contract test passed\n'
 }
 
 run_installed_preflight() {
@@ -5589,6 +5726,9 @@ case "$SCOPE" in
     ;;
 	agent-route)
 		run_agent_route
+		;;
+	agent-supervisor)
+		run_agent_supervisor
 		;;
 	dev-workflow)
 		run_dev_workflow

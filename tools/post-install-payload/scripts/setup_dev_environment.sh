@@ -434,6 +434,33 @@ install_codex_insights() {
     die "unexpected codex-insights version after install: $actual"
 }
 
+configure_agent_supervisor() {
+  "$RUN_DEV_REPOS" || {
+    log "skip agent supervisor timer because helper repos were skipped"
+    return 0
+  }
+  local home user_id runtime_dir
+  home="$(user_home "$TARGET_USER")"
+  [[ -n "$home" ]] || die "cannot find home for user: $TARGET_USER"
+  user_id="$(id -u "$TARGET_USER")"
+  runtime_dir="/run/user/$user_id"
+
+  if [[ ! -f /usr/lib/systemd/user/engineos-agent-supervisor.timer ]]; then
+    die "engineos-agent-supervisor.timer is unavailable after package setup"
+  fi
+  if [[ ! -S "$runtime_dir/bus" ]]; then
+    log "user manager unavailable; supervisor timer will be enabled on the next managed refresh"
+    return 0
+  fi
+  run_as_user "$TARGET_USER" env HOME="$home" XDG_RUNTIME_DIR="$runtime_dir" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime_dir/bus" \
+    systemctl --user daemon-reload
+  run_as_user "$TARGET_USER" env HOME="$home" XDG_RUNTIME_DIR="$runtime_dir" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime_dir/bus" \
+    systemctl --user enable --now engineos-agent-supervisor.timer
+  log "enabled bounded Codex session supervisor timer"
+}
+
 validate_setup() {
   local failures=0
 
@@ -483,7 +510,7 @@ validate_setup() {
   fi
 
   if "$RUN_DEV_REPOS"; then
-    local home repo insight_version
+    local home repo insight_version user_id runtime_dir
     home="$(user_home "$TARGET_USER")"
     for repo in codex-extractor opencode-autonomy quake-generator skills; do
       if [[ -d "${ENGINEOS_DEV_REPO_DIR:-$home}/$repo/.git" ]]; then
@@ -500,6 +527,20 @@ validate_setup() {
     else
       log "FAIL codex-insights version: ${insight_version:-missing}"
       failures=$((failures + 1))
+    fi
+    user_id="$(id -u "$TARGET_USER")"
+    runtime_dir="/run/user/$user_id"
+    if [[ -S "$runtime_dir/bus" ]]; then
+      if run_as_user "$TARGET_USER" env HOME="$home" XDG_RUNTIME_DIR="$runtime_dir" \
+          DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime_dir/bus" \
+          systemctl --user is-enabled engineos-agent-supervisor.timer >/dev/null 2>&1; then
+        log "OK timer: engineos-agent-supervisor.timer enabled"
+      else
+        log "FAIL timer disabled: engineos-agent-supervisor.timer"
+        failures=$((failures + 1))
+      fi
+    else
+      log "WARN user manager unavailable; supervisor timer enablement not live-validated"
     fi
   fi
 
@@ -576,6 +617,7 @@ configure_dev_shell_autostart
 install_codex
 install_dev_repos
 install_codex_insights
+configure_agent_supervisor
 validate_setup
 
 log "post-first-deploy setup completed"

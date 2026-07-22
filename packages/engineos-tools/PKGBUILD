@@ -1,6 +1,6 @@
 pkgname=engineos-tools
 pkgver=0.1.0
-pkgrel=69
+pkgrel=70
 pkgdesc="EngineOS command, proof, agent, and observability tools"
 arch=('any')
 url="https://example.invalid/engineos"
@@ -45,6 +45,12 @@ package() {
   install -Dm644 \
     "$_engineos_root/tools/post-install-payload/assets/systemd/chroma-worker.service" \
     "$pkgdir/usr/lib/systemd/user/chroma-worker.service"
+  install -Dm644 \
+    "$_engineos_root/tools/post-install-payload/assets/systemd/engineos-agent-supervisor.service" \
+    "$pkgdir/usr/lib/systemd/user/engineos-agent-supervisor.service"
+  install -Dm644 \
+    "$_engineos_root/tools/post-install-payload/assets/systemd/engineos-agent-supervisor.timer" \
+    "$pkgdir/usr/lib/systemd/user/engineos-agent-supervisor.timer"
   install -Dm755 "$_engineos_root/tools/scripts/recovery_help.sh" \
     "$pkgdir/usr/bin/engineos-recovery-help"
   install -Dm755 "$_engineos_root/tools/engineos/eos-wrapper" "$pkgdir/usr/lib/engineos/eos-wrapper"
@@ -72,6 +78,7 @@ package() {
   install -Dm644 "$_engineos_root/ROADMAP.md" "$pkgdir/usr/share/engineos/ROADMAP.md"
   install -Dm644 "$_engineos_root/.codex/config.toml" "$pkgdir/usr/share/engineos/.codex/config.toml"
   cp -a "$_engineos_root/docs" "$pkgdir/usr/share/engineos/docs"
+  cp -a "$_engineos_root/management" "$pkgdir/usr/share/engineos/management"
   cp -a "$_engineos_root/.agents" "$pkgdir/usr/share/engineos/.agents"
   install -Dm755 "$_engineos_root/tools/hooks/git_pre_push_deploy.sh" "$pkgdir/usr/share/engineos/tools/hooks/git_pre_push_deploy.sh"
   install -Dm755 "$_engineos_root/tools/hooks/install_git_push_deploy_hook.sh" "$pkgdir/usr/share/engineos/tools/hooks/install_git_push_deploy_hook.sh"

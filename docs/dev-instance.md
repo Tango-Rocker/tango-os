@@ -10,6 +10,7 @@ The development user should have:
 
 - current Codex CLI, installed through its detected managed install path
 - `codex-extractor` checkout and pinned `codex-insights 0.2.0` command
+- bounded project-overseer timer with metadata-only token accounting
 - `opencode-autonomy`, `quake-generator`, and shared `skills` checkouts
 - the EngineOS system tmux fork with restart-safe text and graphical clients
 - zsh and packaged shell plugins
@@ -102,6 +103,8 @@ tmux list-clients -F '#{client_tty} #{session_name} #{pane_id}'
 docker info
 codex --version
 codex-insights --version
+eos-agent supervisor status --root /home/dev/Tang-OS --json
+systemctl --user status engineos-agent-supervisor.timer
 eos-agent hygiene check
 eos-app manifest validate
 eos-app pane list --json

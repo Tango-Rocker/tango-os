@@ -428,6 +428,9 @@ cmd_agent() {
 			[[ "$target" != capability ]] || target=capabilities
 			exec python "$(script agent_router.py)" "$target" "$@"
 			;;
+		supervisor)
+			exec python "$(script agent_supervisor.py)" "$@"
+			;;
 		hygiene)
 			exec python "$(script agent_hygiene.py)" "$@"
       ;;
@@ -439,6 +442,7 @@ Usage:
 	  eos-agent show <role>
 	  eos-agent capabilities
 	  eos-agent hygiene check [--json] [--fix-plan]
+	  eos-agent supervisor <init|run|status> [--root path] [--json]
 HELP
       ;;
     *)
