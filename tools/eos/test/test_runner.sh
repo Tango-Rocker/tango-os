@@ -3406,6 +3406,9 @@ FAKE
   for command in xdg-mime xdg-settings update-desktop-database; do
     cat >"$tmp_dir/$command" <<'FAKE'
 #!/usr/bin/env bash
+if [[ "${0##*/}" == xdg-settings && -n "${BROWSER:-}" ]]; then
+  exit 42
+fi
 printf '%s:%s\n' "${0##*/}" "$*" >>"$ENGINEOS_FAKE_BROWSER_CONFIG"
 FAKE
     chmod +x "$tmp_dir/$command"
@@ -3415,6 +3418,7 @@ FAKE
     ENGINEOS_XDG_SETTINGS_BIN="$tmp_dir/xdg-settings" \
     ENGINEOS_UPDATE_DESKTOP_DATABASE_BIN="$tmp_dir/update-desktop-database" \
     ENGINEOS_FAKE_BROWSER_CONFIG="$tmp_dir/browser-config.log" \
+    BROWSER=/usr/bin/engineos-browser-open \
     ENGINEOS_TMUX_CMD=/bin/false \
     "$SCRIPT_DIR/shell_runner.sh" refresh-user \
     >"$tmp_dir/refresh-user-live.out"

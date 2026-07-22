@@ -487,7 +487,8 @@ run_refresh_user() {
         return 1
       fi
     done
-    if ! HOME="$USER_HOME" XDG_CONFIG_HOME="$user_config_home" \
+    if ! env -u BROWSER HOME="$USER_HOME" \
+        XDG_CONFIG_HOME="$user_config_home" \
         XDG_DATA_HOME="$user_data_home" \
         "$xdg_settings_cmd" set default-web-browser "$browser_desktop_id"; then
       printf '  result:     failed reason=default-browser-registration-failed\n'

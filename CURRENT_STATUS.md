@@ -153,7 +153,7 @@ correction and is installed on tty1:
 
 Installed package revisions are `engineos-config 0.1.0-10`,
 `engineos-mux 3.6b-44`, `engineos-shell 0.1.0-84`,
-`engineos-tools 0.1.0-68`, and `engineos-mc 4.8.33-1`. The native mux contract,
+`engineos-tools 0.1.0-69`, and `engineos-mc 4.8.33-1`. The native mux contract,
 image-preview test, app/Chroma/Spotify test, and all shell Meson renderer/theme
 tests pass. The mux proof also covers the transient-systemd-scope respawn race:
 scope signals reconcile the short registration window, and accepted TERM/KILL
@@ -261,6 +261,14 @@ targets Falkon at its new pane. A live pending-auth proof kept Spotify PID
 89581 alive in pane `%10` while the exact Spotify authorization request mapped
 Falkon in pane `%13` under `engine-pane-695-13-1.scope`. Runtime validation used
 process, pane, and presentation state only; no log contents were read.
+
+The first publication attempt after that change exposed a deploy-hook ordering
+bug: the managed `BROWSER` value was already present when `xdg-settings` tried
+to register the same desktop handler, and xdg-utils refuses that combination.
+`engineos-tools 0.1.0-69` removes `BROWSER` only from the registration command;
+the managed zsh and tmux values remain installed for application launches. The
+shell-action contract now reproduces the real environment and fails if the
+registration subprocess inherits `BROWSER`.
 
 The 2026-07-21 Wargus pointer report exposed a shell ownership error at the
 1920x1056 game boundary: captured motion reached the tmux status-row hit test
