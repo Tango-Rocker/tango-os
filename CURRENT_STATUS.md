@@ -153,7 +153,7 @@ correction and is installed on tty1:
 
 Installed package revisions are `engineos-config 0.1.0-10`,
 `engineos-mux 3.6b-45`, `engineos-shell 0.1.0-84`,
-`engineos-tools 0.1.0-69`, and `engineos-mc 4.8.33-1`. The native mux contract,
+`engineos-tools 0.1.0-71`, and `engineos-mc 4.8.33-1`. The native mux contract,
 image-preview test, app/Chroma/Spotify test, and all shell Meson renderer/theme
 tests pass. The mux proof also covers the transient-systemd-scope respawn race:
 scope signals reconcile the short registration window, and accepted TERM/KILL
