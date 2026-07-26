@@ -1,6 +1,6 @@
 pkgname=engineos-chatgpt
 pkgver=0.1.0
-pkgrel=3
+pkgrel=4
 pkgdesc="Single-purpose hardware-accelerated WPE WebKit client for ChatGPT OAuth"
 arch=('x86_64')
 url="https://example.invalid/engineos"

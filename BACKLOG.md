@@ -50,6 +50,16 @@ real mapped Qt surface and captured evidence.
 Likely phase: current shell PoC, after screen capture or another accepted visual
 evidence path exists.
 
+### WPE Hidden-Presentation Abort
+
+Why: a long-lived ChatGPT WPE client aborted inside `libWPEWebKit-2.0` while
+its native pane presentation was hidden. The coredump is retained for PID
+557039; OAuth revision 4 succeeds in a fresh client, so investigate the hidden
+surface/frame lifetime separately instead of conflating it with authentication.
+
+Likely phase: desktop reliability follow-up after the authenticated ChatGPT
+path is published.
+
 ### Boot Validation Cleanup
 
 Why: the active AMD shell reports radeonsi hardware rendering, while the broad

@@ -318,7 +318,7 @@ runtime guard until that server is next restarted onto revision 45.
 ## ChatGPT WPE OAuth Experiment
 
 The 2026-07-26 fixed-purpose browser experiment is installed as
-`engineos-chatgpt 0.1.0-3` with `engineos-config 0.1.0-11` and
+`engineos-chatgpt 0.1.0-4` with `engineos-config 0.1.0-11` and
 `engineos-tools 0.1.0-73`. It uses WPE WebKit 2.52.4 as a shell-owned Wayland
 client and launches through `eos-app launch chatgpt`; `--login` opens only
 ChatGPT's dedicated login route. Arbitrary URLs, downloads, and device
@@ -351,6 +351,17 @@ entry. It also shows that Falkon's `_falkon_external` cross-origin console
 message is browser-integration behavior rather than a Google server rejection;
 the remaining Falkon failure is isolated to its QtWebEngine/Falkon path, not
 the EngineOS compositor, network, or Google account endpoint.
+
+The first full credential/MFA pass exposed one locale-specific callback gap:
+Google returned through `accounts.google.com.ar/accounts/SetSID`, while the
+initial policy admitted only the `google.com` family. The client rejected that
+response, interrupted the frame, and remained on a blank Google `CheckCookie`
+page. Revision 4 admits only the observed `google.com.ar` family and adds both
+positive and suffix-confusion policy tests. With the same persistent profile,
+the live replay completed Google OAuth, loaded OpenAI's authenticator challenge
+with status 200, returned to `https://chatgpt.com/` with status 200, and rendered
+the authenticated ChatGPT conversation UI. URL query/fragment redaction,
+bubblewrap sandboxing, and the rest of the fixed-purpose policy remain active.
 
 ## Remaining Acceptance Work
 
