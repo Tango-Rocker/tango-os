@@ -331,10 +331,9 @@ not retained in pane scrollback.
 The live bare-metal proof loaded `https://chatgpt.com/auth/login` with status
 200, rendered the real ChatGPT login UI, focused `Continue with Google` through
 the compositor's normal keyboard path, and reached Google's identifier page at
-`accounts.google.com` with status 200. The visible Google page says `Sign in`
-and `to continue to OpenAI`; no account identifier or credential was entered.
-The final frame is recorded at
-`artifacts/captures/shell-20260726T044525Z.png`.
+`accounts.google.com` with status 200. The later end-to-end replay is the
+current acceptance evidence; the initial unauthenticated capture is retained
+only as historical boundary proof.
 
 WPE's sandbox remains enabled: the live web processes run below bubblewrap.
 The UI process owns the DRM card node, web processes own
@@ -362,6 +361,9 @@ the live replay completed Google OAuth, loaded OpenAI's authenticator challenge
 with status 200, returned to `https://chatgpt.com/` with status 200, and rendered
 the authenticated ChatGPT conversation UI. URL query/fragment redaction,
 bubblewrap sandboxing, and the rest of the fixed-purpose policy remain active.
+After the deploy-on-push shell restart, a normal `eos-app launch chatgpt`
+reopened that persistent signed-in profile on the main presentation pane without
+another Google or OpenAI challenge.
 
 ## Remaining Acceptance Work
 
