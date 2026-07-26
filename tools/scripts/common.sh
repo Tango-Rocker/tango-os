@@ -151,6 +151,7 @@ engineos_packages() {
   printf '%s\n' \
     engineos-tools \
     engineos-config \
+    engineos-chatgpt \
     engineos-mc \
     engineos-dgen \
     engineos-oh-my-zsh \

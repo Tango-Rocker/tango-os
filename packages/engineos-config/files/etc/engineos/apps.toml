@@ -59,6 +59,21 @@ input = "normal"
 capture = "none"
 instance = "dedicated"
 
+[apps.chatgpt]
+slot = "pane"
+role = "presentation"
+command = "eos-app launch chatgpt"
+commands = ["chatgpt"]
+launch_mode = "pane-wayland"
+argv = ["/usr/bin/engineos-chatgpt"]
+package = "engineos-chatgpt"
+app_ids = ["com.engineos.ChatGPT", "engineos-chatgpt"]
+log = "app.log"
+health = "webauthn-and-pane-presentation"
+input = "normal"
+capture = "none"
+instance = "dedicated"
+
 [apps.chroma]
 slot = "pane"
 role = "presentation"

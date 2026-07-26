@@ -196,6 +196,12 @@ check_package_inputs() {
         fail "eos app manifest validation failed"
       fi
       ;;
+    engineos-chatgpt)
+      require_file "apps/chatgpt-wpe/meson.build"
+      require_file "apps/chatgpt-wpe/README.md"
+      require_file "apps/chatgpt-wpe/src/engineos-chatgpt.c"
+      require_file "packages/engineos-chatgpt/PKGBUILD"
+      ;;
     engineos-tools)
       require_file "tools/engineos/eos"
       require_file "tools/engineos/engineos"

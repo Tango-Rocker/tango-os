@@ -3533,6 +3533,7 @@ run_app() {
   local wrapper_out="$tmp_dir/wargus-wrapper.out"
   local fake_systemctl="$tmp_dir/systemctl"
   local fake_chroma="$tmp_dir/chroma-launcher-client"
+  local fake_chatgpt="$tmp_dir/engineos-chatgpt"
   local direct_manifest="$tmp_dir/apps.toml"
   cleanup_app() {
     if [[ -n "$socket_pid" ]]; then
@@ -3564,20 +3565,28 @@ FAKE
 #!/usr/bin/env bash
 exit 0
 FAKE
+  cat >"$fake_chatgpt" <<'FAKE'
+#!/usr/bin/env bash
+exit 0
+FAKE
   chmod +x "$fake_tmux" "$fake_wargus_launcher" "$fake_systemctl" \
-    "$fake_chroma"
+    "$fake_chroma" "$fake_chatgpt"
 
   ENGINEOS_APPS_MANIFEST="$ROOT/packages/engineos-config/files/etc/engineos/apps.toml" \
     "$SCRIPT_DIR/app.sh" manifest validate >"$manifest_out"
   grep -F 'OK   wargus.app_ids contains stratagus' "$manifest_out" >/dev/null ||
     die "app manifest did not validate the Stratagus app id"
+  grep -F 'OK   chatgpt.app_ids contains com.engineos.ChatGPT' \
+    "$manifest_out" >/dev/null ||
+    die "app manifest did not validate the ChatGPT WPE app id"
   grep -F 'App manifest validation summary: 0 failure(s)' "$manifest_out" >/dev/null ||
     die "source app manifest validation did not pass"
 
   ENGINEOS_APPS_MANIFEST="$ROOT/packages/engineos-config/files/etc/engineos/apps.toml" \
     ENGINEOS_APP_SHIM_DIR="$tmp_dir/bin" \
     "$ROOT/tools/engineos/engineos-app-shims" >/dev/null
-  [[ -x "$tmp_dir/bin/falkon" && -x "$tmp_dir/bin/chroma" ]] ||
+  [[ -x "$tmp_dir/bin/falkon" && -x "$tmp_dir/bin/chatgpt" &&
+      -x "$tmp_dir/bin/chroma" ]] ||
     die "manifest command shims were not generated"
   cat >"$tmp_dir/bin/eos-app" <<'FAKE'
 #!/usr/bin/env bash
@@ -3590,6 +3599,12 @@ FAKE
     grep -Fx '<falkon>' "$tmp_dir/shim.log" >/dev/null &&
     grep -Fx '<Space Name>' "$tmp_dir/shim.log" >/dev/null ||
     die "direct app shim did not preserve arguments"
+  PATH="$tmp_dir/bin:$PATH" ENGINEOS_FAKE_SHIM_LOG="$tmp_dir/shim.log" \
+    "$tmp_dir/bin/chatgpt" --probe-web-authn
+  grep -Fx '<launch>' "$tmp_dir/shim.log" >/dev/null &&
+    grep -Fx '<chatgpt>' "$tmp_dir/shim.log" >/dev/null &&
+    grep -Fx '<--probe-web-authn>' "$tmp_dir/shim.log" >/dev/null ||
+    die "ChatGPT app shim did not preserve the WebAuthn probe option"
 
   WAYLAND_DISPLAY=engineos-test-wayland TMUX_PANE=%9 \
     ENGINEOS_TMUX_BIN="$fake_tmux" ENGINEOS_FAKE_TMUX_LOG="$log" \
@@ -3686,6 +3701,20 @@ PY
   cp "$ROOT/packages/engineos-config/files/etc/engineos/apps.toml" "$direct_manifest"
   sed -i "s#\\[\"/usr/bin/chroma-launcher-client\"\\]#[\"$fake_chroma\"]#" \
     "$direct_manifest"
+  sed -i "s#\\[\"/usr/bin/engineos-chatgpt\"\\]#[\"$fake_chatgpt\"]#" \
+    "$direct_manifest"
+  : >"$log"
+  WAYLAND_DISPLAY=engineos-test-wayland TMUX_PANE=%9 \
+    ENGINEOS_TMUX_BIN="$fake_tmux" ENGINEOS_FAKE_TMUX_LOG="$log" \
+    ENGINEOS_STATE_DIR="$tmp_dir/state" ENGINEOS_LOG_DIR="$tmp_dir/log" \
+    ENGINEOS_APPS_MANIFEST="$direct_manifest" \
+    "$SCRIPT_DIR/app.sh" launch chatgpt
+  grep -F 'launch-pane-app -t %9 -- env -u DISPLAY' "$log" >/dev/null &&
+    grep -F 'WAYLAND_DISPLAY=engineos-test-wayland' "$log" >/dev/null &&
+    grep -F "$fake_chatgpt" "$log" >/dev/null ||
+    die "manifest ChatGPT launch did not forward Wayland or use absolute dispatch"
+
+  : >"$log"
   WAYLAND_DISPLAY=engineos-test-wayland TMUX_PANE=%9 \
     ENGINEOS_TMUX_BIN="$fake_tmux" ENGINEOS_FAKE_TMUX_LOG="$log" \
     ENGINEOS_SYSTEMCTL_BIN="$fake_systemctl" \
@@ -3816,6 +3845,8 @@ PY
     die "named Wargus app did not request a native game presentation"
   grep -F '"wargus":"launch-requested"' "$status_out" >/dev/null ||
     die "app status did not report the Wargus launch request"
+  grep -F '"chatgpt":"launch-requested"' "$status_out" >/dev/null ||
+    die "app status did not report the ChatGPT launch request"
   ! rg -n 'launch.token|pane-(launch|focus|geometry|unbind)|terminal-register|ENGINEOS_MUX_MODE' \
     "$ROOT/tools/scripts/app.sh" >/dev/null ||
     die "app wrapper retains rollback transport"

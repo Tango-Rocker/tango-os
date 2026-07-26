@@ -315,6 +315,43 @@ is installed. The retained revision-44 tmux server remains PID 695 so its live
 panes were not disrupted; its `C-b C-z` binding is unbound as a reversible
 runtime guard until that server is next restarted onto revision 45.
 
+## ChatGPT WPE OAuth Experiment
+
+The 2026-07-26 fixed-purpose browser experiment is installed as
+`engineos-chatgpt 0.1.0-3` with `engineos-config 0.1.0-11` and
+`engineos-tools 0.1.0-73`. It uses WPE WebKit 2.52.4 as a shell-owned Wayland
+client and launches through `eos-app launch chatgpt`; `--login` opens only
+ChatGPT's dedicated login route. Arbitrary URLs, downloads, and device
+permissions are rejected, while persistent cookies and credential storage use
+a private EngineOS ChatGPT profile. Accepted top-level navigation is restricted
+to HTTPS ChatGPT, OpenAI, and Google authentication domain families, and logs
+omit URL queries and fragments so OAuth state, nonce, and callback codes are
+not retained in pane scrollback.
+
+The live bare-metal proof loaded `https://chatgpt.com/auth/login` with status
+200, rendered the real ChatGPT login UI, focused `Continue with Google` through
+the compositor's normal keyboard path, and reached Google's identifier page at
+`accounts.google.com` with status 200. The visible Google page says `Sign in`
+and `to continue to OpenAI`; no account identifier or credential was entered.
+The final frame is recorded at
+`artifacts/captures/shell-20260726T044525Z.png`.
+
+WPE's sandbox remains enabled: the live web processes run below bubblewrap.
+The UI process owns the DRM card node, web processes own
+`/dev/dri/renderD128`, and the loaded renderer stack includes Mesa EGL/GLES,
+GBM, and DRM libraries. Shell state binds app ID `com.engineos.ChatGPT` to the
+focused native pane presentation while both outputs retain hardware GLES
+composition and zero frame failures.
+
+The bounded secure-context WebAuthn probe reports the newer
+`PublicKeyCredential.getClientCapabilities` API as absent and settles
+immediately instead of hanging. Together with the successful Google redirect,
+this falsifies Bluetooth/D-Bus as a prerequisite for ChatGPT's Google OAuth
+entry. It also shows that Falkon's `_falkon_external` cross-origin console
+message is browser-integration behavior rather than a Google server rejection;
+the remaining Falkon failure is isolated to its QtWebEngine/Falkon path, not
+the EngineOS compositor, network, or Google account endpoint.
+
 ## Remaining Acceptance Work
 
 The unchanged upstream regression suite exposes a pre-existing scheduling race

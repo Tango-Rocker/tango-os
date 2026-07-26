@@ -1,0 +1,36 @@
+pkgname=engineos-chatgpt
+pkgver=0.1.0
+pkgrel=3
+pkgdesc="Single-purpose hardware-accelerated WPE WebKit client for ChatGPT OAuth"
+arch=('x86_64')
+url="https://example.invalid/engineos"
+license=('custom:EngineOS-TBD')
+depends=('wpewebkit' 'libcap')
+makedepends=('meson' 'ninja' 'pkgconf' 'gcc')
+source=()
+sha256sums=()
+
+build() {
+  local _engineos_root
+  _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
+
+  meson setup "$srcdir/build" "$_engineos_root/apps/chatgpt-wpe" \
+    --prefix=/usr \
+    --buildtype=plain
+  meson compile -C "$srcdir/build"
+}
+
+check() {
+  meson test -C "$srcdir/build" --print-errorlogs
+}
+
+package() {
+  local _engineos_root
+  _engineos_root="${ENGINEOS_ROOT:-$(cd "$startdir/../.." && pwd -P)}"
+
+  DESTDIR="$pkgdir" meson install -C "$srcdir/build"
+  install -Dm644 "$_engineos_root/apps/chatgpt-wpe/README.md" \
+    "$pkgdir/usr/share/engineos-chatgpt/README.md"
+  install -Dm644 "$_engineos_root/LICENSES.md" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

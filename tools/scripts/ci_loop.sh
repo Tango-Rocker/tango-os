@@ -82,6 +82,9 @@ infer_changed_packages() {
       shell/*)
         add_package engineos-shell
         ;;
+      apps/chatgpt-wpe/*|packages/engineos-chatgpt/*)
+        add_package engineos-chatgpt
+        ;;
 	  mux/*)
 		add_package engineos-mux
 		;;

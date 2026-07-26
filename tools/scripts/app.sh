@@ -42,6 +42,7 @@ Usage: app.sh launch terminal [args...]
        app.sh launch quake [--smoke] [--pane|--fullscreen|--output] [--map NAME] [--game MOD]
 	   app.sh launch wargus [--smoke] [STRATAGUS_ARGS...]
 	   app.sh launch chroma [args...]
+	   app.sh launch chatgpt [--login]
 	   app.sh recover preview
        app.sh pane launch [--game] [--pane TMUX_PANE] -- COMMAND [ARG...]
        app.sh pane split [-h|-v] [--game] [--pane TMUX_PANE] -- COMMAND [ARG...]
@@ -837,6 +838,8 @@ run_status_json() {
   json_string "$(app_launch_state quake)"
   printf ',"wargus":'
   json_string "$(app_launch_state wargus)"
+  printf ',"chatgpt":'
+  json_string "$(app_launch_state chatgpt)"
   printf ',"chroma":'
   json_string "$(app_launch_state chroma)"
   printf '}}\n'
@@ -863,6 +866,7 @@ run_status() {
   printf '  cube: %s\n' "$(app_launch_state cube)"
   printf '  quake: %s\n' "$(app_launch_state quake)"
   printf '  wargus: %s\n' "$(app_launch_state wargus)"
+  printf '  chatgpt: %s\n' "$(app_launch_state chatgpt)"
   printf '  chroma: %s\n' "$(app_launch_state chroma)"
 }
 manifest_get() {
@@ -963,6 +967,18 @@ run_manifest_validate() {
   manifest_expect_app_id falkon org.kde.falkon
   manifest_expect_value falkon input normal
   manifest_expect_value falkon instance dedicated
+
+  manifest_expect_value chatgpt slot pane
+  manifest_expect_value chatgpt role presentation
+  manifest_expect_value chatgpt command "eos-app launch chatgpt"
+  manifest_expect_value chatgpt launch_mode pane-wayland
+  manifest_expect_value chatgpt argv '["/usr/bin/engineos-chatgpt"]'
+  manifest_expect_value chatgpt commands '["chatgpt"]'
+  manifest_expect_value chatgpt package engineos-chatgpt
+  manifest_expect_app_id chatgpt com.engineos.ChatGPT
+  manifest_expect_value chatgpt health webauthn-and-pane-presentation
+  manifest_expect_value chatgpt input normal
+  manifest_expect_value chatgpt instance dedicated
 
   manifest_expect_value chroma slot pane
 	manifest_expect_value chroma role presentation

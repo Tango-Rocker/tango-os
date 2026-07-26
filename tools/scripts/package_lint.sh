@@ -213,6 +213,24 @@ lint_pkgbuild() {
         return
       fi
       ;;
+    engineos-chatgpt)
+      if ! grep -q 'apps/chatgpt-wpe' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: WPE client source tree is not packaged"
+        return
+      fi
+      if ! grep -q 'meson install' "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: Meson WPE client binary is not installed"
+        return
+      fi
+      if ! grep -q "wpewebkit" "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: expected WPE WebKit dependency"
+        return
+      fi
+      if ! grep -q "libcap" "$pkg_dir/PKGBUILD"; then
+        fail "$pkg: expected capability-sanitizing dependency"
+        return
+      fi
+      ;;
     engineos-mc)
       if ! grep -q 'engineos-quick-view-preview.patch' "$pkg_dir/PKGBUILD"; then
         fail "$pkg: EngineOS Quick View patch is not applied"
